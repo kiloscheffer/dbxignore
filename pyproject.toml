@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dropboxignore"
+description = "Hierarchical .dropboxignore for Dropbox on Windows via NTFS alternate data streams"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Kilo Scheffer" }]
+dynamic = ["version"]
+dependencies = [
+    "watchdog>=4.0",
+    "pathspec>=0.12",
+    "click>=8.1",
+    "psutil>=5.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-timeout>=2.3",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+dropboxignore = "dropboxignore.cli:main"
+dropboxignored = "dropboxignore.cli:daemon_main"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/dropboxignore/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dropboxignore"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "windows_only: test requires NTFS alternate data streams",
+]
+timeout = 10
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]

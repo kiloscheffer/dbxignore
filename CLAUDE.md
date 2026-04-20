@@ -5,7 +5,7 @@ Windows-only Python utility: keeps NTFS `com.dropbox.ignored` streams in sync wi
 ## Commands
 
 - `uv sync --all-extras` — install
-- `uv run pytest` — full suite (99 tests on Windows, 94 elsewhere)
+- `uv run pytest` — full suite; Windows adds a few ADS-integration tests via `@pytest.mark.windows_only`
 - `uv run pytest -m "not windows_only"` — portable subset (what Ubuntu CI runs)
 - `uv run pytest -W error::DeprecationWarning` — local strict mode (not enforced in CI)
 - `uv run ruff check` — lint; rules E, F, I, B, UP, SIM; line length 100
@@ -21,14 +21,17 @@ Windows-only Python utility: keeps NTFS `com.dropbox.ignored` streams in sync wi
 ## Gotchas
 
 - pathspec 1.0.4: subclass `GitIgnoreSpecPattern`, not deprecated `GitWildMatchPattern`.
+- pathspec 1.0.4: `spec.check_file(path)` returns `CheckResult(include, index, file)` — use when you need pattern-level verdicts beyond a bare bool.
 - pathspec: `pattern.match_file()` is public; `pattern.regex.match` is private API.
 - pathspec: directory-only rules (`node_modules/`) require trailing `/` on the tested path string.
+- pathspec: a line with leading whitespace before `#` (e.g. `"   # indented"`) is an *active pattern*, not a comment — `rules._build_entries` detects the count mismatch and falls back to per-line reparse.
 - `ads` uses `open(r"\\?\path:com.dropbox.ignored")` directly — `\\?\` prefix mandatory for >260-char paths.
 - NTFS is case-insensitive; `_CaseInsensitiveGitIgnorePattern` prepends `(?i)` to compiled regexes.
 - `.dropboxignore` files are never marked ignored — guarded in `match()` and `explain()`.
 - `daemon._configured_logging()` is a context manager: it snapshots the `dropboxignore` logger on enter and restores handlers/propagate/level on exit. `run()` wraps its body in it, so tests that call `daemon.run()` don't need to hand-restore logger state — but if you mock it out in a test, use `contextlib.nullcontext` (see `test_daemon_singleton.py`).
 - Use `datetime.UTC`, not `timezone.utc` (ruff UP017).
 - Test helpers (`FakeADS`, `fake_ads` fixture, `write_file` fixture) live in `tests/conftest.py` and are auto-available to every test module.
+- Windows-only tests: set `pytestmark = pytest.mark.windows_only` at module level and guard with `if sys.platform != "win32": pytest.skip(..., allow_module_level=True)` so non-Windows collection skips cleanly.
 
 ## Release
 

@@ -1,0 +1,89 @@
+from pathlib import Path
+
+import pytest
+
+from dropboxignore import reconcile
+from dropboxignore.rules import RuleCache
+from tests.test_reconcile_basic import FakeADS  # reuse fake
+
+
+def _write(path: Path, content: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def fake_ads(monkeypatch):
+    fake = FakeADS()
+    monkeypatch.setattr(reconcile, "ads", fake)
+    return fake
+
+
+def test_skips_descendants_of_already_ignored_directory(tmp_path, fake_ads):
+    _write(tmp_path / ".dropboxignore", "build/\n")
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "deep").mkdir()
+    (tmp_path / "build" / "a.o").touch()
+    fake_ads.set_ignored(tmp_path / "build")  # pre-ignored
+
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+
+    report = reconcile.reconcile_subtree(tmp_path, tmp_path, cache)
+
+    # 'deep' and 'a.o' must not be touched (we skipped into build/).
+    assert (tmp_path / "build" / "deep").resolve() not in fake_ads._ignored
+    # Report counts no new marks/clears — build/ was already correct.
+    assert report.marked == 0
+    assert report.cleared == 0
+
+
+def test_permission_error_is_logged_and_counted_not_raised(tmp_path, monkeypatch, caplog):
+    _write(tmp_path / ".dropboxignore", "build/\n")
+    (tmp_path / "build").mkdir()
+    (tmp_path / "other").mkdir()
+
+    class FailingADS:
+        def __init__(self):
+            self._ignored = set()
+        def is_ignored(self, path): return False
+        def set_ignored(self, path):
+            if path.name == "build":
+                raise PermissionError("locked")
+            self._ignored.add(path.resolve())
+        def clear_ignored(self, path): self._ignored.discard(path.resolve())
+
+    failing = FailingADS()
+    monkeypatch.setattr(reconcile, "ads", failing)
+
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+
+    report = reconcile.reconcile_subtree(tmp_path, tmp_path, cache)
+
+    assert len(report.errors) == 1
+    err_path, err_msg = report.errors[0]
+    assert err_path.name == "build"
+    assert "locked" in err_msg
+
+
+def test_file_not_found_during_walk_is_silently_skipped(tmp_path, monkeypatch):
+    _write(tmp_path / ".dropboxignore", "build/\n")
+    (tmp_path / "build").mkdir()
+
+    class DisappearingADS:
+        def is_ignored(self, path):
+            raise FileNotFoundError("gone")
+        def set_ignored(self, path): pass
+        def clear_ignored(self, path): pass
+
+    monkeypatch.setattr(reconcile, "ads", DisappearingADS())
+
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+
+    # Must not raise.
+    report = reconcile.reconcile_subtree(tmp_path, tmp_path, cache)
+    # FileNotFoundError is expected traffic, not an error.
+    assert report.errors == []

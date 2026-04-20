@@ -28,6 +28,8 @@ def reconcile_subtree(root: Path, subdir: Path, cache: RuleCache) -> Report:
 
     root = root.resolve()
     subdir = subdir.resolve()
+    if subdir != root and not subdir.is_relative_to(root):
+        raise ValueError(f"subdir {subdir} is not under root {root}")
 
     _reconcile_path(subdir, cache, report)
     # If subdir itself is now ignored, don't descend.

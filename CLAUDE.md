@@ -5,7 +5,7 @@ Windows-only Python utility: keeps NTFS `com.dropbox.ignored` streams in sync wi
 ## Commands
 
 - `uv sync --all-extras` — install
-- `uv run pytest` — full suite (82 tests on Windows, 77 elsewhere)
+- `uv run pytest` — full suite (89 tests on Windows, 84 elsewhere)
 - `uv run pytest -m "not windows_only"` — portable subset (what Ubuntu CI runs)
 - `uv run pytest -W error::DeprecationWarning` — local strict mode (not enforced in CI)
 - `uv run ruff check` — lint; rules E, F, I, B, UP, SIM; line length 100

@@ -31,24 +31,19 @@ def reconcile_subtree(root: Path, subdir: Path, cache: RuleCache) -> Report:
     if subdir != root and not subdir.is_relative_to(root):
         raise ValueError(f"subdir {subdir} is not under root {root}")
 
-    _reconcile_path(subdir, cache, report)
-    # If subdir itself is now ignored, don't descend.
-    if _safe_is_ignored(subdir):
+    # If subdir itself ends up ignored, don't descend.
+    if _reconcile_path(subdir, cache, report):
         report.duration_s = time.perf_counter() - start
         return report
 
     for current, dirnames, filenames in os.walk(subdir, followlinks=False):
         current_path = Path(current)
-        # Reconcile each subdirectory; if it becomes ignored, prune it from
+        # Reconcile each subdirectory; if it ends up ignored, prune it from
         # the walk (os.walk honors in-place modification of dirnames).
-        kept_dirs: list[str] = []
-        for name in dirnames:
-            child = current_path / name
-            _reconcile_path(child, cache, report)
-            if not _safe_is_ignored(child):
-                kept_dirs.append(name)
-        dirnames[:] = kept_dirs
-
+        dirnames[:] = [
+            name for name in dirnames
+            if not _reconcile_path(current_path / name, cache, report)
+        ]
         for name in filenames:
             _reconcile_path(current_path / name, cache, report)
 
@@ -56,34 +51,40 @@ def reconcile_subtree(root: Path, subdir: Path, cache: RuleCache) -> Report:
     return report
 
 
-def _reconcile_path(path: Path, cache: RuleCache, report: Report) -> None:
+def _reconcile_path(path: Path, cache: RuleCache, report: Report) -> bool | None:
+    """Reconcile one path's ADS marker with the current rule set.
+
+    Returns the path's final ignored state (True/False), or None if it could
+    not be determined (read error or vanished path). The return value drives
+    subtree pruning in reconcile_subtree.
+    """
     try:
         should_ignore = cache.match(path)
         currently_ignored = ads.is_ignored(path)
     except FileNotFoundError:
         logger.debug("Path vanished during reconcile: %s", path)
-        return
+        return None
     except PermissionError as exc:
         logger.warning("Permission denied reading %s: %s", path, exc)
         report.errors.append((path, f"read: {exc}"))
-        return
+        return None
 
     try:
         if should_ignore and not currently_ignored:
             ads.set_ignored(path)
             report.marked += 1
-        elif currently_ignored and not should_ignore:
+            return True
+        if currently_ignored and not should_ignore:
             ads.clear_ignored(path)
             report.cleared += 1
+            return False
     except FileNotFoundError:
         logger.debug("Path vanished before ADS write: %s", path)
+        return None
     except PermissionError as exc:
         logger.warning("Permission denied writing ADS on %s: %s", path, exc)
         report.errors.append((path, f"write: {exc}"))
+        # Write failed: the ADS state is still whatever we read.
+        return currently_ignored
 
-
-def _safe_is_ignored(path: Path) -> bool:
-    try:
-        return ads.is_ignored(path)
-    except (FileNotFoundError, PermissionError):
-        return False
+    return currently_ignored

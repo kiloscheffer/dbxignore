@@ -66,3 +66,20 @@ def test_three_level_reignore(tmp_path, write_file):
     cache.load_root(tmp_path)
 
     assert cache.match(tmp_path / "proj" / "deep" / "important.log") is True
+
+
+def test_shallow_match_preserved_when_deeper_spec_unrelated(tmp_path, write_file):
+    """If an ancestor matched, a deeper .dropboxignore with UNRELATED rules
+    must not clobber the match. Regression guard: naive spec-level verdict
+    (e.g. bare PathSpec.match_file) would return False for a spec whose
+    patterns don't match and wrongly overwrite the ancestor's True."""
+    write_file(tmp_path / ".dropboxignore", "*.log\n")
+    (tmp_path / "proj").mkdir()
+    write_file(tmp_path / "proj" / ".dropboxignore", "foo.txt\n")  # unrelated
+    (tmp_path / "proj" / "a.log").touch()
+
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+
+    # a.log matched *.log at root; proj/.dropboxignore doesn't touch it.
+    assert cache.match(tmp_path / "proj" / "a.log") is True

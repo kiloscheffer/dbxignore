@@ -47,18 +47,25 @@ class Match:
     negation: bool
 
 
+@dataclass(frozen=True)
+class _LoadedRules:
+    """Parsed contents of one .dropboxignore file.
+
+    ``entries`` is the single source of truth for both ``match()`` and
+    ``explain()``: a list of ``(source_line_index, pattern)`` pairs, one per
+    active rule (i.e. non-blank, non-comment, parses to a positive or negation
+    pattern), in the order they appear in the file.
+    """
+
+    lines: list[str]
+    entries: list[tuple[int, pathspec.Pattern]]
+
+
 class RuleCache:
     """Maintains parsed rules from every .dropboxignore under the root(s)."""
 
     def __init__(self) -> None:
-        # Map: resolved .dropboxignore path -> PathSpec built from _CaseInsensitiveGitIgnorePattern
-        self._specs: dict[Path, pathspec.PathSpec] = {}
-        # Map: resolved .dropboxignore path -> original file lines (for explain())
-        self._lines: dict[Path, list[str]] = {}
-        # Map: resolved .dropboxignore path -> list[(source_line_index, pattern)] for each
-        # non-comment, non-blank line in the file. Keeps explain() independent of pathspec's
-        # internal decision about whether to include null-op entries in spec.patterns.
-        self._pattern_entries: dict[Path, list[tuple[int, pathspec.Pattern]]] = {}
+        self._rules: dict[Path, _LoadedRules] = {}
         self._roots: list[Path] = []
 
     def load_root(self, root: Path) -> None:
@@ -71,18 +78,13 @@ class RuleCache:
     def reload_file(self, ignore_file: Path) -> None:
         """Re-read a single .dropboxignore file, replacing any cached version."""
         resolved = ignore_file.resolve()
-        self._specs.pop(resolved, None)
-        self._lines.pop(resolved, None)
-        self._pattern_entries.pop(resolved, None)
+        self._rules.pop(resolved, None)
         if resolved.exists():
             self._load_file(resolved)
 
     def remove_file(self, ignore_file: Path) -> None:
         """Drop all cached state for a .dropboxignore file (e.g. after deletion)."""
-        resolved = ignore_file.resolve()
-        self._specs.pop(resolved, None)
-        self._lines.pop(resolved, None)
-        self._pattern_entries.pop(resolved, None)
+        self._rules.pop(ignore_file.resolve(), None)
 
     def match(self, path: Path) -> bool:
         path = path.resolve()
@@ -92,23 +94,14 @@ class RuleCache:
         if root is None:
             return False
 
-        # Walk from root toward path; for each ancestor .dropboxignore, iterate
-        # its patterns in order. Every matching pattern overwrites `matched`
-        # with its include bit (True for positive, False for negation). Deeper
-        # files come later in _ancestors, so their negations win over ancestors.
+        # Walk root → path. For each ancestor .dropboxignore, iterate its
+        # entries in source order; every matching pattern overwrites `matched`
+        # with its include bit. Deeper ancestors come later, so their patterns
+        # override shallower ones — gitignore's last-match-wins semantics.
         matched = False
-        for ancestor in self._ancestors(root, path):
-            ignore_file = ancestor / IGNORE_FILENAME
-            spec = self._specs.get(ignore_file)
-            if spec is None:
-                continue
-            rel_str = path.relative_to(ancestor).as_posix()
-            if path.is_dir():
-                rel_str += "/"
-            # If the path no longer exists, is_dir() returns False; callers
-            # reconciling deleted paths should discard the result (design doc
-            # §Failure modes: "deleted path → nothing to reconcile").
-            for pattern in spec.patterns:
+        for ancestor, loaded in self._applicable(root, path):
+            rel_str = self._rel_path_str(ancestor, path)
+            for _line_idx, pattern in loaded.entries:
                 if pattern.match_file(rel_str) is not None:
                     matched = bool(pattern.include)
         return matched
@@ -128,21 +121,16 @@ class RuleCache:
             return []
 
         results: list[Match] = []
-        for ancestor in self._ancestors(root, path):
-            # ancestor was resolved by _ancestors(), so this composed path is already resolved.
-            ignore_file = ancestor / IGNORE_FILENAME
-            entries = self._pattern_entries.get(ignore_file, [])
-            lines = self._lines.get(ignore_file, [])
-            if not entries:
-                continue
-            rel_str = path.relative_to(ancestor).as_posix()
-            if path.is_dir():
-                rel_str += "/"
-            for line_idx, pattern in entries:
+        for ancestor, loaded in self._applicable(root, path):
+            rel_str = self._rel_path_str(ancestor, path)
+            for line_idx, pattern in loaded.entries:
                 if pattern.match_file(rel_str) is not None:
-                    raw_line = lines[line_idx] if line_idx < len(lines) else ""
+                    raw_line = (
+                        loaded.lines[line_idx]
+                        if line_idx < len(loaded.lines) else ""
+                    )
                     results.append(Match(
-                        ignore_file=ignore_file,
+                        ignore_file=ancestor / IGNORE_FILENAME,
                         line=line_idx + 1,
                         pattern=raw_line,
                         negation=not bool(pattern.include),
@@ -162,25 +150,33 @@ class RuleCache:
         except (ValueError, TypeError, re.error) as exc:
             logger.warning("Invalid .dropboxignore at %s: %s", ignore_file, exc)
             return
-        resolved = ignore_file.resolve()
-        self._specs[resolved] = spec
-        self._lines[resolved] = lines
+        self._rules[ignore_file.resolve()] = _LoadedRules(
+            lines=lines,
+            entries=_build_entries(lines, spec),
+        )
 
-        # Pair each non-null-op pattern with its source line index. We re-parse
-        # each line ourselves rather than relying on spec.patterns order, to be
-        # robust against pathspec version differences in how null-op lines are
-        # (or aren't) preserved in spec.patterns.
-        entries: list[tuple[int, pathspec.Pattern]] = []
-        for i, raw in enumerate(lines):
-            stripped = raw.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            # Parse this single line to get its Pattern object independent of spec.patterns layout.
-            single = _build_spec([raw])
-            active = [p for p in single.patterns if p.include is not None]
-            if active:
-                entries.append((i, active[0]))
-        self._pattern_entries[resolved] = entries
+    def _applicable(
+        self, root: Path, path: Path
+    ) -> list[tuple[Path, _LoadedRules]]:
+        """Yield (ancestor, loaded_rules) for each applicable .dropboxignore
+        in shallow-to-deep order."""
+        result: list[tuple[Path, _LoadedRules]] = []
+        for ancestor in self._ancestors(root, path):
+            loaded = self._rules.get(ancestor / IGNORE_FILENAME)
+            if loaded is not None:
+                result.append((ancestor, loaded))
+        return result
+
+    @staticmethod
+    def _rel_path_str(ancestor: Path, path: Path) -> str:
+        rel_str = path.relative_to(ancestor).as_posix()
+        # Directory-only rules (e.g. `node_modules/`) only fire when the
+        # tested path string ends in `/`. If the path no longer exists
+        # is_dir() returns False; callers reconciling deleted paths discard
+        # the result (design doc §Failure modes).
+        if path.is_dir():
+            rel_str += "/"
+        return rel_str
 
     def _ancestors(self, root: Path, path: Path) -> list[Path]:
         """Return [root, ...intermediate dirs..., path's parent] inclusive."""
@@ -191,3 +187,37 @@ class RuleCache:
             current = current / part
             result.append(current)
         return result
+
+
+def _build_entries(
+    lines: list[str], spec: pathspec.PathSpec
+) -> list[tuple[int, pathspec.Pattern]]:
+    """Pair each active source line with its compiled pattern.
+
+    Fast path: filter ``spec.patterns`` to active entries (``include is not
+    None``) and zip with source-line indices whose stripped content is
+    non-blank and not a leading-``#`` comment. The two counts usually match.
+
+    Fallback: if they don't (pathspec treating an edge case like a leading-
+    whitespace ``#`` line as a pattern), reparse each source line individually
+    to keep ``(source_line_index, pattern)`` pairing correct.
+    """
+    active_line_indices = [
+        i for i, raw in enumerate(lines)
+        if raw.strip() and not raw.strip().startswith("#")
+    ]
+    active_patterns = [p for p in spec.patterns if p.include is not None]
+    if len(active_line_indices) == len(active_patterns):
+        return list(zip(active_line_indices, active_patterns, strict=True))
+
+    entries: list[tuple[int, pathspec.Pattern]] = []
+    for i in active_line_indices:
+        try:
+            single = _build_spec([lines[i]])
+        except (ValueError, TypeError, re.error):
+            continue
+        for p in single.patterns:
+            if p.include is not None:
+                entries.append((i, p))
+                break
+    return entries

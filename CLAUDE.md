@@ -5,7 +5,7 @@ Windows-only Python utility: keeps NTFS `com.dropbox.ignored` streams in sync wi
 ## Commands
 
 - `uv sync --all-extras` — install
-- `uv run pytest` — full suite (89 tests on Windows, 84 elsewhere)
+- `uv run pytest` — full suite (92 tests on Windows, 87 elsewhere)
 - `uv run pytest -m "not windows_only"` — portable subset (what Ubuntu CI runs)
 - `uv run pytest -W error::DeprecationWarning` — local strict mode (not enforced in CI)
 - `uv run ruff check` — lint; rules E, F, I, B, UP, SIM; line length 100
@@ -16,7 +16,7 @@ Windows-only Python utility: keeps NTFS `com.dropbox.ignored` streams in sync wi
 
 `reconcile.reconcile_subtree(root, subdir, cache)` is the single source of truth for ADS mutations. `cli.apply`, `daemon._dispatch`, and `daemon._sweep_once` all call it — never bypass.
 
-`rules.RuleCache` stores three parallel dicts per `.dropboxignore`: `_specs` (PathSpec), `_lines` (raw text), `_pattern_entries` (line-indexed patterns for `explain`).
+`rules.RuleCache` stores one `_LoadedRules(lines, entries)` per `.dropboxignore`. `entries` is a list of `(source_line_index, pathspec.Pattern)` pairs and is the single source of truth for both `match()` and `explain()`.
 
 ## Gotchas
 

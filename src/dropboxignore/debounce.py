@@ -31,14 +31,13 @@ class Debouncer:
         self,
         on_emit: Callable[[tuple[EventKind, str, object]], None],
         timeouts_ms: dict[EventKind, int],
-        tick_ms: int = 20,
     ) -> None:
         self._on_emit = on_emit
         self._timeouts = {k: v / 1000.0 for k, v in timeouts_ms.items()}
-        self._tick = tick_ms / 1000.0
         self._pending: dict[tuple[EventKind, str], _Pending] = {}
-        self._lock = threading.Lock()
-        self._stop = threading.Event()
+        # Condition wraps its own lock; _pending is guarded by that lock.
+        self._cond = threading.Condition()
+        self._stopped = False
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
@@ -48,29 +47,48 @@ class Debouncer:
         self._thread.start()
 
     def stop(self) -> None:
-        self._stop.set()
+        with self._cond:
+            self._stopped = True
+            self._cond.notify_all()
         if self._thread:
             self._thread.join(timeout=1.0)
             self._thread = None
 
     def submit(self, kind: EventKind, key: str, payload: object) -> None:
-        timeout = self._timeouts[kind]
-        deadline = time.monotonic() + timeout
-        with self._lock:
+        deadline = time.monotonic() + self._timeouts[kind]
+        with self._cond:
             self._pending[(kind, key)] = _Pending(payload=payload, deadline=deadline)
+            # Always notify: the worker recomputes its wait-until on every
+            # iteration anyway, so a spurious wakeup is just one no-op loop.
+            self._cond.notify()
 
     def _run(self) -> None:
-        while not self._stop.is_set():
-            now = time.monotonic()
+        while True:
             due: list[tuple[EventKind, str, object]] = []
-            with self._lock:
+            with self._cond:
+                if self._stopped:
+                    return
+                now = time.monotonic()
                 for key, pending in list(self._pending.items()):
                     if pending.deadline <= now:
                         due.append((key[0], key[1], pending.payload))
                         del self._pending[key]
+                if not due:
+                    # Wait until the soonest deadline, or indefinitely if no
+                    # items are pending. submit() / stop() will notify.
+                    if self._pending:
+                        wait_s = max(
+                            0.0,
+                            min(p.deadline for p in self._pending.values())
+                            - time.monotonic(),
+                        )
+                        self._cond.wait(timeout=wait_s)
+                    else:
+                        self._cond.wait()
+                    continue
+            # Emit outside the lock so on_emit can re-entrantly call submit().
             for item in due:
                 try:
                     self._on_emit(item)
                 except Exception:  # noqa: BLE001
                     logger.exception("debouncer emit handler failed")
-            time.sleep(self._tick)

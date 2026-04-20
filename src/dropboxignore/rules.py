@@ -56,7 +56,7 @@ class RuleCache:
         # Map: resolved .dropboxignore path -> list[(source_line_index, pattern)] for each
         # non-comment, non-blank line in the file. Keeps explain() independent of pathspec's
         # internal decision about whether to include null-op entries in spec.patterns.
-        self._pattern_entries: dict[Path, list[tuple[int, object]]] = {}
+        self._pattern_entries: dict[Path, list[tuple[int, pathspec.Pattern]]] = {}
         self._roots: list[Path] = []
 
     def load_root(self, root: Path) -> None:
@@ -127,10 +127,10 @@ class RuleCache:
 
         results: list[Match] = []
         for ancestor in self._ancestors(root, path):
+            # ancestor was resolved by _ancestors(), so this composed path is already resolved.
             ignore_file = ancestor / IGNORE_FILENAME
-            resolved = ignore_file.resolve() if ignore_file.exists() else ignore_file
-            entries = self._pattern_entries.get(resolved, [])
-            lines = self._lines.get(resolved, [])
+            entries = self._pattern_entries.get(ignore_file, [])
+            lines = self._lines.get(ignore_file, [])
             if not entries:
                 continue
             rel_str = path.relative_to(ancestor).as_posix()
@@ -140,7 +140,7 @@ class RuleCache:
                 if pattern.match_file(rel_str) is not None:
                     raw_line = lines[line_idx] if line_idx < len(lines) else ""
                     results.append(Match(
-                        ignore_file=resolved,
+                        ignore_file=ignore_file,
                         line=line_idx + 1,
                         pattern=raw_line,
                         negation=not bool(pattern.include),
@@ -168,7 +168,7 @@ class RuleCache:
         # each line ourselves rather than relying on spec.patterns order, to be
         # robust against pathspec version differences in how null-op lines are
         # (or aren't) preserved in spec.patterns.
-        entries: list[tuple[int, object]] = []
+        entries: list[tuple[int, pathspec.Pattern]] = []
         for i, raw in enumerate(lines):
             stripped = raw.strip()
             if not stripped or stripped.startswith("#"):

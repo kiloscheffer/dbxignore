@@ -5,6 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "dropboxignore"
 description = "Hierarchical .dropboxignore for Dropbox on Windows via NTFS alternate data streams"
+readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "Kilo Scheffer" }]

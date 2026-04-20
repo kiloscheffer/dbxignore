@@ -63,9 +63,7 @@ class RuleCache:
             # reconciling deleted paths should discard the result (design doc
             # §Failure modes: "deleted path → nothing to reconcile").
             for pattern in spec.patterns:
-                if pattern.regex is None:
-                    continue
-                if pattern.regex.match(rel_str):
+                if pattern.match_file(rel_str) is not None:
                     matched = bool(pattern.include)
         return matched
 

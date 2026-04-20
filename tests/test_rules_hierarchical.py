@@ -46,3 +46,31 @@ def test_ancestor_rule_applies_to_deep_descendant(tmp_path):
     cache.load_root(tmp_path)
 
     assert cache.match(tmp_path / "a" / "b" / "c" / "node_modules") is True
+
+
+def test_same_file_negation(tmp_path):
+    # Single .dropboxignore with *.log ignored but !important.log as exception.
+    _write(tmp_path / ".dropboxignore", "*.log\n!important.log\n")
+    (tmp_path / "a.log").touch()
+    (tmp_path / "important.log").touch()
+
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+
+    assert cache.match(tmp_path / "a.log") is True
+    assert cache.match(tmp_path / "important.log") is False
+
+
+def test_three_level_reignore(tmp_path):
+    # root ignores *.log; proj un-ignores important.log; proj/deep re-ignores it.
+    _write(tmp_path / ".dropboxignore", "*.log\n")
+    (tmp_path / "proj").mkdir()
+    _write(tmp_path / "proj" / ".dropboxignore", "!important.log\n")
+    (tmp_path / "proj" / "deep").mkdir()
+    _write(tmp_path / "proj" / "deep" / ".dropboxignore", "important.log\n")
+    (tmp_path / "proj" / "deep" / "important.log").touch()
+
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+
+    assert cache.match(tmp_path / "proj" / "deep" / "important.log") is True

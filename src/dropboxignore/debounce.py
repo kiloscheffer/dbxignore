@@ -47,11 +47,20 @@ class Debouncer:
         self._thread.start()
 
     def stop(self) -> None:
+        """Signal the worker to stop and block until it exits.
+
+        Joins without a timeout: if an emit is in flight (reconcile_subtree
+        can take seconds on a large Dropbox tree), the daemon's shutdown must
+        wait for it to finish rather than abandon partially-written ADS or
+        state. The worker is ``daemon=True``, so an unresponsive process-exit
+        still terminates via the daemon-thread mechanism — but a well-behaved
+        shutdown completes cleanly.
+        """
         with self._cond:
             self._stopped = True
             self._cond.notify_all()
         if self._thread:
-            self._thread.join(timeout=1.0)
+            self._thread.join()
             self._thread = None
 
     def submit(self, kind: EventKind, key: str, payload: object) -> None:

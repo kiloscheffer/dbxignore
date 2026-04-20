@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from dropboxignore import ads
-from dropboxignore.rules import RuleCache
+from dropboxignore.rules import IGNORE_FILENAME, RuleCache
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,13 @@ def _reconcile_path(path: Path, cache: RuleCache, report: Report) -> bool | None
             report.marked += 1
             return True
         if currently_ignored and not should_ignore:
+            if path.name == IGNORE_FILENAME:
+                # Spec: .dropboxignore is never itself ignored; warn so users
+                # notice when Dropbox's UI (or another tool) re-marks it.
+                logger.warning(
+                    ".dropboxignore at %s was marked ignored; overriding back to synced",
+                    path,
+                )
             ads.clear_ignored(path)
             report.cleared += 1
             return False

@@ -106,6 +106,29 @@ def test_sweep_clears_markers_when_dropboxignore_was_deleted_offline(
     assert report.cleared == 2
 
 
+def test_overridden_dropboxignore_logs_warning(tmp_path, fake_ads, caplog, write_file):
+    """Spec: `.dropboxignore is never itself ignored` — violations are logged
+    at WARNING on every reconcile and continue to be overridden."""
+    import logging
+
+    write_file(tmp_path / ".dropboxignore", "build/\n")
+    fake_ads.set_ignored(tmp_path / ".dropboxignore")  # something else marked it
+
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+
+    with caplog.at_level(logging.WARNING, logger="dropboxignore.reconcile"):
+        report = reconcile.reconcile_subtree(tmp_path, tmp_path, cache)
+
+    assert not fake_ads.is_ignored(tmp_path / ".dropboxignore")
+    assert report.cleared >= 1
+    assert any(
+        r.levelname == "WARNING" and ".dropboxignore" in r.message
+        and "overriding" in r.message
+        for r in caplog.records
+    ), caplog.records
+
+
 def test_rejects_subdir_outside_root(tmp_path, fake_ads):
     other = tmp_path / "other"
     other.mkdir()

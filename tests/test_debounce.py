@@ -68,8 +68,9 @@ def test_dir_create_emits_immediately():
 
 def test_stop_wakes_idle_worker_quickly():
     """With nothing submitted, the worker waits indefinitely on its condition.
-    stop() must notify so the worker exits promptly, not hang for the
-    thread.join timeout."""
+    stop() must notify so the worker exits promptly; a missed notify would
+    leave the worker blocked on cond.wait() and stop() would hang forever
+    (since join() has no timeout)."""
     d = Debouncer(on_emit=lambda _: None, timeouts_ms=_DEFAULT_TIMEOUTS)
     d.start()
     # Give the worker a moment to reach its wait() call on an empty queue.
@@ -79,8 +80,42 @@ def test_stop_wakes_idle_worker_quickly():
     d.stop()
     elapsed = time.monotonic() - start
 
-    # Anything approaching join's 1.0s timeout means we failed to notify.
+    # If notify worked, stop() returns essentially immediately.
     assert elapsed < 0.2, f"stop() took {elapsed:.3f}s; worker was not woken"
+
+
+def test_stop_waits_for_in_flight_emit():
+    """If an emit is in flight when stop() is called, stop() must block until
+    the emit completes — otherwise the daemon exits while reconcile_subtree
+    is mid-write and ADS markers / state.json land half-written."""
+    release = threading.Event()
+    emit_finished = threading.Event()
+
+    def slow_emit(_item):
+        release.wait(timeout=2.0)
+        emit_finished.set()
+
+    d = Debouncer(on_emit=slow_emit, timeouts_ms=_DEFAULT_TIMEOUTS)
+    d.start()
+    try:
+        d.submit(EventKind.DIR_CREATE, "k", "p")
+        # Let the worker pick up the event and enter slow_emit.
+        time.sleep(0.05)
+
+        stop_thread = threading.Thread(target=d.stop)
+        stop_thread.start()
+
+        # stop() must not return while emit is still blocked on release.
+        time.sleep(0.15)
+        assert stop_thread.is_alive(), "stop() returned before emit completed"
+        assert not emit_finished.is_set()
+
+        release.set()
+        stop_thread.join(timeout=2.0)
+        assert not stop_thread.is_alive(), "stop() did not return after emit finished"
+        assert emit_finished.is_set()
+    finally:
+        release.set()
 
 
 def test_submit_from_within_emit_callback_is_processed():

@@ -280,14 +280,25 @@ def _sweep_once(
         total_marked, total_cleared, total_errors, wall_duration,
     )
 
+    now = dt.datetime.now(dt.UTC)
+    last_err = next(
+        (r.errors[-1] for r in reversed(reports) if r.errors),
+        None,
+    )
+
     s = state_module.State(
         daemon_pid=os.getpid(),
         daemon_started=daemon_started,
-        last_sweep=dt.datetime.now(dt.UTC),
+        last_sweep=now,
         last_sweep_duration_s=wall_duration,
         last_sweep_marked=total_marked,
         last_sweep_cleared=total_cleared,
         last_sweep_errors=total_errors,
+        last_error=(
+            state_module.LastError(time=now, path=last_err[0], message=last_err[1])
+            if last_err is not None
+            else None
+        ),
         watched_roots=roots,
     )
     try:

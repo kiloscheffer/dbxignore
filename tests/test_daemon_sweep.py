@@ -64,6 +64,58 @@ def test_sweep_writes_aggregated_report_to_state(
     assert s.last_sweep_errors == 0
 
 
+def test_sweep_populates_last_error_when_reconcile_fails(
+    tmp_path, monkeypatch, write_file
+):
+    """When a reconcile error happens during a sweep, state.last_error must
+    carry the offending path + message so `dropboxignore status` can surface
+    it. Without this, status' `errors=N` line has no diagnostic."""
+    from dropboxignore import reconcile
+
+    write_file(tmp_path / ".dropboxignore", "build/\n")
+    (tmp_path / "build").mkdir()
+
+    class FailingADS:
+        def is_ignored(self, path):
+            return False
+        def set_ignored(self, path):
+            raise PermissionError("locked by Dropbox")
+        def clear_ignored(self, path):
+            pass
+
+    monkeypatch.setattr(reconcile, "ads", FailingADS())
+    monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")
+
+    cache = RuleCache()
+    daemon._sweep_once([tmp_path], cache, _utc_now())
+
+    s = state.read()
+    assert s is not None
+    assert s.last_sweep_errors == 1
+    assert s.last_error is not None
+    assert s.last_error.path.name == "build"
+    assert "locked by Dropbox" in s.last_error.message
+
+
+def test_sweep_leaves_last_error_none_on_clean_sweep(
+    tmp_path, fake_ads, monkeypatch, write_file
+):
+    """Per-sweep semantics: a sweep with no errors writes last_error=None.
+    Regression guard against accidentally carrying a prior error forward."""
+    write_file(tmp_path / ".dropboxignore", "build/\n")
+    (tmp_path / "build").mkdir()
+
+    monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")
+
+    cache = RuleCache()
+    daemon._sweep_once([tmp_path], cache, _utc_now())
+
+    s = state.read()
+    assert s is not None
+    assert s.last_sweep_errors == 0
+    assert s.last_error is None
+
+
 def test_sweep_single_root_still_works(
     tmp_path, fake_ads, monkeypatch, write_file
 ):

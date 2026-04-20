@@ -190,7 +190,11 @@ def install() -> None:
 def uninstall(purge: bool) -> None:
     """Remove the scheduled task. With --purge, also clear all ADS markers."""
     from dropboxignore import install as install_mod
-    install_mod.uninstall_task()
+    try:
+        install_mod.uninstall_task()
+    except RuntimeError as exc:
+        click.echo(f"Failed to uninstall scheduled task: {exc}", err=True)
+        sys.exit(2)
     click.echo("Uninstalled scheduled task 'dropboxignore'.")
 
     if purge:

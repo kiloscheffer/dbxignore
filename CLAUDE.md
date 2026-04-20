@@ -16,7 +16,7 @@ Windows-only Python utility: keeps NTFS `com.dropbox.ignored` streams in sync wi
 
 `reconcile.reconcile_subtree(root, subdir, cache)` is the single source of truth for ADS mutations. `cli.apply`, `daemon._dispatch`, and `daemon._sweep_once` all call it — never bypass.
 
-`daemon._sweep_once` fans `reconcile_subtree` out across roots via `ThreadPoolExecutor` (one worker per root). Safe because reconcile reads the cache without mutating it and writes per-file ADS markers on disjoint paths. If you add cross-root shared state to `RuleCache` or reconcile, revisit this.
+`daemon._sweep_once` fans `reconcile_subtree` out across roots via `ThreadPoolExecutor` (one worker per root). Safe because reconcile reads the cache lock-free (single-op `.get()`s) and writes per-file ADS markers on disjoint paths. `RuleCache._rules` is guarded by a `threading.RLock` — any mutation (`load_root`, `reload_file`, `remove_file`, or the stale-purge iteration in `load_root`) must go through it, otherwise the debouncer thread can race with the main-thread sweep. If you add cross-root shared state to `RuleCache` or reconcile, revisit this.
 
 `rules.RuleCache` stores one `_LoadedRules(lines, entries, mtime_ns, size)` per `.dropboxignore`. `entries` is a list of `(source_line_index, pathspec.Pattern)` pairs and is the single source of truth for both `match()` and `explain()`.
 
@@ -33,11 +33,12 @@ The daemon's watchdog events are classified (`_classify` → `EventKind.{RULES,D
 - pathspec: a line with leading whitespace before `#` (e.g. `"   # indented"`) is an *active pattern*, not a comment — `rules._build_entries` detects the count mismatch and falls back to per-line reparse.
 - `ads` uses `open(r"\\?\path:com.dropbox.ignored")` directly — `\\?\` prefix mandatory for >260-char paths.
 - NTFS is case-insensitive; `_CaseInsensitiveGitIgnorePattern` prepends `(?i)` to compiled regexes.
-- `.dropboxignore` files are never marked ignored — guarded in `match()` and `explain()`.
+- `.dropboxignore` files are never marked ignored — guarded in `match()` and `explain()`; `reconcile._reconcile_path` clears any ADS marker it finds on one and logs at `WARNING` (spec contract — don't silence it in a refactor).
 - `rules.match/explain` and `ads.{is,set,clear}_ignored` all require **absolute** paths and raise `ValueError` on relative ones. Resolve at the CLI/daemon boundary, never inside the cache or ADS layer — `Path.resolve()` on Windows is a per-call syscall that dominated sweep wall-clock before.
 - `daemon._configured_logging()` is a context manager: it snapshots the `dropboxignore` logger on enter and restores handlers/propagate/level on exit. `run()` wraps its body in it, so tests that call `daemon.run()` don't need to hand-restore logger state — but if you mock it out in a test, use `contextlib.nullcontext` (see `test_daemon_singleton.py`).
 - Use `datetime.UTC`, not `timezone.utc` (ruff UP017).
 - Test helpers (`FakeADS`, `fake_ads` fixture, `write_file` fixture) live in `tests/conftest.py` and are auto-available to every test module.
+- Log-contract tests use `caplog.at_level(logging.WARNING, logger="dropboxignore.<module>")` — narrow to the submodule that emits the log (see `tests/test_reconcile_edges.py`).
 - Windows-only tests: set `pytestmark = pytest.mark.windows_only` at module level and guard with `if sys.platform != "win32": pytest.skip(..., allow_module_level=True)` so non-Windows collection skips cleanly.
 - Daemon/sweep tests that trigger state writes: `monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")` redirects the persisted state off `LOCALAPPDATA` and keeps the test hermetic.
 

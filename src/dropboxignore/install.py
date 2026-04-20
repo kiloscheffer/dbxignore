@@ -95,11 +95,16 @@ def install_task() -> None:
 
 
 def uninstall_task() -> None:
+    """Remove the Task Scheduler entry. Raises RuntimeError if schtasks fails
+    (e.g. task missing, insufficient privilege) so the CLI can surface it
+    instead of silently claiming success."""
     result = subprocess.run(  # noqa: S603 — hardcoded args, no user data
         ["schtasks", "/Delete", "/TN", TASK_NAME, "/F"],
         capture_output=True, text=True, check=False,
     )
-    if result.returncode == 0:
-        logger.info("Uninstalled scheduled task %s", TASK_NAME)
-    else:
-        logger.warning("schtasks /Delete returned %d: %s", result.returncode, result.stderr)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"schtasks /Delete returned {result.returncode}: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+    logger.info("Uninstalled scheduled task %s", TASK_NAME)

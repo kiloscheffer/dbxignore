@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -73,32 +74,43 @@ class RuleCache:
     def __init__(self) -> None:
         self._rules: dict[Path, _LoadedRules] = {}
         self._roots: list[Path] = []
+        # Guards every mutation and every iteration of self._rules. Single-op
+        # reads via self._rules.get(...) stay lock-free (GIL-atomic). Needed
+        # because the daemon's sweep thread runs load_root() concurrently with
+        # the debouncer worker's reload_file() / remove_file(), and load_root's
+        # stale-purge iterates self._rules — a concurrent pop would raise
+        # "dictionary changed size during iteration". RLock allows load_root
+        # to nest into _load_if_changed → _load_file without deadlocking.
+        self._lock = threading.RLock()
 
     def load_root(self, root: Path) -> None:
         root = root.resolve()
-        if root not in self._roots:
-            self._roots.append(root)
-        seen: set[Path] = set()
-        for ignore_file in root.rglob(IGNORE_FILENAME):
-            seen.add(ignore_file.resolve())
-            self._load_if_changed(ignore_file)
-        # Drop cached entries for .dropboxignore files under this root that
-        # rglob didn't find — they've been deleted since the last load and
-        # their rules must stop applying.
-        for stale in [
-            p for p in self._rules
-            if p not in seen and p.is_relative_to(root)
-        ]:
-            del self._rules[stale]
+        with self._lock:
+            if root not in self._roots:
+                self._roots.append(root)
+            seen: set[Path] = set()
+            for ignore_file in root.rglob(IGNORE_FILENAME):
+                seen.add(ignore_file.resolve())
+                self._load_if_changed(ignore_file)
+            # Drop cached entries for .dropboxignore files under this root that
+            # rglob didn't find — they've been deleted since the last load and
+            # their rules must stop applying.
+            for stale in [
+                p for p in self._rules
+                if p not in seen and p.is_relative_to(root)
+            ]:
+                del self._rules[stale]
 
     def reload_file(self, ignore_file: Path) -> None:
         """Re-read a single .dropboxignore file, replacing any cached version."""
-        self._rules.pop(ignore_file.resolve(), None)
-        self._load_file(ignore_file)
+        with self._lock:
+            self._rules.pop(ignore_file.resolve(), None)
+            self._load_file(ignore_file)
 
     def remove_file(self, ignore_file: Path) -> None:
         """Drop all cached state for a .dropboxignore file (e.g. after deletion)."""
-        self._rules.pop(ignore_file.resolve(), None)
+        with self._lock:
+            self._rules.pop(ignore_file.resolve(), None)
 
     def match(self, path: Path) -> bool:
         if not path.is_absolute():

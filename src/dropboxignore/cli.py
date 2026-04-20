@@ -167,6 +167,13 @@ def explain(path: Path) -> None:
         click.echo(f"{m.ignore_file}:{m.line}: {arrow} {m.pattern}")
 
 
+@main.command()
+def daemon() -> None:
+    """Run the watcher + hourly sweep daemon (foreground)."""
+    from dropboxignore import daemon as daemon_mod
+    daemon_mod.run()
+
+
 def daemon_main() -> None:
     """Entry point for the dropboxignored script shim."""
     sys.argv.insert(1, "daemon")

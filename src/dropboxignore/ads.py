@@ -9,7 +9,6 @@ which on Windows passes the ``path:streamname`` syntax through to
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import os
 from pathlib import Path
@@ -28,21 +27,29 @@ def _stream_path(path: Path) -> str:
 
 
 def is_ignored(path: Path) -> bool:
-    """Return True if ``path`` currently bears the ignore marker."""
+    """Return True if ``path`` bears a non-empty com.dropbox.ignored stream."""
     try:
         with open(_stream_path(path), encoding="ascii") as f:
-            return f.read(1) == _MARKER_VALUE
+            return bool(f.read(1))
     except FileNotFoundError:
         return False
 
 
 def set_ignored(path: Path) -> None:
-    """Mark ``path`` as ignored by Dropbox."""
+    """Mark ``path`` as ignored by Dropbox.
+
+    Raises ``FileNotFoundError`` if ``path`` vanished before the write;
+    raises ``PermissionError`` if the stream cannot be written. Callers
+    (notably ``reconcile_subtree``) catch and log both per the design's
+    failure-mode contract.
+    """
     with open(_stream_path(path), "w", encoding="ascii") as f:
         f.write(_MARKER_VALUE)
 
 
 def clear_ignored(path: Path) -> None:
     """Remove the Dropbox ignore marker from ``path`` (no-op if absent)."""
-    with contextlib.suppress(FileNotFoundError):
+    try:
         os.remove(_stream_path(path))
+    except FileNotFoundError:
+        logger.debug("clear_ignored: stream absent or path gone: %s", path)

@@ -82,6 +82,30 @@ def test_file_not_found_during_walk_is_silently_skipped(tmp_path, monkeypatch, w
     assert report.errors == []
 
 
+def test_sweep_clears_markers_when_dropboxignore_was_deleted_offline(
+    tmp_path, fake_ads
+):
+    """Offline-recovery integration: if a .dropboxignore was deleted while
+    the daemon was down, the next startup sweep must clear every ADS marker
+    it used to justify. No rules in cache + marker on disk = clear."""
+    # Prior-daemon-run state: build/ is ignored; deep/ inside it is ignored
+    # too (descendant-of-ignored is skipped during normal reconcile, but if
+    # an old sweep marked it directly, the marker is on disk).
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "deep").mkdir()
+    fake_ads.set_ignored(tmp_path / "build")
+    fake_ads.set_ignored(tmp_path / "build" / "deep")
+
+    # Fresh daemon startup: no .dropboxignore on disk, empty cache, sweep.
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+    report = reconcile.reconcile_subtree(tmp_path, tmp_path, cache)
+
+    assert not fake_ads.is_ignored(tmp_path / "build")
+    assert not fake_ads.is_ignored(tmp_path / "build" / "deep")
+    assert report.cleared == 2
+
+
 def test_rejects_subdir_outside_root(tmp_path, fake_ads):
     other = tmp_path / "other"
     other.mkdir()

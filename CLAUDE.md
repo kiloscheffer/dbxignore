@@ -9,14 +9,20 @@ Windows-only Python utility: keeps NTFS `com.dropbox.ignored` streams in sync wi
 - `uv run pytest -m "not windows_only"` — portable subset (what Ubuntu CI runs)
 - `uv run pytest -W error::DeprecationWarning` — local strict mode (not enforced in CI)
 - `uv run ruff check` — lint; rules E, F, I, B, UP, SIM; line length 100
-- `dropboxignore <apply|status|list|explain|install>` — CLI console script (`cli:main`)
+- `dropboxignore <apply|status|list|explain|daemon|install|uninstall>` — CLI console script (`cli:main`); `uninstall --purge` also clears every ADS marker.
 - `dropboxignored` — daemon shim (`cli:daemon_main`), launched by the installed Scheduled Task
 
 ## Architecture
 
 `reconcile.reconcile_subtree(root, subdir, cache)` is the single source of truth for ADS mutations. `cli.apply`, `daemon._dispatch`, and `daemon._sweep_once` all call it — never bypass.
 
-`rules.RuleCache` stores one `_LoadedRules(lines, entries)` per `.dropboxignore`. `entries` is a list of `(source_line_index, pathspec.Pattern)` pairs and is the single source of truth for both `match()` and `explain()`.
+`daemon._sweep_once` fans `reconcile_subtree` out across roots via `ThreadPoolExecutor` (one worker per root). Safe because reconcile reads the cache without mutating it and writes per-file ADS markers on disjoint paths. If you add cross-root shared state to `RuleCache` or reconcile, revisit this.
+
+`rules.RuleCache` stores one `_LoadedRules(lines, entries, mtime_ns, size)` per `.dropboxignore`. `entries` is a list of `(source_line_index, pathspec.Pattern)` pairs and is the single source of truth for both `match()` and `explain()`.
+
+`rules._load_if_changed` skips reparse when a `.dropboxignore`'s `mtime_ns` and `size` both match the cached values — that's why `_LoadedRules` carries stat fields. The sweep path (`load_root`) uses it; watchdog-driven `reload_file` bypasses it because an explicit event is authoritative.
+
+The daemon's watchdog events are classified (`_classify` → `EventKind.{RULES,DIR_CREATE,OTHER}`) and funneled through `Debouncer` before `_dispatch` runs `reconcile_subtree`. `DEFAULT_TIMEOUTS_MS` per kind is overridable via `DROPBOXIGNORE_DEBOUNCE_{RULES,DIRS,OTHER}_MS`.
 
 ## Gotchas
 

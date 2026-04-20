@@ -21,9 +21,15 @@ _LONG_PATH_PREFIX = "\\\\?\\"
 
 
 def _stream_path(path: Path) -> str:
-    """Return the absolute ``\\\\?\\…:streamname`` path for ``path``."""
-    absolute = path.resolve()
-    return f"{_LONG_PATH_PREFIX}{absolute}:{STREAM_NAME}"
+    """Return the ``\\\\?\\…:streamname`` path for ``path``.
+
+    ``path`` must be absolute — the ``\\\\?\\`` long-path prefix is only
+    meaningful before a full path. Callers normalize at the CLI/daemon
+    boundary; relative paths here are a caller bug.
+    """
+    if not path.is_absolute():
+        raise ValueError(f"ads requires an absolute path; got {path!r}")
+    return f"{_LONG_PATH_PREFIX}{path}:{STREAM_NAME}"
 
 
 def is_ignored(path: Path) -> bool:

@@ -101,7 +101,8 @@ class RuleCache:
         self._rules.pop(ignore_file.resolve(), None)
 
     def match(self, path: Path) -> bool:
-        path = path.resolve()
+        if not path.is_absolute():
+            raise ValueError(f"match() requires an absolute path; got {path!r}")
         if path.name == IGNORE_FILENAME:
             return False
         root = find_containing(path, self._roots)
@@ -127,7 +128,8 @@ class RuleCache:
         matched, plus whether the match was a negation. Useful for the
         ``dropboxignore explain`` CLI command.
         """
-        path = path.resolve()
+        if not path.is_absolute():
+            raise ValueError(f"explain() requires an absolute path; got {path!r}")
         if path.name == IGNORE_FILENAME:
             return []
         root = find_containing(path, self._roots)

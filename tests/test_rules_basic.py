@@ -1,4 +1,22 @@
+from pathlib import Path
+
+import pytest
+
 from dropboxignore.rules import RuleCache
+
+
+def test_match_rejects_relative_path(tmp_path, write_file):
+    """Caller contract: match()/explain() require absolute paths. The internal
+    resolve() used to mask relative-path bugs by silently normalizing; now
+    they raise loudly so the bug surfaces at the call site instead."""
+    write_file(tmp_path / ".dropboxignore", "build/\n")
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+
+    with pytest.raises(ValueError, match="absolute"):
+        cache.match(Path("build"))
+    with pytest.raises(ValueError, match="absolute"):
+        cache.explain(Path("build"))
 
 
 def test_flat_match_sets_true_for_matching_directory(tmp_path, write_file):

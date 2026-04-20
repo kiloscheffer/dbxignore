@@ -62,9 +62,19 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
     if kind is EventKind.RULES:
         if event.event_type == "deleted":
             cache.remove_file(src)
+            reconcile_subtree(root, src.parent, cache)
+        elif event.event_type == "moved":
+            cache.remove_file(src)
+            reconcile_subtree(root, src.parent, cache)
+            dest = Path(event.dest_path) if event.dest_path else None
+            if dest is not None:
+                dest_root = _root_of(dest, roots)
+                if dest_root is not None:
+                    cache.reload_file(dest)
+                    reconcile_subtree(dest_root, dest.parent, cache)
         else:
             cache.reload_file(src)
-        reconcile_subtree(root, src.parent, cache)
+            reconcile_subtree(root, src.parent, cache)
     elif kind is EventKind.DIR_CREATE:
         reconcile_subtree(root, src, cache)
     else:
@@ -188,24 +198,25 @@ def run(stop_event: threading.Event | None = None) -> None:
         on_emit=lambda item: _dispatch(item[2], cache, configured_roots),
         timeouts_ms=_timeouts_from_env(),
     )
-    debouncer.start()
-
     handler = _WatchdogHandler(debouncer, configured_roots)
     observer = Observer()
     for r in configured_roots:
         observer.schedule(handler, str(r), recursive=True)
-    observer.start()
-    logger.info("watching roots: %s", [str(r) for r in configured_roots])
 
+    debouncer.start()
     try:
-        while not stop_event.is_set():
-            woke = stop_event.wait(SWEEP_INTERVAL_S)
-            if woke:
-                break
-            _sweep_once(configured_roots, cache, daemon_started)
+        observer.start()
+        logger.info("watching roots: %s", [str(r) for r in configured_roots])
+        try:
+            while not stop_event.is_set():
+                woke = stop_event.wait(SWEEP_INTERVAL_S)
+                if woke:
+                    break
+                _sweep_once(configured_roots, cache, daemon_started)
+        finally:
+            observer.stop()
+            observer.join()
     finally:
-        observer.stop()
-        observer.join()
         debouncer.stop()
         logger.info("daemon stopped")
 

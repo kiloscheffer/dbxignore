@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 IGNORE_FILENAME = ".dropboxignore"
 
 
-class _CaseInsensitiveGitWildMatchPattern(GitIgnoreSpecPattern):
-    """GitWildMatch pattern that compiles regex with re.IGNORECASE.
+class _CaseInsensitiveGitIgnorePattern(GitIgnoreSpecPattern):
+    """GitIgnoreSpec pattern that compiles regex with re.IGNORECASE.
 
     Windows NTFS is case-insensitive; a rule written as ``node_modules/`` must
     match a directory literally named ``Node_Modules`` on disk.
@@ -32,7 +32,7 @@ class _CaseInsensitiveGitWildMatchPattern(GitIgnoreSpecPattern):
 
 def _build_spec(lines: list[str]) -> pathspec.PathSpec:
     """Return a PathSpec whose patterns all match case-insensitively."""
-    return pathspec.PathSpec.from_lines(_CaseInsensitiveGitWildMatchPattern, lines)
+    return pathspec.PathSpec.from_lines(_CaseInsensitiveGitIgnorePattern, lines)
 
 
 @dataclass(frozen=True)
@@ -49,7 +49,7 @@ class RuleCache:
     """Maintains parsed rules from every .dropboxignore under the root(s)."""
 
     def __init__(self) -> None:
-        # Map: .dropboxignore file path -> parsed GitIgnoreSpec
+        # Map: resolved .dropboxignore path -> PathSpec built from _CaseInsensitiveGitIgnorePattern
         self._specs: dict[Path, pathspec.PathSpec] = {}
         # Known roots for relative-path resolution
         self._roots: list[Path] = []

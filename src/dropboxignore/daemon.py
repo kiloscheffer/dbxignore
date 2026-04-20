@@ -71,9 +71,6 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
     elif kind is EventKind.DIR_CREATE:
         reconcile_subtree(root, src, cache)
     else:
-        # OTHER covers file-create and moves. The src of a move no longer exists,
-        # and a created non-dir is always a file, so src.parent is the right
-        # subtree either way.
         target = src.parent
         reconcile_subtree(root, target, cache)
         if event.event_type == "moved" and event.dest_path:

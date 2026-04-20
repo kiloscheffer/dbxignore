@@ -1,3 +1,5 @@
+import pytest
+
 from dropboxignore import reconcile
 from dropboxignore.rules import RuleCache
 
@@ -81,8 +83,6 @@ def test_file_not_found_during_walk_is_silently_skipped(tmp_path, monkeypatch, w
 
 
 def test_rejects_subdir_outside_root(tmp_path, fake_ads):
-    import pytest
-
     other = tmp_path / "other"
     other.mkdir()
     root = tmp_path / "root"

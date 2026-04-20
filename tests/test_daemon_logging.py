@@ -13,11 +13,9 @@ from dropboxignore import daemon
 
 @pytest.fixture
 def isolated_pkg_logger():
-    """Snapshot/restore the dropboxignore package logger around each test.
-
-    The context manager *should* do this itself, but we still isolate in case a
-    test body raises before the `with` block's __exit__ runs.
-    """
+    """Install a known sentinel handler/propagate/level on the dropboxignore
+    package logger so tests can assert the context manager restored them on
+    exit. Snapshots any pre-existing state and restores it after."""
     pkg_logger = logging.getLogger("dropboxignore")
     saved_handlers = list(pkg_logger.handlers)
     saved_propagate = pkg_logger.propagate

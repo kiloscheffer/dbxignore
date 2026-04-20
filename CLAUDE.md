@@ -42,3 +42,4 @@ Windows-only Python utility: keeps NTFS `com.dropbox.ignored` streams in sync wi
 - Design: `docs/superpowers/specs/2026-04-20-dropboxignore-design.md`
 - Plan: `docs/superpowers/plans/2026-04-20-dropboxignore-implementation.md`
 - v0.2 product/risk follow-ups: design doc § Open questions.
+- Post-v0.2 perf/cleanup follow-ups: `docs/post-v0.2-followups.md`.

@@ -72,6 +72,40 @@ def test_load_root_reloads_when_mtime_changes_but_size_matches(
     assert cache.match(tmp_path / "build") is False
 
 
+def test_load_root_prunes_entries_for_deleted_files(tmp_path, write_file):
+    """If a .dropboxignore is deleted while the daemon is down (or the
+    watchdog missed the delete), the next sweep's rglob won't find it.
+    load_root must drop the stale cache entry so its rules don't keep
+    silently applying."""
+    ignore = write_file(tmp_path / ".dropboxignore", "build/\n")
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+    assert ignore.resolve() in cache._rules
+
+    ignore.unlink()
+    cache.load_root(tmp_path)
+
+    assert ignore.resolve() not in cache._rules
+
+
+def test_load_root_prune_leaves_other_roots_intact(tmp_path, write_file):
+    """Pruning under one root must not touch cached entries under others."""
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    ignore_a = write_file(root_a / ".dropboxignore", "build/\n")
+    ignore_b = write_file(root_b / ".dropboxignore", "dist/\n")
+
+    cache = RuleCache()
+    cache.load_root(root_a)
+    cache.load_root(root_b)
+
+    ignore_a.unlink()
+    cache.load_root(root_a)
+
+    assert ignore_a.resolve() not in cache._rules
+    assert ignore_b.resolve() in cache._rules
+
+
 def test_load_root_picks_up_newly_created_file(tmp_path, write_file):
     """Regression guard: the stat-check optimization must not break the
     rglob sweep's job of discovering files the cache doesn't know about."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -77,15 +78,23 @@ class RuleCache:
         root = root.resolve()
         if root not in self._roots:
             self._roots.append(root)
+        seen: set[Path] = set()
         for ignore_file in root.rglob(IGNORE_FILENAME):
+            seen.add(ignore_file.resolve())
             self._load_if_changed(ignore_file)
+        # Drop cached entries for .dropboxignore files under this root that
+        # rglob didn't find — they've been deleted since the last load and
+        # their rules must stop applying.
+        for stale in [
+            p for p in self._rules
+            if p not in seen and p.is_relative_to(root)
+        ]:
+            del self._rules[stale]
 
     def reload_file(self, ignore_file: Path) -> None:
         """Re-read a single .dropboxignore file, replacing any cached version."""
-        resolved = ignore_file.resolve()
-        self._rules.pop(resolved, None)
-        if resolved.exists():
-            self._load_file(resolved)
+        self._rules.pop(ignore_file.resolve(), None)
+        self._load_file(ignore_file)
 
     def remove_file(self, ignore_file: Path) -> None:
         """Drop all cached state for a .dropboxignore file (e.g. after deletion)."""
@@ -144,10 +153,13 @@ class RuleCache:
 
     # ---- internal helpers ------------------------------------------------
 
-    def _load_file(self, ignore_file: Path) -> None:
+    def _load_file(
+        self, ignore_file: Path, *, st: os.stat_result | None = None
+    ) -> None:
         try:
             lines = ignore_file.read_text(encoding="utf-8").splitlines()
-            st = ignore_file.stat()
+            if st is None:
+                st = ignore_file.stat()
         except OSError as exc:
             logger.warning("Could not read %s: %s", ignore_file, exc)
             return
@@ -171,17 +183,16 @@ class RuleCache:
         .dropboxignore every hour. ``reload_file`` bypasses this check — a
         watchdog event is an explicit signal to reload regardless of stat.
         """
+        try:
+            st = ignore_file.stat()
+        except OSError:
+            # Can't stat — let _load_file's read path surface the same error.
+            self._load_file(ignore_file)
+            return
         cached = self._rules.get(ignore_file.resolve())
-        if cached is not None:
-            try:
-                st = ignore_file.stat()
-            except OSError:
-                # Can't stat — fall through; _load_file will log its failure.
-                pass
-            else:
-                if cached.mtime_ns == st.st_mtime_ns and cached.size == st.st_size:
-                    return
-        self._load_file(ignore_file)
+        if cached and cached.mtime_ns == st.st_mtime_ns and cached.size == st.st_size:
+            return
+        self._load_file(ignore_file, st=st)
 
     def _applicable(
         self, root: Path, path: Path

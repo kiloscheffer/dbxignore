@@ -134,9 +134,9 @@ def test_reconcile_path_returns_unchanged_state_when_write_fails(
 def test_reconcile_subtree_does_not_reread_ads_after_reconcile(
     tmp_path, monkeypatch, write_file
 ):
-    """Regression guard: reconcile_subtree used to call ads.is_ignored twice
-    per directory (once in _reconcile_path, once in _safe_is_ignored for
-    pruning). After #4 it should be exactly once."""
+    """Regression guard: reconcile_subtree must call ads.is_ignored at most
+    once per visited path. The final ignored state threads out of
+    _reconcile_path; a second read purely to decide pruning is the bug."""
     write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
     (tmp_path / "build" / "deep").mkdir()

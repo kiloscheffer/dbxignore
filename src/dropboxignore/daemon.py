@@ -9,7 +9,9 @@ import logging.handlers
 import os
 import signal
 import threading
+import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -248,29 +250,41 @@ def run(stop_event: threading.Event | None = None) -> None:
 def _sweep_once(
     roots: list[Path], cache: RuleCache, daemon_started: dt.datetime
 ) -> None:
-    total_marked = 0
-    total_cleared = 0
-    total_errors = 0
-    total_duration = 0.0
+    sweep_start = time.perf_counter()
 
+    # Phase 1: refresh the rule cache. Sequential — load_root mutates the
+    # shared _rules dict and is cheap (only stats .dropboxignore files).
     for r in roots:
         cache.load_root(r)
-        report = reconcile_subtree(r, r, cache)
-        total_marked += report.marked
-        total_cleared += report.cleared
-        total_errors += len(report.errors)
-        total_duration += report.duration_s
+
+    # Phase 2: reconcile each root. Reads cache (no writes) and writes
+    # per-file ADS markers on disjoint paths, so threads across roots
+    # don't contend. Single-root skips the pool to stay simple.
+    if len(roots) > 1:
+        with ThreadPoolExecutor(max_workers=len(roots)) as pool:
+            reports = list(
+                pool.map(lambda r: reconcile_subtree(r, r, cache), roots)
+            )
+    elif roots:
+        reports = [reconcile_subtree(roots[0], roots[0], cache)]
+    else:
+        reports = []
+
+    total_marked = sum(r.marked for r in reports)
+    total_cleared = sum(r.cleared for r in reports)
+    total_errors = sum(len(r.errors) for r in reports)
+    wall_duration = time.perf_counter() - sweep_start
 
     logger.info(
         "sweep completed: marked=%d cleared=%d errors=%d duration=%.2fs",
-        total_marked, total_cleared, total_errors, total_duration,
+        total_marked, total_cleared, total_errors, wall_duration,
     )
 
     s = state_module.State(
         daemon_pid=os.getpid(),
         daemon_started=daemon_started,
         last_sweep=dt.datetime.now(dt.UTC),
-        last_sweep_duration_s=total_duration,
+        last_sweep_duration_s=wall_duration,
         last_sweep_marked=total_marked,
         last_sweep_cleared=total_cleared,
         last_sweep_errors=total_errors,

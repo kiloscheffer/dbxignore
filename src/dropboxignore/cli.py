@@ -174,6 +174,39 @@ def daemon() -> None:
     daemon_mod.run()
 
 
+@main.command()
+def install() -> None:
+    """Register the daemon as a Task Scheduler entry (logon trigger)."""
+    from dropboxignore import install as install_mod
+    install_mod.install_task()
+    click.echo("Installed scheduled task 'dropboxignore'.")
+
+
+@main.command()
+@click.option("--purge", is_flag=True, help="Also clear every com.dropbox.ignored marker.")
+def uninstall(purge: bool) -> None:
+    """Remove the scheduled task. With --purge, also clear all ADS markers."""
+    from dropboxignore import install as install_mod
+    install_mod.uninstall_task()
+    click.echo("Uninstalled scheduled task 'dropboxignore'.")
+
+    if purge:
+        discovered = _discover_roots()
+        cleared = 0
+        for r in discovered:
+            for current, dirnames, filenames in os.walk(r, followlinks=False):
+                current_path = Path(current)
+                for name in dirnames + filenames:
+                    p = current_path / name
+                    try:
+                        if ads.is_ignored(p):
+                            ads.clear_ignored(p)
+                            cleared += 1
+                    except (FileNotFoundError, PermissionError):
+                        continue
+        click.echo(f"Cleared {cleared} com.dropbox.ignored markers.")
+
+
 def daemon_main() -> None:
     """Entry point for the dropboxignored script shim."""
     sys.argv.insert(1, "daemon")

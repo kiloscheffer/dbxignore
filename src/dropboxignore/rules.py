@@ -8,14 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pathspec
-from pathspec.patterns.gitwildmatch import GitWildMatchPattern
+from pathspec.patterns.gitwildmatch import GitIgnoreSpecPattern
 
 logger = logging.getLogger(__name__)
 
 IGNORE_FILENAME = ".dropboxignore"
 
 
-class _CaseInsensitiveGitWildMatchPattern(GitWildMatchPattern):
+class _CaseInsensitiveGitWildMatchPattern(GitIgnoreSpecPattern):
     """GitWildMatch pattern that compiles regex with re.IGNORECASE.
 
     Windows NTFS is case-insensitive; a rule written as ``node_modules/`` must

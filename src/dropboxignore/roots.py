@@ -19,14 +19,19 @@ def discover() -> list[Path]:
         return []
 
     info_path = Path(appdata) / "Dropbox" / "info.json"
-    if not info_path.exists():
-        logger.warning("Dropbox info.json not found at %s", info_path)
-        return []
-
     try:
         data = json.loads(info_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        logger.warning("Malformed Dropbox info.json at %s: %s", info_path, exc)
+    except FileNotFoundError:
+        logger.warning("Dropbox info.json not found at %s", info_path)
+        return []
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logger.warning("Cannot read Dropbox info.json at %s: %s", info_path, exc)
+        return []
+
+    if not isinstance(data, dict):
+        logger.warning(
+            "Unexpected Dropbox info.json structure at %s (top-level is not an object)", info_path
+        )
         return []
 
     roots: list[Path] = []

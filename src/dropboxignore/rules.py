@@ -46,10 +46,10 @@ class RuleCache:
         if root is None:
             return False
 
-        # Walk from root toward path. For flat single-file matching, any match
-        # along the way is sufficient. NOTE: this accumulator is additive-only
-        # (True never flips back to False). Task 5 replaces this with a
-        # last-write-wins accumulator to support cross-file negation.
+        # Walk from root toward path; for each ancestor .dropboxignore, iterate
+        # its patterns in order. Every matching pattern overwrites `matched`
+        # with its include bit (True for positive, False for negation). Deeper
+        # files come later in _ancestors, so their negations win over ancestors.
         matched = False
         for ancestor in self._ancestors(root, path):
             ignore_file = ancestor / IGNORE_FILENAME
@@ -62,8 +62,11 @@ class RuleCache:
             # If the path no longer exists, is_dir() returns False; callers
             # reconciling deleted paths should discard the result (design doc
             # §Failure modes: "deleted path → nothing to reconcile").
-            if spec.match_file(rel_str):
-                matched = True
+            for pattern in spec.patterns:
+                if pattern.regex is None:
+                    continue
+                if pattern.regex.match(rel_str):
+                    matched = bool(pattern.include)
         return matched
 
     # ---- internal helpers ------------------------------------------------

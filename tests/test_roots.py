@@ -41,3 +41,19 @@ def test_discover_malformed_json(monkeypatch, tmp_path):
 def test_discover_no_appdata_env(monkeypatch):
     monkeypatch.delenv("APPDATA", raising=False)
     assert roots.discover() == []
+
+
+def test_discover_json_not_object(monkeypatch, tmp_path):
+    _monkeypatch_info(monkeypatch, tmp_path, "info_not_object.json")
+    assert roots.discover() == []
+
+
+def test_discover_non_utf8_bytes(monkeypatch, tmp_path):
+    appdata = tmp_path / "AppData"
+    dropbox_dir = appdata / "Dropbox"
+    dropbox_dir.mkdir(parents=True)
+    # Write raw CP1252-encoded bytes that aren't valid UTF-8 where Dropbox
+    # has historically stored non-ASCII path components on older installs.
+    (dropbox_dir / "info.json").write_bytes(b'{"personal": {"path": "C:\\\\Dr\xf6pbox"}}')
+    monkeypatch.setenv("APPDATA", str(appdata))
+    assert roots.discover() == []

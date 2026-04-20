@@ -55,10 +55,15 @@ class _LoadedRules:
     ``explain()``: a list of ``(source_line_index, pattern)`` pairs, one per
     active rule (i.e. non-blank, non-comment, parses to a positive or negation
     pattern), in the order they appear in the file.
+
+    ``mtime_ns`` and ``size`` are the file's stat values at load time, used by
+    ``load_root`` to skip reparsing files whose on-disk bytes are unchanged.
     """
 
     lines: list[str]
     entries: list[tuple[int, pathspec.Pattern]]
+    mtime_ns: int
+    size: int
 
 
 class RuleCache:
@@ -73,7 +78,7 @@ class RuleCache:
         if root not in self._roots:
             self._roots.append(root)
         for ignore_file in root.rglob(IGNORE_FILENAME):
-            self._load_file(ignore_file)
+            self._load_if_changed(ignore_file)
 
     def reload_file(self, ignore_file: Path) -> None:
         """Re-read a single .dropboxignore file, replacing any cached version."""
@@ -142,6 +147,7 @@ class RuleCache:
     def _load_file(self, ignore_file: Path) -> None:
         try:
             lines = ignore_file.read_text(encoding="utf-8").splitlines()
+            st = ignore_file.stat()
         except OSError as exc:
             logger.warning("Could not read %s: %s", ignore_file, exc)
             return
@@ -153,7 +159,29 @@ class RuleCache:
         self._rules[ignore_file.resolve()] = _LoadedRules(
             lines=lines,
             entries=_build_entries(lines, spec),
+            mtime_ns=st.st_mtime_ns,
+            size=st.st_size,
         )
+
+    def _load_if_changed(self, ignore_file: Path) -> None:
+        """Load ``ignore_file`` only if its on-disk bytes differ from the
+        cached version (mtime or size mismatch). No-op if unchanged.
+
+        Used by the sweep path (``load_root``) to avoid reparsing every
+        .dropboxignore every hour. ``reload_file`` bypasses this check — a
+        watchdog event is an explicit signal to reload regardless of stat.
+        """
+        cached = self._rules.get(ignore_file.resolve())
+        if cached is not None:
+            try:
+                st = ignore_file.stat()
+            except OSError:
+                # Can't stat — fall through; _load_file will log its failure.
+                pass
+            else:
+                if cached.mtime_ns == st.st_mtime_ns and cached.size == st.st_size:
+                    return
+        self._load_file(ignore_file)
 
     def _applicable(
         self, root: Path, path: Path

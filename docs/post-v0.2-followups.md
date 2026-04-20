@@ -20,14 +20,6 @@ Items surfaced by the 2026-04-20 simplify-review pass that weren't in scope for 
 
 **Risk:** small — the path is well-tested. Worth adding a test that counts reconcile calls for the same-directory rename case before shipping.
 
-## 5. `_build_entries` fallback try/except
-
-**Where:** `rules._build_entries` fallback path — the per-line reparse loop catches `(ValueError, TypeError, re.error)`.
-
-**Why:** `_load_file` already guards the whole-file parse with the same three exceptions and rejects the whole file if any line fails. If the whole file compiled, then either (a) every individual line also compiles (making the fallback's `try/except` dead defensive code), or (b) there's a pathspec-version case where a line compiles in bulk but not individually (making the silent `continue` hide a real bug — `entries` ends up short and `explain()` would report incomplete matches).
-
-**Shape of fix:** investigate (b) first. If no such case exists in pathspec 1.0.4, drop the try/except and let exceptions propagate (they'd indicate a real bug). If the case exists, document it inline and consider logging at DEBUG level so at least it's observable.
-
 ## Non-deferrals (decided not to pursue)
 
 - **Fold `_ancestors` into `_applicable`**: cosmetic, no concrete payoff.

@@ -251,13 +251,13 @@ def _build_entries(
     if len(active_line_indices) == len(active_patterns):
         return list(zip(active_line_indices, active_patterns, strict=True))
 
+    # _load_file already validated the bulk parse, and pathspec 1.0.4's
+    # single-line parse is consistent with bulk — if bulk succeeded, every
+    # line parses individually too. No try/except needed; a raise here
+    # would signal a real pathspec-version regression worth surfacing.
     entries: list[tuple[int, pathspec.Pattern]] = []
     for i in active_line_indices:
-        try:
-            single = _build_spec([lines[i]])
-        except (ValueError, TypeError, re.error):
-            continue
-        for p in single.patterns:
+        for p in _build_spec([lines[i]]).patterns:
             if p.include is not None:
                 entries.append((i, p))
                 break

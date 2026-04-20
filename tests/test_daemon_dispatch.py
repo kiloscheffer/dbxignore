@@ -90,3 +90,28 @@ def test_dispatch_deleted_rules_file_removes_from_cache(tmp_path, monkeypatch):
 
     cache.remove_file.assert_called_once_with(ignore_file)
     assert reconcile_calls == [(tmp_path, ignore_file.parent)]
+
+
+def test_dispatch_moved_rules_reloads_at_dest(tmp_path, monkeypatch):
+    cache = MagicMock()
+    reconcile_calls: list = []
+    monkeypatch.setattr(daemon, "reconcile_subtree",
+                        lambda root, sub, c: reconcile_calls.append((root, sub)))
+
+    (tmp_path / "old_proj").mkdir()
+    (tmp_path / "new_proj").mkdir()
+    old_file = tmp_path / "old_proj" / ".dropboxignore"
+    new_file = tmp_path / "new_proj" / ".dropboxignore"
+    # Only the destination exists on disk after a move.
+    new_file.write_text("build/\n", encoding="utf-8")
+
+    ev = _stub_event("moved", str(old_file), dest_path=str(new_file))
+    daemon._dispatch(ev, cache, roots=[tmp_path])
+
+    cache.remove_file.assert_called_once_with(old_file)
+    cache.reload_file.assert_called_once_with(new_file)
+    # Both parents reconciled.
+    assert sorted(reconcile_calls, key=lambda rc: str(rc[1])) == sorted(
+        [(tmp_path, old_file.parent), (tmp_path, new_file.parent)],
+        key=lambda rc: str(rc[1]),
+    )

@@ -81,3 +81,20 @@ def test_explain_no_match_output(tmp_path, monkeypatch):
     result = runner.invoke(cli.main, ["explain", str(tmp_path / "src")])
     assert result.exit_code == 0
     assert "no match" in result.output.lower()
+
+
+def test_list_does_not_descend_into_ignored_directories(tmp_path, fake_ads, monkeypatch):
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "deep").mkdir()
+    (tmp_path / "build" / "deep" / "file.o").touch()
+    fake_ads.set_ignored(tmp_path / "build")  # parent is ignored
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["list"])
+
+    assert result.exit_code == 0
+    assert str(tmp_path / "build") in result.output
+    # Descendants must NOT appear — list pruned into build/.
+    assert str(tmp_path / "build" / "deep") not in result.output
+    assert "file.o" not in result.output

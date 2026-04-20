@@ -136,7 +136,18 @@ def list_ignored(path: Path | None) -> None:
     for target in targets:
         for current, dirnames, filenames in os.walk(target, followlinks=False):
             current_path = Path(current)
-            for name in dirnames + filenames:
+            kept_dirs: list[str] = []
+            for name in dirnames:
+                p = current_path / name
+                try:
+                    if ads.is_ignored(p):
+                        click.echo(str(p))
+                    else:
+                        kept_dirs.append(name)
+                except (FileNotFoundError, PermissionError):
+                    kept_dirs.append(name)
+            dirnames[:] = kept_dirs
+            for name in filenames:
                 p = current_path / name
                 try:
                     if ads.is_ignored(p):

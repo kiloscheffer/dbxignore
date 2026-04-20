@@ -8,10 +8,31 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pathspec
+from pathspec.patterns.gitwildmatch import GitWildMatchPattern
 
 logger = logging.getLogger(__name__)
 
 IGNORE_FILENAME = ".dropboxignore"
+
+
+class _CaseInsensitiveGitWildMatchPattern(GitWildMatchPattern):
+    """GitWildMatch pattern that compiles regex with re.IGNORECASE.
+
+    Windows NTFS is case-insensitive; a rule written as ``node_modules/`` must
+    match a directory literally named ``Node_Modules`` on disk.
+    """
+
+    @classmethod
+    def pattern_to_regex(cls, pattern: str) -> tuple[str | None, bool | None]:
+        regex, include = super().pattern_to_regex(pattern)
+        if regex is not None:
+            regex = f"(?i){regex}"
+        return regex, include
+
+
+def _build_spec(lines: list[str]) -> pathspec.PathSpec:
+    """Return a PathSpec whose patterns all match case-insensitively."""
+    return pathspec.PathSpec.from_lines(_CaseInsensitiveGitWildMatchPattern, lines)
 
 
 @dataclass(frozen=True)
@@ -29,7 +50,7 @@ class RuleCache:
 
     def __init__(self) -> None:
         # Map: .dropboxignore file path -> parsed GitIgnoreSpec
-        self._specs: dict[Path, pathspec.GitIgnoreSpec] = {}
+        self._specs: dict[Path, pathspec.PathSpec] = {}
         # Known roots for relative-path resolution
         self._roots: list[Path] = []
 
@@ -42,6 +63,8 @@ class RuleCache:
 
     def match(self, path: Path) -> bool:
         path = path.resolve()
+        if path.name == IGNORE_FILENAME:
+            return False
         root = self._root_of(path)
         if root is None:
             return False
@@ -76,7 +99,7 @@ class RuleCache:
             logger.warning("Could not read %s: %s", ignore_file, exc)
             return
         try:
-            spec = pathspec.GitIgnoreSpec.from_lines(lines)
+            spec = _build_spec(lines)
         except (ValueError, TypeError, re.error) as exc:
             logger.warning("Invalid .dropboxignore at %s: %s", ignore_file, exc)
             return

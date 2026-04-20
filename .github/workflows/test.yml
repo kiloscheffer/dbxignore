@@ -1,0 +1,33 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync deps
+        run: uv sync --all-extras
+
+      - name: Lint
+        run: uv run ruff check
+
+      - name: Unit tests (non-Windows-only)
+        run: uv run pytest -m "not windows_only" -v
+
+      - name: Windows-only integration tests
+        if: runner.os == 'Windows'
+        run: uv run pytest -m windows_only -v

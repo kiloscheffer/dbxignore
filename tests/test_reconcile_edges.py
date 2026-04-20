@@ -40,6 +40,8 @@ def test_skips_descendants_of_already_ignored_directory(tmp_path, fake_ads):
 
 
 def test_permission_error_is_logged_and_counted_not_raised(tmp_path, monkeypatch, caplog):
+    import logging
+
     _write(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
     (tmp_path / "other").mkdir()
@@ -60,12 +62,17 @@ def test_permission_error_is_logged_and_counted_not_raised(tmp_path, monkeypatch
     cache = RuleCache()
     cache.load_root(tmp_path)
 
-    report = reconcile.reconcile_subtree(tmp_path, tmp_path, cache)
+    with caplog.at_level(logging.WARNING, logger="dropboxignore.reconcile"):
+        report = reconcile.reconcile_subtree(tmp_path, tmp_path, cache)
 
     assert len(report.errors) == 1
     err_path, err_msg = report.errors[0]
     assert err_path.name == "build"
     assert "locked" in err_msg
+    assert any(
+        r.levelname == "WARNING" and "locked" in r.message
+        for r in caplog.records
+    )
 
 
 def test_file_not_found_during_walk_is_silently_skipped(tmp_path, monkeypatch):
@@ -87,3 +94,15 @@ def test_file_not_found_during_walk_is_silently_skipped(tmp_path, monkeypatch):
     report = reconcile.reconcile_subtree(tmp_path, tmp_path, cache)
     # FileNotFoundError is expected traffic, not an error.
     assert report.errors == []
+
+
+def test_rejects_subdir_outside_root(tmp_path, fake_ads):
+    other = tmp_path / "other"
+    other.mkdir()
+    root = tmp_path / "root"
+    root.mkdir()
+    cache = RuleCache()
+    cache.load_root(root)
+
+    with pytest.raises(ValueError, match="not under root"):
+        reconcile.reconcile_subtree(root, other, cache)

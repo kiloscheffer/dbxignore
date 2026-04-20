@@ -9,6 +9,7 @@ import logging.handlers
 import os
 import signal
 import threading
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -19,24 +20,15 @@ from dropboxignore import roots as roots_module
 from dropboxignore import state as state_module
 from dropboxignore.debounce import Debouncer, EventKind
 from dropboxignore.reconcile import reconcile_subtree
+from dropboxignore.roots import find_containing
 from dropboxignore.rules import IGNORE_FILENAME, RuleCache
 
 logger = logging.getLogger(__name__)
 
 
-def _root_of(path: Path, roots: list[Path]) -> Path | None:
-    for r in roots:
-        try:
-            path.relative_to(r)
-            return r
-        except ValueError:
-            continue
-    return None
-
-
 def _classify(event: Any, roots: list[Path]) -> tuple[EventKind, str] | None:
     src = Path(event.src_path)
-    if _root_of(src, roots) is None:
+    if find_containing(src, roots) is None:
         return None
     if src.name == IGNORE_FILENAME:
         # any CRUD on a .dropboxignore is an EventKind.RULES event
@@ -55,7 +47,7 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
         return
     kind, _key = classification
     src = Path(event.src_path)
-    root = _root_of(src, roots)
+    root = find_containing(src, roots)
     if root is None:
         return
 
@@ -68,18 +60,29 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
             reconcile_subtree(root, src.parent, cache)
             dest = Path(event.dest_path) if event.dest_path else None
             if dest is not None:
-                dest_root = _root_of(dest, roots)
+                dest_root = find_containing(dest, roots)
                 if dest_root is not None:
                     cache.reload_file(dest)
-                    reconcile_subtree(dest_root, dest.parent, cache)
+                    if (dest_root, dest.parent) != (root, src.parent):
+                        reconcile_subtree(dest_root, dest.parent, cache)
         else:
             cache.reload_file(src)
             reconcile_subtree(root, src.parent, cache)
     elif kind is EventKind.DIR_CREATE:
         reconcile_subtree(root, src, cache)
     else:
-        target = src.parent if src.is_file() or not src.exists() else src
+        # OTHER covers file-create and moves. The src of a move no longer exists,
+        # and a created non-dir is always a file, so src.parent is the right
+        # subtree either way.
+        target = src.parent
         reconcile_subtree(root, target, cache)
+        if event.event_type == "moved" and event.dest_path:
+            dest = Path(event.dest_path)
+            dest_root = find_containing(dest, roots)
+            if dest_root is not None:
+                dest_target = dest if event.is_directory else dest.parent
+                if (dest_root, dest_target) != (root, target):
+                    reconcile_subtree(dest_root, dest_target, cache)
 
 
 SWEEP_INTERVAL_S = 3600
@@ -90,12 +93,17 @@ DEFAULT_TIMEOUTS_MS = {
     EventKind.OTHER: 500,
 }
 
+_TIMEOUT_ENV_VARS = {
+    EventKind.RULES: "DROPBOXIGNORE_DEBOUNCE_RULES_MS",
+    EventKind.DIR_CREATE: "DROPBOXIGNORE_DEBOUNCE_DIRS_MS",
+    EventKind.OTHER: "DROPBOXIGNORE_DEBOUNCE_OTHER_MS",
+}
+
 
 def _timeouts_from_env() -> dict[EventKind, int]:
     return {
-        EventKind.RULES: int(os.environ.get("DROPBOXIGNORE_DEBOUNCE_RULES_MS", "100")),
-        EventKind.DIR_CREATE: int(os.environ.get("DROPBOXIGNORE_DEBOUNCE_DIRS_MS", "0")),
-        EventKind.OTHER: int(os.environ.get("DROPBOXIGNORE_DEBOUNCE_OTHER_MS", "500")),
+        kind: int(os.environ.get(_TIMEOUT_ENV_VARS[kind], str(default)))
+        for kind, default in DEFAULT_TIMEOUTS_MS.items()
     }
 
 
@@ -105,8 +113,9 @@ def _log_dir() -> Path:
     return base / "dropboxignore"
 
 
-def _configure_logging() -> None:
-    """Install a rotating file handler writing to LOCALAPPDATA/dropboxignore/daemon.log."""
+@contextlib.contextmanager
+def _configured_logging() -> Iterator[None]:
+    """Scope a rotating file handler to the block; restore prior logger state on exit."""
     level_name = os.environ.get("DROPBOXIGNORE_LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
 
@@ -122,12 +131,26 @@ def _configure_logging() -> None:
         "%(asctime)s %(levelname)s %(name)s: %(message)s"
     ))
 
-    root_logger = logging.getLogger("dropboxignore")
-    root_logger.setLevel(level)
-    for h in list(root_logger.handlers):
-        root_logger.removeHandler(h)
-    root_logger.addHandler(handler)
-    root_logger.propagate = False
+    pkg_logger = logging.getLogger("dropboxignore")
+    saved_handlers = list(pkg_logger.handlers)
+    saved_propagate = pkg_logger.propagate
+    saved_level = pkg_logger.level
+
+    for h in list(pkg_logger.handlers):
+        pkg_logger.removeHandler(h)
+    pkg_logger.addHandler(handler)
+    pkg_logger.propagate = False
+    pkg_logger.setLevel(level)
+    try:
+        yield
+    finally:
+        for h in list(pkg_logger.handlers):
+            pkg_logger.removeHandler(h)
+            h.close()
+        for h in saved_handlers:
+            pkg_logger.addHandler(h)
+        pkg_logger.propagate = saved_propagate
+        pkg_logger.setLevel(saved_level)
 
 
 def _is_other_live_daemon(pid: int | None) -> bool:
@@ -145,7 +168,9 @@ def _is_other_live_daemon(pid: int | None) -> bool:
         return False
     try:
         proc = psutil.Process(pid)
-        return "python" in proc.name().lower()
+        name = proc.name().lower()
+        # Frozen PyInstaller build runs as dropboxignored.exe; source run as python.
+        return "python" in name or "dropboxignored" in name
     except psutil.Error:
         return False
 
@@ -166,59 +191,61 @@ class _WatchdogHandler(FileSystemEventHandler):
 
 
 def run(stop_event: threading.Event | None = None) -> None:
-    _configure_logging()
-    stop_event = stop_event or threading.Event()
-    daemon_started = dt.datetime.now(dt.UTC)
+    with _configured_logging():
+        stop_event = stop_event or threading.Event()
+        daemon_started = dt.datetime.now(dt.UTC)
 
-    # Refuse to run if another daemon is already running.
-    prior = state_module.read()
-    if prior is not None and _is_other_live_daemon(prior.daemon_pid):
-        logger.error("daemon already running (pid=%d); refusing to start", prior.daemon_pid)
-        return
+        # Refuse to run if another daemon is already running.
+        prior = state_module.read()
+        if prior is not None and _is_other_live_daemon(prior.daemon_pid):
+            logger.error(
+                "daemon already running (pid=%d); refusing to start", prior.daemon_pid
+            )
+            return
 
-    def _signal_handler(signum, _frame):
-        logger.info("received signal %s, shutting down", signum)
-        stop_event.set()
-    for s in (signal.SIGINT, signal.SIGTERM):
-        with contextlib.suppress(ValueError, AttributeError):
-            signal.signal(s, _signal_handler)
+        def _signal_handler(signum, _frame):
+            logger.info("received signal %s, shutting down", signum)
+            stop_event.set()
+        for s in (signal.SIGINT, signal.SIGTERM):
+            with contextlib.suppress(ValueError, AttributeError):
+                signal.signal(s, _signal_handler)
 
-    configured_roots = roots_module.discover()
-    if not configured_roots:
-        logger.error("no Dropbox roots discovered; exiting")
-        return
+        configured_roots = roots_module.discover()
+        if not configured_roots:
+            logger.error("no Dropbox roots discovered; exiting")
+            return
 
-    cache = RuleCache()
-    for r in configured_roots:
-        cache.load_root(r)
+        cache = RuleCache()
+        for r in configured_roots:
+            cache.load_root(r)
 
-    _sweep_once(configured_roots, cache, daemon_started)
+        _sweep_once(configured_roots, cache, daemon_started)
 
-    debouncer = Debouncer(
-        on_emit=lambda item: _dispatch(item[2], cache, configured_roots),
-        timeouts_ms=_timeouts_from_env(),
-    )
-    handler = _WatchdogHandler(debouncer, configured_roots)
-    observer = Observer()
-    for r in configured_roots:
-        observer.schedule(handler, str(r), recursive=True)
+        debouncer = Debouncer(
+            on_emit=lambda item: _dispatch(item[2], cache, configured_roots),
+            timeouts_ms=_timeouts_from_env(),
+        )
+        handler = _WatchdogHandler(debouncer, configured_roots)
+        observer = Observer()
+        for r in configured_roots:
+            observer.schedule(handler, str(r), recursive=True)
 
-    debouncer.start()
-    try:
-        observer.start()
-        logger.info("watching roots: %s", [str(r) for r in configured_roots])
+        debouncer.start()
         try:
-            while not stop_event.is_set():
-                woke = stop_event.wait(SWEEP_INTERVAL_S)
-                if woke:
-                    break
-                _sweep_once(configured_roots, cache, daemon_started)
+            observer.start()
+            logger.info("watching roots: %s", [str(r) for r in configured_roots])
+            try:
+                while not stop_event.is_set():
+                    woke = stop_event.wait(SWEEP_INTERVAL_S)
+                    if woke:
+                        break
+                    _sweep_once(configured_roots, cache, daemon_started)
+            finally:
+                observer.stop()
+                observer.join()
         finally:
-            observer.stop()
-            observer.join()
-    finally:
-        debouncer.stop()
-        logger.info("daemon stopped")
+            debouncer.stop()
+            logger.info("daemon stopped")
 
 
 def _sweep_once(
@@ -244,7 +271,7 @@ def _sweep_once(
 
     s = state_module.State(
         daemon_pid=os.getpid(),
-        daemon_started=daemon_started,  # fixed: persists true start time across sweeps
+        daemon_started=daemon_started,
         last_sweep=dt.datetime.now(dt.UTC),
         last_sweep_duration_s=total_duration,
         last_sweep_marked=total_marked,

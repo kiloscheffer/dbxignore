@@ -1,9 +1,35 @@
+import contextlib
 import datetime as dt
 import subprocess
 import sys
 from pathlib import Path
 
+import psutil
+import pytest
+
 from dropboxignore import daemon, state
+
+
+@pytest.mark.parametrize("name,expected", [
+    ("python.exe", True),
+    ("python3", True),
+    ("pythonw.exe", True),
+    ("dropboxignored.exe", True),
+    ("dropboxignored", True),
+    ("notepad.exe", False),
+    ("svchost.exe", False),
+])
+def test_is_other_live_daemon_accepts_python_and_frozen_exe(monkeypatch, name, expected):
+    class _FakeProc:
+        def __init__(self, _pid): pass
+        def name(self): return name
+
+    monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(psutil, "Process", _FakeProc)
+
+    # Use a pid that's not our own to bypass the self-check short-circuit.
+    other_pid = 1 if daemon.os.getpid() != 1 else 2
+    assert daemon._is_other_live_daemon(other_pid) is expected
 
 
 def test_run_refuses_when_another_pid_is_alive(monkeypatch, tmp_path, caplog):
@@ -21,7 +47,7 @@ def test_run_refuses_when_another_pid_is_alive(monkeypatch, tmp_path, caplog):
         state.write(s, state_path)
         monkeypatch.setattr(state, "default_path", lambda: state_path)
         monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])
-        monkeypatch.setattr(daemon, "_configure_logging", lambda: None)
+        monkeypatch.setattr(daemon, "_configured_logging", contextlib.nullcontext)
 
         caplog.set_level("ERROR", logger="dropboxignore.daemon")
         daemon.run()

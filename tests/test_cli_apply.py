@@ -1,15 +1,6 @@
-import pytest
 from click.testing import CliRunner
 
-from dropboxignore import cli, reconcile
-from tests.test_reconcile_basic import FakeADS
-
-
-@pytest.fixture
-def fake_ads(monkeypatch):
-    fake = FakeADS()
-    monkeypatch.setattr(reconcile, "ads", fake)
-    return fake
+from dropboxignore import cli
 
 
 def test_apply_marks_matching_paths(tmp_path, fake_ads, monkeypatch):

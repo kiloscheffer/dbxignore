@@ -10,6 +10,7 @@ from pathlib import Path
 import click
 
 from dropboxignore import ads, reconcile, roots, state
+from dropboxignore.roots import find_containing
 from dropboxignore.rules import RuleCache
 
 logger = logging.getLogger(__name__)
@@ -32,14 +33,6 @@ def _process_is_alive(pid: int | None) -> bool:
             return True
         except (OSError, ProcessLookupError):
             return False
-
-
-def _is_under(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-        return True
-    except ValueError:
-        return False
 
 
 @click.group()
@@ -69,7 +62,7 @@ def apply(path: Path | None) -> None:
         targets: list[tuple[Path, Path]] = [(r, r) for r in discovered]
     else:
         resolved = path.resolve()
-        matched_root = next((r for r in discovered if _is_under(resolved, r)), None)
+        matched_root = find_containing(resolved, discovered)
         if matched_root is None:
             click.echo(f"Path {path} is not under any Dropbox root.", err=True)
             sys.exit(2)
@@ -127,8 +120,7 @@ def list_ignored(path: Path | None) -> None:
         targets = discovered
     else:
         target = path.resolve()
-        matched = next((r for r in discovered if _is_under(target, r)), None)
-        if matched is None:
+        if find_containing(target, discovered) is None:
             click.echo(f"Path {path} is not under any Dropbox root.", err=True)
             sys.exit(2)
         targets = [target]

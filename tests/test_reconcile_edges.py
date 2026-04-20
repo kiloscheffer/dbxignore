@@ -1,27 +1,9 @@
-from pathlib import Path
-
-import pytest
-
 from dropboxignore import reconcile
 from dropboxignore.rules import RuleCache
-from tests.test_reconcile_basic import FakeADS  # reuse fake
 
 
-def _write(path: Path, content: str) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-    return path
-
-
-@pytest.fixture
-def fake_ads(monkeypatch):
-    fake = FakeADS()
-    monkeypatch.setattr(reconcile, "ads", fake)
-    return fake
-
-
-def test_skips_descendants_of_already_ignored_directory(tmp_path, fake_ads):
-    _write(tmp_path / ".dropboxignore", "build/\n")
+def test_skips_descendants_of_already_ignored_directory(tmp_path, fake_ads, write_file):
+    write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
     (tmp_path / "build" / "deep").mkdir()
     (tmp_path / "build" / "a.o").touch()
@@ -39,10 +21,12 @@ def test_skips_descendants_of_already_ignored_directory(tmp_path, fake_ads):
     assert report.cleared == 0
 
 
-def test_permission_error_is_logged_and_counted_not_raised(tmp_path, monkeypatch, caplog):
+def test_permission_error_is_logged_and_counted_not_raised(
+    tmp_path, monkeypatch, caplog, write_file,
+):
     import logging
 
-    _write(tmp_path / ".dropboxignore", "build/\n")
+    write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
     (tmp_path / "other").mkdir()
 
@@ -75,8 +59,8 @@ def test_permission_error_is_logged_and_counted_not_raised(tmp_path, monkeypatch
     )
 
 
-def test_file_not_found_during_walk_is_silently_skipped(tmp_path, monkeypatch):
-    _write(tmp_path / ".dropboxignore", "build/\n")
+def test_file_not_found_during_walk_is_silently_skipped(tmp_path, monkeypatch, write_file):
+    write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
 
     class DisappearingADS:
@@ -97,6 +81,8 @@ def test_file_not_found_during_walk_is_silently_skipped(tmp_path, monkeypatch):
 
 
 def test_rejects_subdir_outside_root(tmp_path, fake_ads):
+    import pytest
+
     other = tmp_path / "other"
     other.mkdir()
     root = tmp_path / "root"

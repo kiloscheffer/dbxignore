@@ -12,6 +12,17 @@ logger = logging.getLogger(__name__)
 _ACCOUNT_TYPES = ("personal", "business")
 
 
+def find_containing(path: Path, roots: list[Path]) -> Path | None:
+    """Return the first root that contains ``path``, or ``None`` if none do."""
+    for root in roots:
+        try:
+            path.relative_to(root)
+            return root
+        except ValueError:
+            continue
+    return None
+
+
 def discover() -> list[Path]:
     appdata = os.environ.get("APPDATA")
     if not appdata:

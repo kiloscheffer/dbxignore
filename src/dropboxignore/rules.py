@@ -10,6 +10,8 @@ from pathlib import Path
 import pathspec
 from pathspec.patterns.gitwildmatch import GitIgnoreSpecPattern
 
+from dropboxignore.roots import find_containing
+
 logger = logging.getLogger(__name__)
 
 IGNORE_FILENAME = ".dropboxignore"
@@ -86,7 +88,7 @@ class RuleCache:
         path = path.resolve()
         if path.name == IGNORE_FILENAME:
             return False
-        root = self._root_of(path)
+        root = find_containing(path, self._roots)
         if root is None:
             return False
 
@@ -121,7 +123,7 @@ class RuleCache:
         path = path.resolve()
         if path.name == IGNORE_FILENAME:
             return []
-        root = self._root_of(path)
+        root = find_containing(path, self._roots)
         if root is None:
             return []
 
@@ -179,15 +181,6 @@ class RuleCache:
             if active:
                 entries.append((i, active[0]))
         self._pattern_entries[resolved] = entries
-
-    def _root_of(self, path: Path) -> Path | None:
-        for root in self._roots:
-            try:
-                path.relative_to(root)
-                return root
-            except ValueError:
-                continue
-        return None
 
     def _ancestors(self, root: Path, path: Path) -> list[Path]:
         """Return [root, ...intermediate dirs..., path's parent] inclusive."""

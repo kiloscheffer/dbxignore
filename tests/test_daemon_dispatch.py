@@ -92,6 +92,48 @@ def test_dispatch_deleted_rules_file_removes_from_cache(tmp_path, monkeypatch):
     assert reconcile_calls == [(tmp_path, ignore_file.parent)]
 
 
+def test_dispatch_moved_non_rules_reconciles_both_parents(tmp_path, monkeypatch):
+    cache = MagicMock()
+    reconcile_calls: list = []
+    monkeypatch.setattr(daemon, "reconcile_subtree",
+                        lambda root, sub, c: reconcile_calls.append((root, sub)))
+
+    (tmp_path / "old_dir").mkdir()
+    (tmp_path / "new_dir").mkdir()
+    old_file = tmp_path / "old_dir" / "foo.txt"
+    new_file = tmp_path / "new_dir" / "foo.txt"
+    # Only the destination exists on disk after a move.
+    new_file.write_text("x", encoding="utf-8")
+
+    ev = _stub_event("moved", str(old_file), dest_path=str(new_file))
+    daemon._dispatch(ev, cache, roots=[tmp_path])
+
+    # Both parents reconciled; cache is untouched for non-rules files.
+    cache.reload_file.assert_not_called()
+    cache.remove_file.assert_not_called()
+    assert sorted(reconcile_calls, key=lambda rc: str(rc[1])) == sorted(
+        [(tmp_path, old_file.parent), (tmp_path, new_file.parent)],
+        key=lambda rc: str(rc[1]),
+    )
+
+
+def test_dispatch_moved_non_rules_dest_outside_any_root(tmp_path, monkeypatch):
+    cache = MagicMock()
+    reconcile_calls: list = []
+    monkeypatch.setattr(daemon, "reconcile_subtree",
+                        lambda root, sub, c: reconcile_calls.append((root, sub)))
+
+    (tmp_path / "old_dir").mkdir()
+    old_file = tmp_path / "old_dir" / "foo.txt"
+    # Dest is outside any watched root — should not be reconciled.
+    dest_outside = Path(r"D:\Elsewhere\foo.txt")
+
+    ev = _stub_event("moved", str(old_file), dest_path=str(dest_outside))
+    daemon._dispatch(ev, cache, roots=[tmp_path])
+
+    assert reconcile_calls == [(tmp_path, old_file.parent)]
+
+
 def test_dispatch_moved_rules_reloads_at_dest(tmp_path, monkeypatch):
     cache = MagicMock()
     reconcile_calls: list = []

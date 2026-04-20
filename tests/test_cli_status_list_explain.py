@@ -2,19 +2,9 @@ import datetime as dt
 import os
 from pathlib import Path
 
-import pytest
 from click.testing import CliRunner
 
-from dropboxignore import cli, reconcile, state
-from tests.test_reconcile_basic import FakeADS
-
-
-@pytest.fixture
-def fake_ads(monkeypatch):
-    fake = FakeADS()
-    monkeypatch.setattr(reconcile, "ads", fake)
-    monkeypatch.setattr(cli, "ads", fake, raising=False)
-    return fake
+from dropboxignore import cli, state
 
 
 def test_status_reports_no_state_when_file_missing(tmp_path, monkeypatch):

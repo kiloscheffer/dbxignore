@@ -33,6 +33,7 @@ Windows-only Python utility: keeps NTFS `com.dropbox.ignored` streams in sync wi
 - Use `datetime.UTC`, not `timezone.utc` (ruff UP017).
 - Test helpers (`FakeADS`, `fake_ads` fixture, `write_file` fixture) live in `tests/conftest.py` and are auto-available to every test module.
 - Windows-only tests: set `pytestmark = pytest.mark.windows_only` at module level and guard with `if sys.platform != "win32": pytest.skip(..., allow_module_level=True)` so non-Windows collection skips cleanly.
+- Daemon/sweep tests that trigger state writes: `monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")` redirects the persisted state off `LOCALAPPDATA` and keeps the test hermetic.
 
 ## Release
 

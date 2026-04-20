@@ -2,26 +2,6 @@
 
 Items surfaced by the 2026-04-20 simplify-review pass that weren't in scope for the review itself. Each is either a larger perf change needing its own PR with benchmarks, or a judgment call worth revisiting with fresh eyes.
 
-## 1. `Path.resolve()` in the `match()` / `explain()` hot path
-
-**Where:** `rules.RuleCache.match()` and `.explain()` both call `path = path.resolve()` at entry.
-
-**Why:** on Windows `resolve()` maps to `GetFinalPathNameByHandleW` — a real syscall per call, opening the file to read its canonical path. `match()` runs once per file during a full sweep; a 200k-file Dropbox is 200k extra syscalls per hourly sweep.
-
-**Shape of fix:** two paths:
-- Option A (contract change): require callers to pass already-resolved absolute paths; document it; assert `path.is_absolute()` at entry. `_reconcile_path` and `cli.apply` already resolve at their top, so they'd be no-ops; the CLI `explain` path would need to resolve once at CLI entry.
-- Option B (implementation change): short-circuit `resolve()` when `path.is_absolute()` and `".." not in path.parts` (the common case from `os.walk`). Symlinks still get normalized if they appear (rare for Dropbox).
-
-**Prereq for either:** a Windows benchmark. Gut feel says option A is cleaner but risks being a trap if a future caller passes a relative path. Option B is safe-by-default at the cost of per-call introspection.
-
-## 2. `ads` module also `.resolve()`s every call
-
-**Where:** `ads.is_ignored / set_ignored / clear_ignored` each call `path.resolve()` before opening the stream.
-
-**Why:** `_reconcile_path` makes one `is_ignored` + 0–1 `set_ignored`/`clear_ignored` per file = **2× resolve syscalls per file per sweep** on top of item 1's cost.
-
-**Shape of fix:** same decision as item 1. If the cache contract becomes "callers pass resolved paths," `ads` should follow — they'd be consistent, and the syscall count drops by another factor of two. Do items 1 and 2 in the same PR.
-
 ## 3. Parallel root sweep
 
 **Where:** `daemon._sweep_once` iterates `roots` sequentially.

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from dropboxignore import ads
 
 
@@ -9,8 +11,9 @@ def test_stream_path_uses_long_path_prefix_and_stream_name():
     assert result == r"\\?\C:\Dropbox\some\dir:com.dropbox.ignored"
 
 
-def test_stream_path_resolves_relative_paths(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    result = ads._stream_path(Path("foo"))
-    expected = rf"\\?\{tmp_path / 'foo'}:com.dropbox.ignored"
-    assert result == expected
+def test_stream_path_rejects_relative_path():
+    """Caller contract: ads operates on absolute paths only. The \\\\?\\
+    long-path prefix is meaningless before a relative path, so resolving
+    silently would mask a bug at the call site."""
+    with pytest.raises(ValueError, match="absolute"):
+        ads._stream_path(Path("foo"))

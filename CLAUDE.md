@@ -28,6 +28,7 @@ Windows-only Python utility: keeps NTFS `com.dropbox.ignored` streams in sync wi
 - `ads` uses `open(r"\\?\path:com.dropbox.ignored")` directly — `\\?\` prefix mandatory for >260-char paths.
 - NTFS is case-insensitive; `_CaseInsensitiveGitIgnorePattern` prepends `(?i)` to compiled regexes.
 - `.dropboxignore` files are never marked ignored — guarded in `match()` and `explain()`.
+- `rules.match/explain` and `ads.{is,set,clear}_ignored` all require **absolute** paths and raise `ValueError` on relative ones. Resolve at the CLI/daemon boundary, never inside the cache or ADS layer — `Path.resolve()` on Windows is a per-call syscall that dominated sweep wall-clock before.
 - `daemon._configured_logging()` is a context manager: it snapshots the `dropboxignore` logger on enter and restores handlers/propagate/level on exit. `run()` wraps its body in it, so tests that call `daemon.run()` don't need to hand-restore logger state — but if you mock it out in a test, use `contextlib.nullcontext` (see `test_daemon_singleton.py`).
 - Use `datetime.UTC`, not `timezone.utc` (ruff UP017).
 - Test helpers (`FakeADS`, `fake_ads` fixture, `write_file` fixture) live in `tests/conftest.py` and are auto-available to every test module.

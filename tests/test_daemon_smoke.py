@@ -41,16 +41,30 @@ def test_daemon_reacts_to_dropboxignore_and_directory_creation(tmp_path, monkeyp
         assert _poll_until(lambda: markers.is_ignored(tmp_path / "build")), \
             "build/ was not marked ignored within 2s"
 
-        # Append a negation; create a child; expect child NOT ignored.
+        # Append a negation; create the child. Under the new semantics
+        # (v0.2 item 10 resolution) the negation is detected as conflicted
+        # at rule-load time and dropped from the active rule set — so the
+        # child stays marked, just like its parent. The daemon log should
+        # carry the conflict WARNING.
         (tmp_path / ".dropboxignore").write_text(
             "build/\n!build/keep/\n", encoding="utf-8"
         )
         (tmp_path / "build" / "keep").mkdir()
 
         assert _poll_until(
-            lambda: not markers.is_ignored(tmp_path / "build" / "keep"),
+            lambda: markers.is_ignored(tmp_path / "build" / "keep"),
             timeout_s=3.0,
-        ), "build/keep/ was still marked ignored after negation"
+        ), "build/keep/ should stay marked — the negation is dropped"
+
+        # Verify the WARNING made it into daemon.log. The log lives under
+        # the test's LOCALAPPDATA redirect.
+        log_path = tmp_path / "LocalAppData" / "dropboxignore" / "daemon.log"
+        assert _poll_until(
+            lambda: log_path.exists()
+            and "!build/keep/" in log_path.read_text()
+            and "masked by" in log_path.read_text(),
+            timeout_s=3.0,
+        ), "daemon.log should contain the conflict WARNING"
     finally:
         stop.set()
         t.join(timeout=5.0)

@@ -31,3 +31,7 @@ jobs:
       - name: Windows-only integration tests
         if: runner.os == 'Windows'
         run: uv run pytest -m windows_only -v
+
+      - name: Linux-only integration tests
+        if: runner.os == 'Linux'
+        run: uv run pytest -m linux_only -v

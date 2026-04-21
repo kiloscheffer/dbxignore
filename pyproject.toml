@@ -41,6 +41,7 @@ packages = ["src/dropboxignore"]
 testpaths = ["tests"]
 markers = [
     "windows_only: test requires NTFS alternate data streams",
+    "linux_only: test requires Linux user.* xattrs",
 ]
 timeout = 10
 

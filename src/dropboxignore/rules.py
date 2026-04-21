@@ -229,6 +229,18 @@ class _LoadedRules:
     size: int
 
 
+@dataclass(frozen=True)
+class _SequenceEntry:
+    """One rule in the flattened evaluation-order sequence used by
+    conflict detection. Internal to RuleCache."""
+
+    source: Path           # the .dropboxignore file this rule came from
+    line: int              # 1-based source line number
+    raw: str               # source-line text (without trailing newline)
+    ancestor_dir: Path     # directory the pattern is scoped to
+    pattern: object        # GitIgnoreSpecPattern; duck-typed (.include, .match_file)
+
+
 class RuleCache:
     """Maintains parsed rules from every .dropboxignore under the root(s)."""
 
@@ -239,6 +251,11 @@ class RuleCache:
         # thread may pop/insert; without this lock that's "dictionary changed
         # size during iteration". RLock so load_root can nest into _load_file.
         self._lock = threading.RLock()
+        # Detection state — recomputed on every mutation. Keyed by
+        # (ignore_file_path, line_idx) so match()/explain() can filter
+        # without rebuilding per call.
+        self._dropped: set[tuple[Path, int]] = set()
+        self._conflicts: list[Conflict] = []
 
     def load_root(self, root: Path) -> None:
         root = root.resolve()
@@ -257,17 +274,20 @@ class RuleCache:
                 if p not in seen and p.is_relative_to(root)
             ]:
                 del self._rules[stale]
+            self._recompute_conflicts()
 
     def reload_file(self, ignore_file: Path) -> None:
         """Re-read a single .dropboxignore file, replacing any cached version."""
         with self._lock:
             self._rules.pop(ignore_file.resolve(), None)
             self._load_file(ignore_file)
+            self._recompute_conflicts()
 
     def remove_file(self, ignore_file: Path) -> None:
         """Drop all cached state for a .dropboxignore file (e.g. after deletion)."""
         with self._lock:
             self._rules.pop(ignore_file.resolve(), None)
+            self._recompute_conflicts()
 
     def match(self, path: Path) -> bool:
         if not path.is_absolute():
@@ -397,6 +417,60 @@ class RuleCache:
             current = current / part
             result.append(current)
         return result
+
+    def conflicts(self) -> list[Conflict]:
+        """Current conflicts across all loaded roots, in detection order."""
+        with self._lock:
+            return list(self._conflicts)
+
+    def _recompute_conflicts(self) -> None:
+        """Rebuild _dropped and _conflicts from the current _rules.
+
+        Called after any mutation (load_root, reload_file, remove_file).
+        Caller must hold self._lock.
+        """
+        self._dropped.clear()
+        self._conflicts.clear()
+        for root in self._roots:
+            sequence = self._build_sequence(root)
+            for c in _detect_conflicts(sequence, root=root):
+                self._conflicts.append(c)
+                self._dropped.add((c.dropped_source, c.dropped_line - 1))
+                logger.warning(
+                    "negation `%s` at %s:%d is masked by include `%s` at %s:%d "
+                    "(Dropbox inherits ignored state from ancestor directories). "
+                    "Dropping the negation from the active rule set. "
+                    "See README §Gotchas.",
+                    c.dropped_pattern, c.dropped_source, c.dropped_line,
+                    c.masking_pattern, c.masking_source, c.masking_line,
+                )
+
+    def _build_sequence(self, root: Path) -> list[_SequenceEntry]:
+        """Flatten all .dropboxignore rules under root into evaluation order.
+
+        Shallower files first; within a file, source-line order.
+        """
+        files_under_root = sorted(
+            (p for p in self._rules if p.is_relative_to(root)),
+            key=lambda p: (len(p.parts), p.as_posix()),
+        )
+        sequence: list[_SequenceEntry] = []
+        for ignore_file in files_under_root:
+            loaded = self._rules[ignore_file]
+            ancestor_dir = ignore_file.parent
+            for line_idx, pattern in loaded.entries:
+                raw = (
+                    loaded.lines[line_idx]
+                    if line_idx < len(loaded.lines) else ""
+                )
+                sequence.append(_SequenceEntry(
+                    source=ignore_file,
+                    line=line_idx + 1,
+                    raw=raw,
+                    ancestor_dir=ancestor_dir,
+                    pattern=pattern,
+                ))
+        return sequence
 
 
 def _build_entries(

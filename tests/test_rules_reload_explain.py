@@ -104,3 +104,51 @@ def test_load_file_survives_malformed_pattern(tmp_path, write_file, caplog):
         r.levelname == "WARNING" and "Invalid .dropboxignore" in r.message
         for r in caplog.records
     )
+
+
+def test_rulecache_populates_conflicts_on_load(tmp_path):
+    from dropboxignore.rules import RuleCache
+
+    root = tmp_path
+    (root / ".dropboxignore").write_text(
+        "build/\n!build/keep/\n", encoding="utf-8"
+    )
+    cache = RuleCache()
+    cache.load_root(root)
+
+    conflicts = cache.conflicts()
+    assert len(conflicts) == 1
+    c = conflicts[0]
+    assert c.dropped_pattern == "!build/keep/"
+    assert c.masking_pattern == "build/"
+
+
+def test_rulecache_clears_conflicts_on_reload_without_conflict(tmp_path):
+    from dropboxignore.rules import RuleCache
+
+    root = tmp_path
+    ignore_file = root / ".dropboxignore"
+    ignore_file.write_text("build/\n!build/keep/\n", encoding="utf-8")
+    cache = RuleCache()
+    cache.load_root(root)
+    assert len(cache.conflicts()) == 1
+
+    # Fix the rules: drop the negation.
+    ignore_file.write_text("build/\n", encoding="utf-8")
+    cache.reload_file(ignore_file)
+
+    assert cache.conflicts() == []
+
+
+def test_rulecache_conflicts_removed_when_file_removed(tmp_path):
+    from dropboxignore.rules import RuleCache
+
+    root = tmp_path
+    ignore_file = root / ".dropboxignore"
+    ignore_file.write_text("build/\n!build/keep/\n", encoding="utf-8")
+    cache = RuleCache()
+    cache.load_root(root)
+    assert len(cache.conflicts()) == 1
+
+    cache.remove_file(ignore_file)
+    assert cache.conflicts() == []

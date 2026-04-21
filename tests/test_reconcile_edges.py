@@ -4,12 +4,12 @@ from dropboxignore import reconcile
 from dropboxignore.rules import RuleCache
 
 
-def test_skips_descendants_of_already_ignored_directory(tmp_path, fake_ads, write_file):
+def test_skips_descendants_of_already_ignored_directory(tmp_path, fake_markers, write_file):
     write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
     (tmp_path / "build" / "deep").mkdir()
     (tmp_path / "build" / "a.o").touch()
-    fake_ads.set_ignored(tmp_path / "build")  # pre-ignored
+    fake_markers.set_ignored(tmp_path / "build")  # pre-ignored
 
     cache = RuleCache()
     cache.load_root(tmp_path)
@@ -17,7 +17,7 @@ def test_skips_descendants_of_already_ignored_directory(tmp_path, fake_ads, writ
     report = reconcile.reconcile_subtree(tmp_path, tmp_path, cache)
 
     # 'deep' and 'a.o' must not be touched (we skipped into build/).
-    assert (tmp_path / "build" / "deep").resolve() not in fake_ads._ignored
+    assert (tmp_path / "build" / "deep").resolve() not in fake_markers._ignored
     # Report counts no new marks/clears — build/ was already correct.
     assert report.marked == 0
     assert report.cleared == 0
@@ -43,7 +43,7 @@ def test_permission_error_is_logged_and_counted_not_raised(
         def clear_ignored(self, path): self._ignored.discard(path.resolve())
 
     failing = FailingADS()
-    monkeypatch.setattr(reconcile, "ads", failing)
+    monkeypatch.setattr(reconcile, "markers", failing)
 
     cache = RuleCache()
     cache.load_root(tmp_path)
@@ -71,7 +71,7 @@ def test_file_not_found_during_walk_is_silently_skipped(tmp_path, monkeypatch, w
         def set_ignored(self, path): pass
         def clear_ignored(self, path): pass
 
-    monkeypatch.setattr(reconcile, "ads", DisappearingADS())
+    monkeypatch.setattr(reconcile, "markers", DisappearingADS())
 
     cache = RuleCache()
     cache.load_root(tmp_path)
@@ -83,7 +83,7 @@ def test_file_not_found_during_walk_is_silently_skipped(tmp_path, monkeypatch, w
 
 
 def test_sweep_clears_markers_when_dropboxignore_was_deleted_offline(
-    tmp_path, fake_ads
+    tmp_path, fake_markers
 ):
     """Offline-recovery integration: if a .dropboxignore was deleted while
     the daemon was down, the next startup sweep must clear every ADS marker
@@ -93,26 +93,26 @@ def test_sweep_clears_markers_when_dropboxignore_was_deleted_offline(
     # an old sweep marked it directly, the marker is on disk).
     (tmp_path / "build").mkdir()
     (tmp_path / "build" / "deep").mkdir()
-    fake_ads.set_ignored(tmp_path / "build")
-    fake_ads.set_ignored(tmp_path / "build" / "deep")
+    fake_markers.set_ignored(tmp_path / "build")
+    fake_markers.set_ignored(tmp_path / "build" / "deep")
 
     # Fresh daemon startup: no .dropboxignore on disk, empty cache, sweep.
     cache = RuleCache()
     cache.load_root(tmp_path)
     report = reconcile.reconcile_subtree(tmp_path, tmp_path, cache)
 
-    assert not fake_ads.is_ignored(tmp_path / "build")
-    assert not fake_ads.is_ignored(tmp_path / "build" / "deep")
+    assert not fake_markers.is_ignored(tmp_path / "build")
+    assert not fake_markers.is_ignored(tmp_path / "build" / "deep")
     assert report.cleared == 2
 
 
-def test_overridden_dropboxignore_logs_warning(tmp_path, fake_ads, caplog, write_file):
+def test_overridden_dropboxignore_logs_warning(tmp_path, fake_markers, caplog, write_file):
     """Spec: `.dropboxignore is never itself ignored` — violations are logged
     at WARNING on every reconcile and continue to be overridden."""
     import logging
 
     write_file(tmp_path / ".dropboxignore", "build/\n")
-    fake_ads.set_ignored(tmp_path / ".dropboxignore")  # something else marked it
+    fake_markers.set_ignored(tmp_path / ".dropboxignore")  # something else marked it
 
     cache = RuleCache()
     cache.load_root(tmp_path)
@@ -120,7 +120,7 @@ def test_overridden_dropboxignore_logs_warning(tmp_path, fake_ads, caplog, write
     with caplog.at_level(logging.WARNING, logger="dropboxignore.reconcile"):
         report = reconcile.reconcile_subtree(tmp_path, tmp_path, cache)
 
-    assert not fake_ads.is_ignored(tmp_path / ".dropboxignore")
+    assert not fake_markers.is_ignored(tmp_path / ".dropboxignore")
     assert report.cleared >= 1
     assert any(
         r.levelname == "WARNING" and ".dropboxignore" in r.message
@@ -129,7 +129,7 @@ def test_overridden_dropboxignore_logs_warning(tmp_path, fake_ads, caplog, write
     ), caplog.records
 
 
-def test_rejects_subdir_outside_root(tmp_path, fake_ads):
+def test_rejects_subdir_outside_root(tmp_path, fake_markers):
     other = tmp_path / "other"
     other.mkdir()
     root = tmp_path / "root"

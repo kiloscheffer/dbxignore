@@ -9,7 +9,7 @@ from pathlib import Path
 
 import click
 
-from dropboxignore import ads, reconcile, roots, state
+from dropboxignore import markers, reconcile, roots, state
 from dropboxignore.roots import find_containing
 from dropboxignore.rules import IGNORE_FILENAME, RuleCache
 
@@ -39,7 +39,7 @@ def _process_is_alive(pid: int | None) -> bool:
 @click.option("--verbose", "-v", is_flag=True, help="Enable DEBUG-level logging.")
 @click.pass_context
 def main(ctx: click.Context, verbose: bool) -> None:
-    """Manage hierarchical .dropboxignore rules for Dropbox on Windows."""
+    """Manage hierarchical .dropboxignore rules for Dropbox."""
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(level=level, format="%(levelname)s %(name)s: %(message)s")
     ctx.ensure_object(dict)
@@ -110,7 +110,7 @@ def status() -> None:
 @main.command("list")
 @click.argument("path", required=False, type=click.Path(path_type=Path))
 def list_ignored(path: Path | None) -> None:
-    """List every path currently bearing the com.dropbox.ignored ADS marker."""
+    """List every path currently bearing the Dropbox ignore marker."""
     discovered = _discover_roots()
     if not discovered:
         click.echo("No Dropbox roots found.", err=True)
@@ -132,19 +132,19 @@ def list_ignored(path: Path | None) -> None:
             for name in dirnames:
                 p = current_path / name
                 try:
-                    if ads.is_ignored(p):
+                    if markers.is_ignored(p):
                         click.echo(str(p))
                     else:
                         kept_dirs.append(name)
-                except (FileNotFoundError, PermissionError):
+                except OSError:
                     kept_dirs.append(name)
             dirnames[:] = kept_dirs
             for name in filenames:
                 p = current_path / name
                 try:
-                    if ads.is_ignored(p):
+                    if markers.is_ignored(p):
                         click.echo(str(p))
-                except (FileNotFoundError, PermissionError):
+                except OSError:
                     continue
 
 
@@ -179,23 +179,23 @@ def daemon() -> None:
 
 @main.command()
 def install() -> None:
-    """Register the daemon as a Task Scheduler entry (logon trigger)."""
-    from dropboxignore import install as install_mod
-    install_mod.install_task()
-    click.echo("Installed scheduled task 'dropboxignore'.")
+    """Register the daemon with the platform's user-scoped service manager."""
+    from dropboxignore.install import install_service
+    install_service()
+    click.echo("Installed dropboxignore daemon service.")
 
 
 @main.command()
-@click.option("--purge", is_flag=True, help="Also clear every com.dropbox.ignored marker.")
+@click.option("--purge", is_flag=True, help="Also clear every ignore marker.")
 def uninstall(purge: bool) -> None:
-    """Remove the scheduled task. With --purge, also clear all ADS markers."""
-    from dropboxignore import install as install_mod
+    """Remove the daemon service. With --purge, also clear all ignore markers."""
+    from dropboxignore.install import uninstall_service
     try:
-        install_mod.uninstall_task()
+        uninstall_service()
     except RuntimeError as exc:
-        click.echo(f"Failed to uninstall scheduled task: {exc}", err=True)
+        click.echo(f"Failed to uninstall daemon service: {exc}", err=True)
         sys.exit(2)
-    click.echo("Uninstalled scheduled task 'dropboxignore'.")
+    click.echo("Uninstalled dropboxignore daemon service.")
 
     if purge:
         discovered = _discover_roots()
@@ -206,18 +206,18 @@ def uninstall(purge: bool) -> None:
                 for name in dirnames + filenames:
                     p = current_path / name
                     try:
-                        if ads.is_ignored(p):
+                        if markers.is_ignored(p):
                             if p.name == IGNORE_FILENAME:
                                 logger.warning(
                                     ".dropboxignore at %s was marked ignored; "
                                     "overriding back to synced",
                                     p,
                                 )
-                            ads.clear_ignored(p)
+                            markers.clear_ignored(p)
                             cleared += 1
-                    except (FileNotFoundError, PermissionError):
+                    except OSError:
                         continue
-        click.echo(f"Cleared {cleared} com.dropbox.ignored markers.")
+        click.echo(f"Cleared {cleared} ignore markers.")
 
 
 def daemon_main() -> None:

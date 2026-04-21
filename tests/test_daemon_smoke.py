@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from dropboxignore import ads, daemon
+from dropboxignore import daemon, markers
 
 pytestmark = pytest.mark.windows_only
 
@@ -38,7 +38,7 @@ def test_daemon_reacts_to_dropboxignore_and_directory_creation(tmp_path, monkeyp
         (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
         (tmp_path / "build").mkdir()
 
-        assert _poll_until(lambda: ads.is_ignored(tmp_path / "build")), \
+        assert _poll_until(lambda: markers.is_ignored(tmp_path / "build")), \
             "build/ was not marked ignored within 2s"
 
         # Append a negation; create a child; expect child NOT ignored.
@@ -48,7 +48,7 @@ def test_daemon_reacts_to_dropboxignore_and_directory_creation(tmp_path, monkeyp
         (tmp_path / "build" / "keep").mkdir()
 
         assert _poll_until(
-            lambda: not ads.is_ignored(tmp_path / "build" / "keep"),
+            lambda: not markers.is_ignored(tmp_path / "build" / "keep"),
             timeout_s=3.0,
         ), "build/keep/ was still marked ignored after negation"
     finally:

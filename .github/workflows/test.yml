@@ -26,8 +26,12 @@ jobs:
         run: uv run ruff check
 
       - name: Unit tests (non-Windows-only)
-        run: uv run pytest -m "not windows_only" -v
+        run: uv run pytest -m "not windows_only and not linux_only" -v
 
       - name: Windows-only integration tests
         if: runner.os == 'Windows'
         run: uv run pytest -m windows_only -v
+
+      - name: Linux-only integration tests
+        if: runner.os == 'Linux'
+        run: uv run pytest -m linux_only -v

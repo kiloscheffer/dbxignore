@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dropboxignore"
-description = "Hierarchical .dropboxignore for Dropbox on Windows via NTFS alternate data streams"
+description = "Hierarchical .dropboxignore for Dropbox on Windows (NTFS ADS) and Linux (xattrs)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -41,6 +41,7 @@ packages = ["src/dropboxignore"]
 testpaths = ["tests"]
 markers = [
     "windows_only: test requires NTFS alternate data streams",
+    "linux_only: test requires Linux user.* xattrs",
 ]
 timeout = 10
 

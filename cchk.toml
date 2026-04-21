@@ -1,0 +1,35 @@
+# Single source of truth for Conventional Commits + Conventional Branch
+# enforcement. Consumed by both the pre-commit commit-msg hook (local) and
+# commit-check-action (CI). Do not duplicate these lists in prose — reference
+# this file from CLAUDE.md instead.
+#
+# Specs:
+#   https://www.conventionalcommits.org/en/v1.0.0/
+#   https://conventional-branch.github.io/
+
+[commit]
+conventional_commits = true
+subject_capitalized = false
+# subject_imperative is intentionally off: commit-check v2.6.0 enforces it
+# against a narrow hardcoded verb allow-list that flags grammatically
+# imperative verbs ("address", "discover", "skip") as false positives. The
+# type prefix + Conventional Commits grammar already filter the bulk of
+# low-quality subjects; relying on reviewer judgment beyond that.
+subject_imperative = false
+subject_min_length = 5
+subject_max_length = 72
+allow_commit_types = [
+    "feat", "fix", "docs", "style", "refactor",
+    "perf", "test", "build", "ci", "chore", "revert",
+]
+allow_merge_commits = true
+allow_revert_commits = true
+allow_fixup_commits = true
+allow_empty_commits = false
+allow_wip_commits = false
+require_body = false
+require_signed_off_by = false
+
+[branch]
+conventional_branch = true
+allow_branch_types = ["feature", "bugfix", "hotfix", "release", "chore", "feat", "fix"]

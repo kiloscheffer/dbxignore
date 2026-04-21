@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -12,14 +13,33 @@ logger = logging.getLogger(__name__)
 
 UNIT_NAME = "dropboxignore.service"
 
+# Env vars that `install_unit()` forwards from the caller's shell into the
+# generated unit's `[Service]` block. Scoped to DROPBOXIGNORE_ROOT because
+# without it the daemon silently falls back to `~/.dropbox/info.json`
+# discovery, leaving non-stock-Dropbox users confused. Other DROPBOXIGNORE_*
+# vars are optional tuning with sensible defaults — users who want to adjust
+# them can drop in their own override under `dropboxignore.service.d/`.
+_FORWARDED_ENV_VARS = ("DROPBOXIGNORE_ROOT",)
+
 
 def _unit_path() -> Path:
     """Return ``~/.config/systemd/user/dropboxignore.service``."""
-    import os
     home = os.environ.get("HOME")
     if not home:
         raise RuntimeError("HOME not set; cannot locate systemd user unit directory")
     return Path(home) / ".config" / "systemd" / "user" / UNIT_NAME
+
+
+def _escape_systemd_env_value(value: str) -> str:
+    """Escape backslash + double-quote for use inside a quoted Environment= line.
+
+    systemd's unit-file parser treats ``Environment="KEY=VALUE"`` as one
+    assignment; literal backslashes and double-quotes inside VALUE must be
+    doubled and backslash-escaped respectively so the parser doesn't
+    misinterpret them as escape sequences or a premature end of the quoted
+    string.
+    """
+    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _detect_invocation() -> tuple[Path, str]:
@@ -56,9 +76,24 @@ def _run_systemctl(cmd: list[str]) -> None:
         ) from exc
 
 
-def build_unit_content(exe_path: Path, arguments: str = "") -> str:
-    """Return the full [Unit]/[Service]/[Install] text for the systemd user unit."""
+def build_unit_content(
+    exe_path: Path,
+    arguments: str = "",
+    environment: dict[str, str] | None = None,
+) -> str:
+    """Return the full [Unit]/[Service]/[Install] text for the systemd user unit.
+
+    ``environment`` (if given) is emitted as one quoted ``Environment="KEY=VALUE"``
+    line per entry, placed before ``ExecStart=`` in ``[Service]`` so the daemon
+    process sees the variable by the time it runs.
+    """
     exec_start = f"{exe_path.as_posix()} {arguments}".strip()
+    env_lines = ""
+    if environment:
+        env_lines = "\n".join(
+            f'Environment="{key}={_escape_systemd_env_value(value)}"'
+            for key, value in environment.items()
+        ) + "\n"
     return f"""[Unit]
 Description=dropboxignore daemon
 Documentation=https://github.com/kiloscheffer/dropboxignore
@@ -66,7 +101,7 @@ After=default.target
 
 [Service]
 Type=simple
-ExecStart={exec_start}
+{env_lines}ExecStart={exec_start}
 Restart=on-failure
 RestartSec=60s
 
@@ -77,11 +112,21 @@ WantedBy=default.target
 
 def install_unit() -> None:
     exe, args = _detect_invocation()
-    content = build_unit_content(exe, args)
+    environment = {
+        name: os.environ[name]
+        for name in _FORWARDED_ENV_VARS
+        if os.environ.get(name)
+    }
+    content = build_unit_content(exe, args, environment=environment or None)
     path = _unit_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     logger.info("Wrote systemd user unit to %s", path)
+    if environment:
+        logger.info(
+            "Forwarded environment into unit: %s",
+            ", ".join(sorted(environment.keys())),
+        )
 
     _run_systemctl(["systemctl", "--user", "daemon-reload"])
     _run_systemctl(["systemctl", "--user", "enable", "--now", UNIT_NAME])

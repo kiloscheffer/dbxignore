@@ -29,6 +29,8 @@ systemctl --user status dropboxignore.service
 
 `dropboxignore install` writes `~/.config/systemd/user/dropboxignore.service` and runs `systemctl --user enable --now` so the daemon starts at login.
 
+For non-stock Dropbox installs, export `DROPBOXIGNORE_ROOT` before running `dropboxignore install` — the install step will read the variable from your shell environment and write a corresponding `Environment="DROPBOXIGNORE_ROOT=..."` line into the generated unit's `[Service]` block. Without this, a shell-exported value won't reach the daemon when systemd launches it. If your Dropbox location ever changes, re-run `dropboxignore install` after updating the export.
+
 To uninstall:
 
 ```bash

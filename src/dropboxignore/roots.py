@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -23,13 +24,29 @@ def find_containing(path: Path, roots: list[Path]) -> Path | None:
     return None
 
 
+def _info_json_path() -> Path | None:
+    """Return the platform's Dropbox info.json location, or None if unknown."""
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        if not appdata:
+            logger.warning("APPDATA not set; cannot locate Dropbox info.json")
+            return None
+        return Path(appdata) / "Dropbox" / "info.json"
+    if sys.platform.startswith("linux"):
+        home = os.environ.get("HOME")
+        if not home:
+            logger.warning("HOME not set; cannot locate Dropbox info.json")
+            return None
+        return Path(home) / ".dropbox" / "info.json"
+    logger.warning("Unsupported platform %s; cannot locate Dropbox info.json", sys.platform)
+    return None
+
+
 def discover() -> list[Path]:
-    appdata = os.environ.get("APPDATA")
-    if not appdata:
-        logger.warning("APPDATA environment variable not set; cannot locate Dropbox info.json")
+    info_path = _info_json_path()
+    if info_path is None:
         return []
 
-    info_path = Path(appdata) / "Dropbox" / "info.json"
     try:
         data = json.loads(info_path.read_text(encoding="utf-8"))
     except FileNotFoundError:

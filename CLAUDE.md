@@ -14,7 +14,7 @@ Windows-only Python utility: keeps NTFS `com.dropbox.ignored` streams in sync wi
 
 ## Architecture
 
-`reconcile.reconcile_subtree(root, subdir, cache)` is the single source of truth for ADS mutations. `cli.apply`, `daemon._dispatch`, and `daemon._sweep_once` all call it — never bypass.
+`reconcile.reconcile_subtree(root, subdir, cache)` is the single source of truth for rule-driven ADS mutations. `cli.apply`, `daemon._dispatch`, and `daemon._sweep_once` all call it — never bypass. The lone exception is `cli.uninstall --purge`, which issues an unconditional ADS clear (no rule evaluation) while still honoring the `.dropboxignore`-found-marked `WARNING` contract inline.
 
 `daemon._sweep_once` fans `reconcile_subtree` out across roots via `ThreadPoolExecutor` (one worker per root). Safe because reconcile reads the cache lock-free (single-op `.get()`s) and writes per-file ADS markers on disjoint paths. `RuleCache._rules` is guarded by a `threading.RLock` — any mutation (`load_root`, `reload_file`, `remove_file`, or the stale-purge iteration in `load_root`) must go through it, otherwise the debouncer thread can race with the main-thread sweep. If you add cross-root shared state to `RuleCache` or reconcile, revisit this.
 

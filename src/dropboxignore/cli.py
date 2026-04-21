@@ -11,7 +11,7 @@ import click
 
 from dropboxignore import ads, reconcile, roots, state
 from dropboxignore.roots import find_containing
-from dropboxignore.rules import RuleCache
+from dropboxignore.rules import IGNORE_FILENAME, RuleCache
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +207,12 @@ def uninstall(purge: bool) -> None:
                     p = current_path / name
                     try:
                         if ads.is_ignored(p):
+                            if p.name == IGNORE_FILENAME:
+                                logger.warning(
+                                    ".dropboxignore at %s was marked ignored; "
+                                    "overriding back to synced",
+                                    p,
+                                )
                             ads.clear_ignored(p)
                             cleared += 1
                     except (FileNotFoundError, PermissionError):

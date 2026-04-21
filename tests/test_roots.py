@@ -66,6 +66,63 @@ def test_discover_json_not_object(monkeypatch, tmp_path):
     assert roots.discover() == []
 
 
+def test_discover_env_override_returns_env_path(monkeypatch, tmp_path):
+    """DROPBOXIGNORE_ROOT set to an existing dir returns [Path(env)],
+    bypassing info.json entirely."""
+    fake_root = tmp_path / "custom-dropbox"
+    fake_root.mkdir()
+    monkeypatch.setenv("DROPBOXIGNORE_ROOT", str(fake_root))
+    # Deliberately do NOT stage info.json — override must not need it.
+    _clear_platform_env(monkeypatch)
+
+    assert roots.discover() == [fake_root]
+
+
+def test_discover_env_override_wins_over_info_json(monkeypatch, tmp_path):
+    """When both DROPBOXIGNORE_ROOT and a valid info.json are present, the
+    env var wins — the whole point of the escape hatch."""
+    fake_root = tmp_path / "custom-dropbox"
+    fake_root.mkdir()
+    _stage_info(monkeypatch, tmp_path, "info_personal.json")
+    monkeypatch.setenv("DROPBOXIGNORE_ROOT", str(fake_root))
+
+    result = roots.discover()
+
+    assert result == [fake_root]
+    assert result != [Path(r"C:\Dropbox")]  # would be the info.json answer
+
+
+def test_discover_env_override_empty_string_falls_back_to_info_json(monkeypatch, tmp_path):
+    """DROPBOXIGNORE_ROOT="" is indistinguishable from unset in practice
+    (shell quirks), so treat it as unset and fall back to info.json."""
+    _stage_info(monkeypatch, tmp_path, "info_personal.json")
+    monkeypatch.setenv("DROPBOXIGNORE_ROOT", "")
+
+    assert roots.discover() == [Path(r"C:\Dropbox")]
+
+
+def test_discover_env_override_missing_path_warns_and_returns_empty(
+    monkeypatch, tmp_path, caplog
+):
+    """If DROPBOXIGNORE_ROOT points at a nonexistent path, return [] with a
+    WARNING — so the CLI's "No Dropbox roots found" surfaces rather than a
+    silent no-op sweep that leaves the user puzzled."""
+    import logging
+
+    missing = tmp_path / "does-not-exist"
+    monkeypatch.setenv("DROPBOXIGNORE_ROOT", str(missing))
+    _clear_platform_env(monkeypatch)
+
+    with caplog.at_level(logging.WARNING, logger="dropboxignore.roots"):
+        result = roots.discover()
+
+    assert result == []
+    assert any(
+        "DROPBOXIGNORE_ROOT" in rec.message and str(missing) in rec.message
+        for rec in caplog.records
+    ), [rec.message for rec in caplog.records]
+
+
 def test_discover_non_utf8_bytes(monkeypatch, tmp_path):
     if sys.platform == "win32":
         base = tmp_path / "AppData"

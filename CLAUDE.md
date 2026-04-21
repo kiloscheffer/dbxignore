@@ -49,6 +49,7 @@ The daemon's watchdog events are classified (`_classify` → `EventKind.{RULES,D
 - Linux xattrs vanish silently through common operations: `cp` without `-a`, cross-filesystem `mv`, most archivers, and `vim`'s default save-via-rename. The watchdog event stream + hourly sweep are the recovery mechanism — don't add a preservation wrapper, the design intentionally leans on reconcile.
 - Linux backends use `follow_symlinks=False` on all xattr calls (mirrors `os.walk(followlinks=False)` in reconcile). A symlink marked ignored means the link itself is marked, not its target — **except** that the Linux kernel refuses `user.*` xattrs on symlinks entirely (EPERM). `set_ignored`/`clear_ignored` raise `PermissionError` on symlinks, which reconcile's existing `PermissionError` arm already handles (log + skip). `is_ignored` on a symlink returns False (ENODATA).
 - `roots.discover()` branches on `sys.platform`: `%APPDATA%\Dropbox\info.json` on Windows, `~/.dropbox/info.json` on Linux. Same JSON schema. The `_info_json_path()` helper returns `None` on unsupported platforms (raises a WARNING log); `discover()` then returns `[]`.
+- `roots.discover()` honors `DROPBOXIGNORE_ROOT` as a pre-`info.json` escape hatch for non-stock Dropbox installs. Set to an existing absolute path → `[Path(env)]`, bypassing `info.json` (and the platform check — useful on platforms where `_info_json_path()` returns `None`). Set to a nonexistent path → WARNING + `[]`. Empty string → treated as unset. Single-root only; multi-account setups with an override have to pick one.
 
 ## Release
 

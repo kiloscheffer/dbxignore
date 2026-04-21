@@ -39,13 +39,11 @@ dropboxignore uninstall --purge                  # markers cleared
 
 Needs to be run on Kilo's Ubuntu VPS (or equivalent) with a real Dropbox install. Document the result in the v0.2 release notes or design-doc resolution section.
 
-## 5. `roots.discover()` JSON schema drift risk
+## 5. `roots.discover()` JSON schema drift risk — **RESOLVED**
 
 `roots.discover()` still reads Dropbox's `info.json` directly. Dropbox has historically reshaped this file without warning (key rename, encoding quirks — hence `test_discover_non_utf8_bytes`). If Dropbox changes the schema again in v3, every dropboxignore user on the affected release gets an empty `[]` from `discover()` and silent failure.
 
-**Proposed mitigation:** add a `DROPBOXIGNORE_ROOT` env var override. `roots.discover()` returns `[Path(env)]` if set, bypassing `info.json`. Documented as an escape hatch for "my Dropbox install isn't stock".
-
-Touches: `src/dropboxignore/roots.py`, `tests/test_roots.py`, README.
+**Fix:** `roots.discover()` now checks `DROPBOXIGNORE_ROOT` before touching `info.json`. Set to an existing absolute path → `[Path(env)]`; nonexistent path → WARNING + `[]` (so the CLI's "No Dropbox roots found" surfaces rather than a silent no-op); empty string → treated as unset. Single-root only (spec); the override sits above `_info_json_path()` so it also works on platforms that return `None` there. Documented in README "Configuration" and CLAUDE.md "Gotchas". Four tests in `tests/test_roots.py` pin the contract (happy path, wins-over-info.json, empty-string fallback, missing-path WARNING).
 
 ---
 

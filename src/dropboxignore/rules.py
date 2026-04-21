@@ -157,7 +157,7 @@ def _find_masking_include(
             except ValueError:
                 # This ancestor isn't under the earlier rule's scope.
                 continue
-            if earlier.pattern.match_file(rel):
+            if earlier.pattern.match_file(rel) is not None:
                 return earlier
     return None
 
@@ -188,6 +188,11 @@ def _detect_conflicts(
             raw = raw[1:]
         prefix = literal_prefix(raw)
         if prefix is None:
+            continue
+        if not prefix.endswith("/"):
+            # File-level target; Dropbox's ignored-folder inheritance only
+            # applies to directories. A rule like `*.log` + `!important.log`
+            # has no ancestor-inheritance conflict to flag.
             continue
         ancestors = _ancestors_of(prefix, entry.ancestor_dir, root)
 

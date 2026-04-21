@@ -109,6 +109,102 @@ class Conflict:
     masking_pattern: str      # raw pattern text (e.g. "build/")
 
 
+def _ancestors_of(prefix: str, ancestor_dir: Path, root: Path) -> list[Path]:
+    """Yield absolute ancestor directory paths for a negation's literal prefix.
+
+    The negation's literal prefix is relative to its own ``.dropboxignore``
+    file's directory (``ancestor_dir``). We produce absolute directory paths
+    starting from the prefix itself (if it's a directory shape) and walking
+    up to ``root``, inclusive.
+
+    Example: prefix=``build/keep/``, ancestor_dir=``/root``, root=``/root``
+    yields ``[/root/build/keep, /root/build, /root]``.
+    """
+    # Resolve the prefix against its scoping directory and strip the trailing
+    # slash so we can navigate via Path.parent.
+    target = (ancestor_dir / prefix.rstrip("/")).resolve()
+    results: list[Path] = []
+    current = target
+    while True:
+        results.append(current)
+        if current == root:
+            break
+        if not current.is_relative_to(root):
+            # Target escapes the root (unusual; likely malformed rule). Stop.
+            break
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return results
+
+
+def _find_masking_include(
+    earlier_entries: list, ancestors: list[Path]
+) -> object | None:
+    """Return the first earlier include whose pattern matches any ancestor.
+
+    The ancestor is expressed as a path relative to each include's
+    ``ancestor_dir`` (directory-shaped, with trailing slash), so pathspec's
+    directory-rule matching fires.
+    """
+    for earlier in earlier_entries:
+        if not earlier.pattern.include:
+            continue
+        for anc in ancestors:
+            try:
+                rel = anc.relative_to(earlier.ancestor_dir).as_posix() + "/"
+            except ValueError:
+                # This ancestor isn't under the earlier rule's scope.
+                continue
+            if earlier.pattern.match_file(rel):
+                return earlier
+    return None
+
+
+def _detect_conflicts(
+    sequence: list, *, root: Path
+) -> list[Conflict]:
+    """Static rule-conflict detection.
+
+    Input ``sequence`` is a list of entries in evaluation order. Each entry
+    must expose ``source`` (Path), ``line`` (int, 1-based), ``raw`` (str,
+    the source-line text), ``ancestor_dir`` (Path, the scoping directory
+    of the pattern), and ``pattern`` (a pathspec pattern with ``.include``
+    and ``.match_file``).
+
+    Returns one ``Conflict`` per negation entry whose literal prefix is
+    matched-as-ignored by any earlier include rule in the sequence.
+    Skips negations whose pattern has no extractable literal prefix
+    (documented limitation for glob-prefix patterns).
+    """
+    conflicts: list[Conflict] = []
+    for i, entry in enumerate(sequence):
+        if entry.pattern.include:
+            continue  # include rules are potential masks, not subjects
+        # Strip the leading `!` before extracting the literal prefix.
+        raw = entry.raw.lstrip()
+        if raw.startswith("!"):
+            raw = raw[1:]
+        prefix = literal_prefix(raw)
+        if prefix is None:
+            continue
+        ancestors = _ancestors_of(prefix, entry.ancestor_dir, root)
+
+        masking = _find_masking_include(sequence[:i], ancestors)
+        if masking is None:
+            continue
+        conflicts.append(Conflict(
+            dropped_source=entry.source,
+            dropped_line=entry.line,
+            dropped_pattern=entry.raw.strip(),
+            masking_source=masking.source,
+            masking_line=masking.line,
+            masking_pattern=masking.raw.strip(),
+        ))
+    return conflicts
+
+
 @dataclass(frozen=True)
 class _LoadedRules:
     """Parsed contents of one .dropboxignore file.

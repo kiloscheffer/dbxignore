@@ -24,20 +24,28 @@ Both the v0.1 Windows `install_task` and the new Linux `install_unit` can fail w
 
 Touches: `tests/test_daemon_smoke_linux.py` (new).
 
-## 4. Manual Ubuntu VPS smoke check still outstanding
+## 4. Manual Ubuntu VPS smoke check — **RESOLVED**
 
-Task 6 of the v0.2 plan ended with a manual post-merge verification:
+Ran 2026-04-21 on Kilo's Ubuntu VPS (systemd 255, ext4 `$HOME`). No stock Dropbox install on this host, so the smoke test used the `DROPBOXIGNORE_ROOT` escape hatch (item 5) against `~/dbx-smoke/` rather than a real Dropbox root. `attr` package wasn't installed; substituted `python3 -c 'import os; os.getxattr(...)'` for `getfattr`. `sequence`:
 
-```bash
-uv tool install .
-dropboxignore install
-systemctl --user status dropboxignore.service    # expect active (running)
-# create a .dropboxignore with a rule and confirm xattr lands
-getfattr -n user.com.dropbox.ignored <matched-path>
-dropboxignore uninstall --purge                  # markers cleared
-```
+1. `uv tool install --reinstall .` from the current checkout — installed `dropboxignore` + `dropboxignored` at `~/.local/bin/`.
+2. `dropboxignore install` — wrote `~/.config/systemd/user/dropboxignore.service` (`ExecStart=/home/kilo/.local/bin/dropboxignored`, `Restart=on-failure`, `RestartSec=60s`), enabled-and-started cleanly.
+3. Initial start: daemon exited clean (`status=0/SUCCESS`) with `WARNING: Dropbox info.json not found at /home/kilo/.dropbox/info.json` + `ERROR: no Dropbox roots discovered; exiting` — **item 7 validated live**: both records surfaced via `systemctl status` and `journalctl --user -u dropboxignore.service`, which was the before/after contract for the dual-sink change.
+4. Dropped in `~/.config/systemd/user/dropboxignore.service.d/scratch-root.conf` with `Environment=DROPBOXIGNORE_ROOT=/home/kilo/dbx-smoke`, `daemon-reload` + `restart` → `active (running)`. Initial sweep `marked=0 cleared=0 errors=0 duration=0.00s` and `watching roots: ['/home/kilo/dbx-smoke']` both logged to journald.
+5. Created `normal.txt`, `scratch.tmp`, `build/artifact.o`, `.dropboxignore` with rules `*.tmp` + `build/`. After ~1s: `scratch.tmp` + `build/` xattr-marked (`b'1'`), `normal.txt` + `build/artifact.o` + `.dropboxignore` unmarked — matches the reconcile contract (directory-rule match marks the directory only; descendants are covered by Dropbox's parent-exclusion semantics, no redundant per-file xattrs).
+6. Touched `late.tmp` post-startup → marked within ~1s via the watchdog+debouncer+reconcile event path. `dropboxignore list` enumerated all three markers; `dropboxignore explain /home/kilo/dbx-smoke/scratch.tmp` correctly reported `.dropboxignore:1: = *.tmp`.
+7. State file landed at `~/.local/state/dropboxignore/state.json` — **item 1 validated live**: XDG path, not the pre-v0.2 `~/AppData/Local/…` legacy layout.
+8. `dropboxignore uninstall --purge` printed `Cleared 3 ignore markers` (matched the 3 actually-marked paths), removed the unit file, stopped the service. Post-run xattrs: all cleared on all 6 test paths.
+9. Teardown checks:
+   - Unit file gone (`systemctl status` → "Unit ... could not be found") ✓
+   - Drop-in directory `~/.config/systemd/user/dropboxignore.service.d/` **survives** `uninstall --purge` — only the bare unit file is removed. My test cleaned it manually; a real user upgrading would need the same step. Noted in item 9.
+   - `~/.local/state/dropboxignore/state.json` + `daemon.log` **still present** — **item 8 symptom confirmed in practice**; `--purge` clears markers only, not local state.
 
-Needs to be run on Kilo's Ubuntu VPS (or equivalent) with a real Dropbox install. Document the result in the v0.2 release notes or design-doc resolution section.
+### Surfaced adjacent symptoms (new backlog)
+
+- **Item 8 confirmed empirically** — `state.json` and `daemon.log` remain post-purge. Decision still needed (broaden `--purge` vs. add `--purge-state`).
+- **New item 9** — systemd unit doesn't propagate `DROPBOXIGNORE_ROOT` from the shell env. Setting it in `.bashrc` has no effect; users on non-stock Dropbox installs must manually drop in `Environment=…` override as this smoke did. Worth either teaching `dropboxignore install` to inject the current shell's `DROPBOXIGNORE_ROOT` into the generated unit's `Environment=`, or documenting the drop-in pattern in the README Install-on-Linux section.
+- **Also noted** — `uninstall` leaves `~/.config/systemd/user/dropboxignore.service.d/` drop-in directory if the user ever created one. Not a bug per se (we're not responsible for cleaning directories we didn't create), but the two together mean "uninstall --purge" isn't a full trace-removal. Bundle with item 8's decision if scope broadens.
 
 ## 5. `roots.discover()` JSON schema drift risk — **RESOLVED**
 
@@ -69,19 +77,32 @@ Touched: `src/dropboxignore/daemon.py`, `tests/test_daemon_logging.py`, `README.
 
 Touches: `src/dropboxignore/cli.py` (`uninstall`), `tests/test_install.py` (new assertions around post-purge filesystem state), README "Install" / "Uninstall" section.
 
+## 9. Systemd user unit doesn't propagate `DROPBOXIGNORE_ROOT`
+
+The `install/linux_systemd.py` template writes a unit file with no `Environment=` directives. When a user exports `DROPBOXIGNORE_ROOT=/path/to/dir` in their shell and runs `dropboxignore install`, the resulting systemd user unit does *not* forward that value — the daemon launches with a clean env and calls `roots.discover()`, which falls back to looking for `~/.dropbox/info.json` and logs the usual "no Dropbox roots discovered; exiting" ERROR. Surfaced during item 4's VPS smoke, where a drop-in override at `~/.config/systemd/user/dropboxignore.service.d/scratch-root.conf` was the workaround.
+
+Two possible fixes (not mutually exclusive):
+- **Teach `install` to inject the env var.** If `os.environ.get("DROPBOXIGNORE_ROOT")` is set at install time, add a corresponding `Environment=DROPBOXIGNORE_ROOT=…` line to the generated unit. Simple, opt-out-by-unsetting-before-install, but baked in at install time — if the user later moves their Dropbox, they re-run `install`.
+- **Document the drop-in pattern in the README.** Cheap, keeps `install` dumb, makes the workaround discoverable for anyone hitting the same wall.
+
+The first option is probably sufficient. Requires a small change in `src/dropboxignore/install/linux_systemd.py` and a new test in `tests/test_linux_systemd.py`.
+
+Touches: `src/dropboxignore/install/linux_systemd.py`, `tests/test_linux_systemd.py`, optionally README "Install (Linux)" section.
+
 ---
 
 ## How these surfaced
 
 Items 1, 2, 5 surfaced in per-task code-quality reviews but were out of plan scope.
 Items 2, 3 also flagged by the end-of-branch end-to-end reviewer (see commit `957fd32` which addressed other findings from the same review).
-Item 4 is a plan-specified manual check that requires environmental access.
+Item 4 is a plan-specified manual check that required environmental access; it was run 2026-04-21 and confirmed two adjacent symptoms as items 8 (empirically) and 9 (new).
 Items 6, 7, 8 surfaced during the item-1 implementation pass and its README-accuracy audit.
+Item 9 surfaced during the item-4 VPS smoke — the shell-env vs. unit-env gap made the escape hatch from item 5 unusable under systemd without a drop-in override.
 
 ## Status
 
 Remaining open after v0.2 follow-ups:
 - Item 3 — Linux daemon smoke test (tracked for v0.3).
-- Item 4 — Manual Ubuntu VPS smoke verification (requires environmental access). Now more diagnostically useful: item 7's dual sink means `journalctl --user -u dropboxignore.service` will surface what's happening in real time.
 - Item 6 — Retire legacy Linux state-path fallback (v0.4 branch).
-- Item 8 — `uninstall --purge` state/log cleanup (design decision: broaden `--purge` vs add `--purge-state`).
+- Item 8 — `uninstall --purge` state/log cleanup (design decision: broaden `--purge` vs add `--purge-state`). Empirically confirmed by item 4's VPS run.
+- Item 9 — Systemd user unit doesn't propagate `DROPBOXIGNORE_ROOT`. Small code change + test.

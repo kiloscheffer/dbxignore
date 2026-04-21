@@ -53,17 +53,13 @@ Item 1's fix landed a Linux-only read-time fallback in `state.read()` that looks
 
 Touches: `src/dropboxignore/state.py`, `tests/test_state.py`, README "State" section.
 
-## 7. Linux daemon logs do not reach the systemd journal
+## 7. Linux daemon logs do not reach the systemd journal — **RESOLVED**
 
-`_configured_logging()` installs a `RotatingFileHandler` and sets `propagate=False` on the `dropboxignore` package logger, which means every `logger.*` call bypasses stderr entirely. On Linux, systemd-journal therefore only captures what *escapes* the logging system — uncaught exceptions, subprocess prints, `watchdog`'s own stderr — and `journalctl --user -u dropboxignore.service` is mostly empty. Linux operators expect the opposite. (README v0.2 had to be corrected during item 1 to stop claiming "daemon output goes to the systemd journal.")
+`_configured_logging()` previously installed a `RotatingFileHandler` with `propagate=False`, so every `logger.*` call bypassed stderr and `journalctl --user -u dropboxignore.service` was near-empty — surfacing only uncaught exceptions and subprocess stderr.
 
-**Design options:**
-- **A — dual sink.** On Linux, additionally attach a `StreamHandler(sys.stderr)` inside `_configured_logging()` so the rotating file *and* systemd capture the same records. Preserves Windows parity (file-based log is still authoritative for local inspection, rotation, and bundling into bug reports) and gives Linux ops `journalctl` parity. Cost: log records appear twice on disk (once in `daemon.log`, once in journald).
-- **B — journald-first on Linux.** Drop the file handler on Linux and rely on `journalctl` for rotation, filtering, and retention. More idiomatic, but loses the file-on-disk bundling that makes cross-platform bug reports uniform.
+**Fix (option A, dual sink):** on Linux, `_configured_logging()` now installs a second handler — `StreamHandler(sys.stderr)` sharing the rotating file's formatter — alongside the existing `RotatingFileHandler`. systemd-journald captures the stderr sink when the daemon runs as a user unit. Windows behavior is unchanged (rotating file only; Task Scheduler doesn't have a journald equivalent worth mirroring). Two tests in `tests/test_daemon_logging.py` pin the contract: `test_configured_logging_installs_rotating_handler` branches on `sys.platform` (expects 1 handler on Windows, 2 on Linux with `StreamHandler.stream is sys.stderr`); `test_configured_logging_does_not_close_stderr_on_exit` guards the cleanup loop — `StreamHandler.close()` must not close `sys.stderr` itself. README "Logs" and the CLAUDE.md gotcha describe both sinks.
 
-Recommendation: A, for symmetry with Windows and to keep the Windows-shaped debugging workflow (grab `daemon.log`, send to maintainer) working identically on both platforms. Revisit if log volume ever matters.
-
-Touches: `src/dropboxignore/daemon.py` (`_configured_logging`), `tests/test_daemon_logging.py` (assert both handlers present on Linux), README "Logs" section.
+Touched: `src/dropboxignore/daemon.py`, `tests/test_daemon_logging.py`, `README.md`, `CLAUDE.md`.
 
 ## 8. `uninstall --purge` leaves `state.json` and `daemon.log` behind
 
@@ -86,7 +82,6 @@ Items 6, 7, 8 surfaced during the item-1 implementation pass and its README-accu
 
 Remaining open after v0.2 follow-ups:
 - Item 3 — Linux daemon smoke test (tracked for v0.3).
-- Item 4 — Manual Ubuntu VPS smoke verification (requires environmental access).
+- Item 4 — Manual Ubuntu VPS smoke verification (requires environmental access). Now more diagnostically useful: item 7's dual sink means `journalctl --user -u dropboxignore.service` will surface what's happening in real time.
 - Item 6 — Retire legacy Linux state-path fallback (v0.4 branch).
-- Item 7 — Linux daemon logs → systemd journal (design decision + small code change).
 - Item 8 — `uninstall --purge` state/log cleanup (design decision: broaden `--purge` vs add `--purge-state`).

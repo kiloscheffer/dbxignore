@@ -55,11 +55,46 @@ def test_configured_logging_installs_rotating_handler(
 
     with daemon._configured_logging():
         handlers = pkg_logger.handlers
-        assert len(handlers) == 1
-        assert isinstance(handlers[0], logging.handlers.RotatingFileHandler)
-        assert Path(handlers[0].baseFilename) == log_dir / "daemon.log"
+
+        rotating = [
+            h for h in handlers
+            if isinstance(h, logging.handlers.RotatingFileHandler)
+        ]
+        assert len(rotating) == 1
+        assert Path(rotating[0].baseFilename) == log_dir / "daemon.log"
+
+        stderr_handlers = [
+            h for h in handlers
+            if type(h) is logging.StreamHandler and h.stream is sys.stderr
+        ]
+        if sys.platform.startswith("linux"):
+            assert len(stderr_handlers) == 1, (
+                "Linux should dual-sink to stderr so systemd-journald captures "
+                "the same records the rotating file holds"
+            )
+            assert len(handlers) == 2
+        else:
+            assert stderr_handlers == []
+            assert len(handlers) == 1
+
         assert pkg_logger.propagate is False
         assert pkg_logger.level == logging.INFO
+
+
+def test_configured_logging_does_not_close_stderr_on_exit(
+    isolated_pkg_logger, log_dir
+):
+    """The Linux dual-sink attaches a StreamHandler wrapping sys.stderr.
+    The cleanup loop calls .close() on every handler; that must not close
+    sys.stderr itself, or subsequent test output (and real daemon restart)
+    would write into a dead fd."""
+    if not sys.platform.startswith("linux"):
+        pytest.skip("stderr dual-sink only installed on Linux")
+
+    with daemon._configured_logging():
+        pass
+
+    assert not sys.stderr.closed
 
 
 def test_configured_logging_respects_log_level_env(

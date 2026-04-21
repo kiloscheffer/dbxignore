@@ -110,7 +110,7 @@ Environment variables read at daemon startup:
 
 Logs (rotated, 25 MB total):
 - Windows — `%LOCALAPPDATA%\dropboxignore\daemon.log`.
-- Linux — `$XDG_STATE_HOME/dropboxignore/daemon.log` (fallback `~/.local/state/dropboxignore/daemon.log`). systemd-journal capture of stdout/stderr is incidental; the rotating file is authoritative.
+- Linux — two sinks, same records. The rotating file at `$XDG_STATE_HOME/dropboxignore/daemon.log` (fallback `~/.local/state/dropboxignore/daemon.log`) is authoritative for offline debugging and bug-report bundling; `journalctl --user -u dropboxignore.service` surfaces the same records via systemd-journald for live tailing and cross-service filtering.
 
 State:
 - Windows — `%LOCALAPPDATA%\dropboxignore\state.json`.

@@ -43,6 +43,17 @@ def _info_json_path() -> Path | None:
 
 
 def discover() -> list[Path]:
+    override = os.environ.get("DROPBOXIGNORE_ROOT")
+    if override:
+        override_path = Path(override)
+        if not override_path.exists():
+            logger.warning(
+                "DROPBOXIGNORE_ROOT=%s does not exist; ignoring override",
+                override_path,
+            )
+            return []
+        return [override_path]
+
     info_path = _info_json_path()
     if info_path is None:
         return []

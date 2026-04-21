@@ -106,6 +106,7 @@ Environment variables read at daemon startup:
 | `DROPBOXIGNORE_DEBOUNCE_DIRS_MS` | `0` | Debounce for directory-creation events (`0` = react immediately, no coalescing). |
 | `DROPBOXIGNORE_DEBOUNCE_OTHER_MS` | `500` | Debounce for other file events. |
 | `DROPBOXIGNORE_LOG_LEVEL` | `INFO` | Daemon log level. |
+| `DROPBOXIGNORE_ROOT` | *(unset)* | Escape hatch for non-stock Dropbox installs: overrides `info.json` discovery and treats the given absolute path as the sole Dropbox root. If the path doesn't exist, a WARNING is logged and no roots are returned (so `dropboxignore apply` exits with "No Dropbox roots found"). |
 
 Logs:
 - Windows — `%LOCALAPPDATA%\dropboxignore\daemon.log` (rotated, 25 MB total).

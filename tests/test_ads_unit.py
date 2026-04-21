@@ -5,6 +5,7 @@ import pytest
 from dropboxignore import ads
 
 
+@pytest.mark.windows_only
 def test_stream_path_uses_long_path_prefix_and_stream_name():
     p = Path(r"C:\Dropbox\some\dir")
     result = ads._stream_path(p)

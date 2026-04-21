@@ -88,3 +88,40 @@ def test_list_does_not_descend_into_ignored_directories(tmp_path, fake_markers, 
     # Descendants must NOT appear — list pruned into build/.
     assert str(tmp_path / "build" / "deep") not in result.output
     assert "file.o" not in result.output
+
+
+def test_status_lists_rule_conflicts(tmp_path, monkeypatch):
+    """`status` surfaces RuleCache conflicts alongside daemon pid / sweep info."""
+    import click.testing
+
+    from dropboxignore import cli, state
+
+    root = tmp_path
+    (root / ".dropboxignore").write_text(
+        "build/\n!build/keep/\n", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+
+    result = click.testing.CliRunner().invoke(cli.main, ["status"])
+    assert result.exit_code == 0
+    assert "rule conflicts (1):" in result.output
+    assert "!build/keep/" in result.output
+    assert "build/" in result.output
+    assert "masked by" in result.output
+
+
+def test_status_omits_conflicts_section_when_empty(tmp_path, monkeypatch):
+    import click.testing
+
+    from dropboxignore import cli, state
+
+    root = tmp_path
+    (root / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+    monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+
+    result = click.testing.CliRunner().invoke(cli.main, ["status"])
+    assert result.exit_code == 0
+    assert "rule conflicts" not in result.output

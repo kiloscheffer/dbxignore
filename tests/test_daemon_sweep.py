@@ -13,7 +13,7 @@ def _utc_now():
 
 
 def test_sweep_applies_rules_across_multiple_roots(
-    tmp_path, fake_ads, monkeypatch, write_file
+    tmp_path, fake_markers, monkeypatch, write_file
 ):
     """Multi-root sweep must reconcile every root independently. Regression
     guard for the phase-split (sequential load, parallel reconcile) — both
@@ -32,14 +32,14 @@ def test_sweep_applies_rules_across_multiple_roots(
     cache = RuleCache()
     daemon._sweep_once([root_a, root_b], cache, _utc_now())
 
-    assert (root_a / "build").resolve() in fake_ads._ignored
-    assert (root_a / "src").resolve() not in fake_ads._ignored
-    assert (root_b / "dist").resolve() in fake_ads._ignored
-    assert (root_b / "lib").resolve() not in fake_ads._ignored
+    assert (root_a / "build").resolve() in fake_markers._ignored
+    assert (root_a / "src").resolve() not in fake_markers._ignored
+    assert (root_b / "dist").resolve() in fake_markers._ignored
+    assert (root_b / "lib").resolve() not in fake_markers._ignored
 
 
 def test_sweep_writes_aggregated_report_to_state(
-    tmp_path, fake_ads, monkeypatch, write_file
+    tmp_path, fake_markers, monkeypatch, write_file
 ):
     """Aggregation: marked/cleared counts in the persisted state should
     sum across roots (not drop one root's report on the floor)."""
@@ -81,7 +81,7 @@ def test_sweep_populates_last_error_when_reconcile_fails(
         def clear_ignored(self, path):
             pass
 
-    monkeypatch.setattr(reconcile, "ads", FailingADS())
+    monkeypatch.setattr(reconcile, "markers", FailingADS())
     monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")
 
     cache = RuleCache()
@@ -96,7 +96,7 @@ def test_sweep_populates_last_error_when_reconcile_fails(
 
 
 def test_sweep_leaves_last_error_none_on_clean_sweep(
-    tmp_path, fake_ads, monkeypatch, write_file
+    tmp_path, fake_markers, monkeypatch, write_file
 ):
     """Per-sweep semantics: a clean sweep writes last_error=None."""
     write_file(tmp_path / ".dropboxignore", "build/\n")
@@ -114,7 +114,7 @@ def test_sweep_leaves_last_error_none_on_clean_sweep(
 
 
 def test_sweep_single_root_still_works(
-    tmp_path, fake_ads, monkeypatch, write_file
+    tmp_path, fake_markers, monkeypatch, write_file
 ):
     """Regression guard: the single-root path (the common case) bypasses the
     ThreadPoolExecutor and stays simple."""
@@ -126,4 +126,4 @@ def test_sweep_single_root_still_works(
     cache = RuleCache()
     daemon._sweep_once([tmp_path], cache, _utc_now())
 
-    assert (tmp_path / "build").resolve() in fake_ads._ignored
+    assert (tmp_path / "build").resolve() in fake_markers._ignored

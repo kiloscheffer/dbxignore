@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from dropboxignore import ads
+from dropboxignore import markers
 from dropboxignore.rules import IGNORE_FILENAME, RuleCache
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ def _reconcile_path(path: Path, cache: RuleCache, report: Report) -> bool | None
     """
     try:
         should_ignore = cache.match(path)
-        currently_ignored = ads.is_ignored(path)
+        currently_ignored = markers.is_ignored(path)
     except FileNotFoundError:
         logger.debug("Path vanished during reconcile: %s", path)
         return None
@@ -71,7 +71,7 @@ def _reconcile_path(path: Path, cache: RuleCache, report: Report) -> bool | None
 
     try:
         if should_ignore and not currently_ignored:
-            ads.set_ignored(path)
+            markers.set_ignored(path)
             report.marked += 1
             return True
         if currently_ignored and not should_ignore:
@@ -80,7 +80,7 @@ def _reconcile_path(path: Path, cache: RuleCache, report: Report) -> bool | None
                     ".dropboxignore at %s was marked ignored; overriding back to synced",
                     path,
                 )
-            ads.clear_ignored(path)
+            markers.clear_ignored(path)
             report.cleared += 1
             return False
     except FileNotFoundError:

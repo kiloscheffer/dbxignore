@@ -28,7 +28,7 @@ def _stream_path(path: Path) -> str:
     boundary; relative paths here are a caller bug.
     """
     if not path.is_absolute():
-        raise ValueError(f"ads requires an absolute path; got {path!r}")
+        raise ValueError(f"markers requires an absolute path; got {path!r}")
     return f"{_LONG_PATH_PREFIX}{path}:{STREAM_NAME}"
 
 

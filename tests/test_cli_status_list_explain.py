@@ -37,11 +37,11 @@ def test_status_reports_running_daemon(tmp_path, monkeypatch):
     assert "7" in result.output
 
 
-def test_list_prints_paths_with_ads_set(tmp_path, fake_ads, monkeypatch):
+def test_list_prints_paths_with_ads_set(tmp_path, fake_markers, monkeypatch):
     monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
-    fake_ads.set_ignored(tmp_path / "a")
+    fake_markers.set_ignored(tmp_path / "a")
 
     runner = CliRunner()
     result = runner.invoke(cli.main, ["list"])
@@ -73,12 +73,12 @@ def test_explain_no_match_output(tmp_path, monkeypatch):
     assert "no match" in result.output.lower()
 
 
-def test_list_does_not_descend_into_ignored_directories(tmp_path, fake_ads, monkeypatch):
+def test_list_does_not_descend_into_ignored_directories(tmp_path, fake_markers, monkeypatch):
     monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
     (tmp_path / "build").mkdir()
     (tmp_path / "build" / "deep").mkdir()
     (tmp_path / "build" / "deep" / "file.o").touch()
-    fake_ads.set_ignored(tmp_path / "build")  # parent is ignored
+    fake_markers.set_ignored(tmp_path / "build")  # parent is ignored
 
     runner = CliRunner()
     result = runner.invoke(cli.main, ["list"])

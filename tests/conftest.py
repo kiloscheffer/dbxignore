@@ -9,8 +9,8 @@ import pytest
 from dropboxignore import cli, reconcile
 
 
-class FakeADS:
-    """In-memory stand-in for the ``ads`` module."""
+class FakeMarkers:
+    """In-memory stand-in for the ``markers`` module."""
 
     def __init__(self) -> None:
         self._ignored: set[Path] = set()
@@ -32,11 +32,11 @@ class FakeADS:
 
 
 @pytest.fixture
-def fake_ads(monkeypatch):
-    """Replace ``ads`` in both ``reconcile`` and ``cli`` with a shared FakeADS."""
-    fake = FakeADS()
-    monkeypatch.setattr(reconcile, "ads", fake)
-    monkeypatch.setattr(cli, "ads", fake)
+def fake_markers(monkeypatch):
+    """Replace ``markers`` in both ``reconcile`` and ``cli`` with a shared FakeMarkers."""
+    fake = FakeMarkers()
+    monkeypatch.setattr(reconcile, "markers", fake)
+    monkeypatch.setattr(cli, "markers", fake)
     return fake
 
 

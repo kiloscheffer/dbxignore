@@ -9,7 +9,7 @@ from pathlib import Path
 
 import click
 
-from dropboxignore import ads, reconcile, roots, state
+from dropboxignore import markers, reconcile, roots, state
 from dropboxignore.roots import find_containing
 from dropboxignore.rules import IGNORE_FILENAME, RuleCache
 
@@ -132,7 +132,7 @@ def list_ignored(path: Path | None) -> None:
             for name in dirnames:
                 p = current_path / name
                 try:
-                    if ads.is_ignored(p):
+                    if markers.is_ignored(p):
                         click.echo(str(p))
                     else:
                         kept_dirs.append(name)
@@ -142,7 +142,7 @@ def list_ignored(path: Path | None) -> None:
             for name in filenames:
                 p = current_path / name
                 try:
-                    if ads.is_ignored(p):
+                    if markers.is_ignored(p):
                         click.echo(str(p))
                 except (FileNotFoundError, PermissionError):
                     continue
@@ -206,14 +206,14 @@ def uninstall(purge: bool) -> None:
                 for name in dirnames + filenames:
                     p = current_path / name
                     try:
-                        if ads.is_ignored(p):
+                        if markers.is_ignored(p):
                             if p.name == IGNORE_FILENAME:
                                 logger.warning(
                                     ".dropboxignore at %s was marked ignored; "
                                     "overriding back to synced",
                                     p,
                                 )
-                            ads.clear_ignored(p)
+                            markers.clear_ignored(p)
                             cleared += 1
                     except (FileNotFoundError, PermissionError):
                         continue

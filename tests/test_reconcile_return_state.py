@@ -10,7 +10,7 @@ from dropboxignore.rules import RuleCache
 
 
 def test_reconcile_path_returns_true_after_newly_marking(
-    tmp_path, fake_ads, write_file
+    tmp_path, fake_markers, write_file
 ):
     write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
@@ -24,10 +24,10 @@ def test_reconcile_path_returns_true_after_newly_marking(
 
 
 def test_reconcile_path_returns_false_after_clearing(
-    tmp_path, fake_ads, write_file
+    tmp_path, fake_markers, write_file
 ):
     (tmp_path / "build").mkdir()
-    fake_ads.set_ignored(tmp_path / "build")
+    fake_markers.set_ignored(tmp_path / "build")
     write_file(tmp_path / ".dropboxignore", "")  # no rules
     cache = RuleCache()
     cache.load_root(tmp_path)
@@ -39,11 +39,11 @@ def test_reconcile_path_returns_false_after_clearing(
 
 
 def test_reconcile_path_returns_current_state_when_no_mutation_needed(
-    tmp_path, fake_ads, write_file
+    tmp_path, fake_markers, write_file
 ):
     write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
-    fake_ads.set_ignored(tmp_path / "build")
+    fake_markers.set_ignored(tmp_path / "build")
     (tmp_path / "src").mkdir()
     cache = RuleCache()
     cache.load_root(tmp_path)
@@ -65,7 +65,7 @@ def test_reconcile_path_returns_none_on_read_permission_error(
         def set_ignored(self, path: Path) -> None: pass
         def clear_ignored(self, path: Path) -> None: pass
 
-    monkeypatch.setattr(reconcile, "ads", FailingADS())
+    monkeypatch.setattr(reconcile, "markers", FailingADS())
 
     cache = RuleCache()
     cache.load_root(tmp_path)
@@ -89,7 +89,7 @@ def test_reconcile_path_returns_none_on_vanished_path(
         def set_ignored(self, path: Path) -> None: pass
         def clear_ignored(self, path: Path) -> None: pass
 
-    monkeypatch.setattr(reconcile, "ads", DisappearingADS())
+    monkeypatch.setattr(reconcile, "markers", DisappearingADS())
 
     cache = RuleCache()
     cache.load_root(tmp_path)
@@ -118,7 +118,7 @@ def test_reconcile_path_returns_unchanged_state_when_write_fails(
         def clear_ignored(self, path: Path) -> None:
             raise PermissionError("locked")
 
-    monkeypatch.setattr(reconcile, "ads", WriteFailingADS())
+    monkeypatch.setattr(reconcile, "markers", WriteFailingADS())
 
     cache = RuleCache()
     cache.load_root(tmp_path)
@@ -134,7 +134,7 @@ def test_reconcile_path_returns_unchanged_state_when_write_fails(
 def test_reconcile_subtree_does_not_reread_ads_after_reconcile(
     tmp_path, monkeypatch, write_file
 ):
-    """Regression guard: reconcile_subtree must call ads.is_ignored at most
+    """Regression guard: reconcile_subtree must call markers.is_ignored at most
     once per visited path. The final ignored state threads out of
     _reconcile_path; a second read purely to decide pruning is the bug."""
     write_file(tmp_path / ".dropboxignore", "build/\n")
@@ -155,7 +155,7 @@ def test_reconcile_subtree_does_not_reread_ads_after_reconcile(
             self._ignored.discard(path.resolve())
 
     counting = CountingADS()
-    monkeypatch.setattr(reconcile, "ads", counting)
+    monkeypatch.setattr(reconcile, "markers", counting)
 
     cache = RuleCache()
     cache.load_root(tmp_path)

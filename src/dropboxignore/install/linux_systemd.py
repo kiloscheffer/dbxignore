@@ -58,7 +58,7 @@ def _run_systemctl(cmd: list[str]) -> None:
 
 def build_unit_content(exe_path: Path, arguments: str = "") -> str:
     """Return the full [Unit]/[Service]/[Install] text for the systemd user unit."""
-    exec_start = f"{exe_path} {arguments}".strip()
+    exec_start = f"{exe_path.as_posix()} {arguments}".strip()
     return f"""[Unit]
 Description=dropboxignore daemon
 Documentation=https://github.com/kiloscheffer/dropboxignore

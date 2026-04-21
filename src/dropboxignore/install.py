@@ -95,9 +95,7 @@ def install_task() -> None:
 
 
 def uninstall_task() -> None:
-    """Remove the Task Scheduler entry. Raises RuntimeError if schtasks fails
-    (e.g. task missing, insufficient privilege) so the CLI can surface it
-    instead of silently claiming success."""
+    """Remove the Task Scheduler entry; raises RuntimeError if schtasks fails."""
     result = subprocess.run(  # noqa: S603 — hardcoded args, no user data
         ["schtasks", "/Delete", "/TN", TASK_NAME, "/F"],
         capture_output=True, text=True, check=False,

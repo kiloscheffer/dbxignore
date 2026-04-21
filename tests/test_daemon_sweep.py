@@ -67,9 +67,7 @@ def test_sweep_writes_aggregated_report_to_state(
 def test_sweep_populates_last_error_when_reconcile_fails(
     tmp_path, monkeypatch, write_file
 ):
-    """When a reconcile error happens during a sweep, state.last_error must
-    carry the offending path + message so `dropboxignore status` can surface
-    it. Without this, status' `errors=N` line has no diagnostic."""
+    """Sweep errors must populate state.last_error so `status` can surface them."""
     from dropboxignore import reconcile
 
     write_file(tmp_path / ".dropboxignore", "build/\n")
@@ -100,8 +98,7 @@ def test_sweep_populates_last_error_when_reconcile_fails(
 def test_sweep_leaves_last_error_none_on_clean_sweep(
     tmp_path, fake_ads, monkeypatch, write_file
 ):
-    """Per-sweep semantics: a sweep with no errors writes last_error=None.
-    Regression guard against accidentally carrying a prior error forward."""
+    """Per-sweep semantics: a clean sweep writes last_error=None."""
     write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
 

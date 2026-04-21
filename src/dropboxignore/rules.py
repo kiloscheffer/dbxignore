@@ -74,13 +74,9 @@ class RuleCache:
     def __init__(self) -> None:
         self._rules: dict[Path, _LoadedRules] = {}
         self._roots: list[Path] = []
-        # Guards every mutation and every iteration of self._rules. Single-op
-        # reads via self._rules.get(...) stay lock-free (GIL-atomic). Needed
-        # because the daemon's sweep thread runs load_root() concurrently with
-        # the debouncer worker's reload_file() / remove_file(), and load_root's
-        # stale-purge iterates self._rules — a concurrent pop would raise
-        # "dictionary changed size during iteration". RLock allows load_root
-        # to nest into _load_if_changed → _load_file without deadlocking.
+        # load_root's stale-purge iterates self._rules while the debouncer
+        # thread may pop/insert; without this lock that's "dictionary changed
+        # size during iteration". RLock so load_root can nest into _load_file.
         self._lock = threading.RLock()
 
     def load_root(self, root: Path) -> None:

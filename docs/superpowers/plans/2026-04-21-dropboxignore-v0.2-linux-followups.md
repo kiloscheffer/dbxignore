@@ -2,13 +2,13 @@
 
 Items surfaced during execution of [`2026-04-21-dropboxignore-v0.2-linux.md`](./2026-04-21-dropboxignore-v0.2-linux.md) that were intentionally deferred out of scope. Carry into v0.3 planning or address as standalone PRs.
 
-## 1. Linux state file path is Windows-styled
+## 1. Linux state file path is Windows-styled — **RESOLVED**
 
-`state.default_path()` reads `LOCALAPPDATA` on every platform. On Linux where `LOCALAPPDATA` is unset, the fallback resolves to `~/AppData/Local/dropboxignore/state.json` — a Windows-shaped directory tree sitting inside a Linux HOME. Functional but non-idiomatic; users expect XDG compliance.
+`state.default_path()` and `daemon._log_dir()` previously read `LOCALAPPDATA` on every platform, producing `~/AppData/Local/dropboxignore/...` on Linux — a Windows-shaped tree inside a Linux HOME. Functional but non-idiomatic.
 
-**Proposed fix:** branch on `sys.platform` the same way `roots._info_json_path()` does. Use `~/.local/state/dropboxignore/state.json` (XDG Base Directory spec) on Linux, preserve `LOCALAPPDATA` on Windows. Migration: first read from the new path; fall back to the legacy Windows-styled path on Linux for one release if present, log a warning, and persist going forward at the XDG path.
+**Fix:** platform branching now lives in a shared `state.user_state_dir()` helper that both `default_path()` and `daemon._log_dir()` call. Linux reads `$XDG_STATE_HOME` with a fallback to `~/.local/state`, under `dropboxignore/`; Windows preserves `LOCALAPPDATA` with the existing `~/AppData/Local` fallback. `state.read()` (no-arg form) transparently falls back to the legacy Linux path for one release, logs a WARNING naming both paths, and the next `write()` persists to the XDG path. Explicit `state.read(path)` is unaffected. Five tests in `tests/test_state.py` pin the contract (Windows + Linux happy paths, XDG_STATE_HOME fallback, legacy migration + warning, XDG-wins-when-both-exist, explicit-path-does-not-trigger-fallback). `tests/test_daemon_logging.py::log_dir` fixture now branches on platform to exercise the same code path for the log directory.
 
-Touches: `src/dropboxignore/state.py`, potentially `daemon.py` log-path derivation.
+Touched: `src/dropboxignore/state.py`, `src/dropboxignore/daemon.py`, `tests/test_state.py`, `tests/test_daemon_logging.py`, `CLAUDE.md`.
 
 ## 2. `cli.install` has no error handling — **RESOLVED**
 
@@ -52,3 +52,9 @@ Needs to be run on Kilo's Ubuntu VPS (or equivalent) with a real Dropbox install
 Items 1, 2, 5 surfaced in per-task code-quality reviews but were out of plan scope.
 Items 2, 3 also flagged by the end-of-branch end-to-end reviewer (see commit `957fd32` which addressed other findings from the same review).
 Item 4 is a plan-specified manual check that requires environmental access.
+
+## Status
+
+Remaining open after v0.2 follow-ups:
+- Item 3 — Linux daemon smoke test (tracked for v0.3).
+- Item 4 — Manual Ubuntu VPS smoke verification (requires environmental access).

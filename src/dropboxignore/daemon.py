@@ -107,9 +107,7 @@ def _timeouts_from_env() -> dict[EventKind, int]:
 
 
 def _log_dir() -> Path:
-    localappdata = os.environ.get("LOCALAPPDATA")
-    base = Path(localappdata) if localappdata else Path.home() / "AppData" / "Local"
-    return base / "dropboxignore"
+    return state_module.user_state_dir()
 
 
 @contextlib.contextmanager

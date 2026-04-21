@@ -268,3 +268,28 @@ def test_recompute_logs_warning_per_conflict(tmp_path, caplog):
     assert "!build/keep/" in msg
     assert "build/" in msg
     assert "Dropping the negation" in msg
+
+
+def test_explain_includes_dropped_negation_with_flag(tmp_path):
+    from dropboxignore.rules import RuleCache
+
+    root = tmp_path
+    (root / ".dropboxignore").write_text(
+        "build/\n!build/keep/\n", encoding="utf-8"
+    )
+    (root / "build").mkdir()
+    (root / "build" / "keep").mkdir()
+    cache = RuleCache()
+    cache.load_root(root)
+
+    results = cache.explain(root / "build" / "keep")
+    by_pattern = {m.pattern.strip(): m for m in results}
+
+    assert "build/" in by_pattern
+    assert by_pattern["build/"].is_dropped is False
+
+    assert "!build/keep/" in by_pattern
+    assert by_pattern["!build/keep/"].is_dropped is True
+    # Dropped matches still carry their source + line info so the CLI can
+    # format "[dropped] ... (masked by ...)".
+    assert by_pattern["!build/keep/"].line == 2

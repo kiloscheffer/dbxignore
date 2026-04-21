@@ -88,6 +88,7 @@ class Match:
     line: int
     pattern: str
     negation: bool
+    is_dropped: bool = False
 
 
 @dataclass(frozen=True)
@@ -319,6 +320,11 @@ class RuleCache:
         Each entry identifies which .dropboxignore file and which source line
         matched, plus whether the match was a negation. Useful for the
         ``dropboxignore explain`` CLI command.
+
+        Unlike ``match()``, ``explain()`` includes rules that were dropped
+        from the active rule set by conflict detection — each such entry
+        has ``is_dropped=True`` so the CLI can annotate it with a
+        ``[dropped]`` marker and a masked-by pointer.
         """
         if not path.is_absolute():
             raise ValueError(f"explain() requires an absolute path; got {path!r}")
@@ -331,18 +337,21 @@ class RuleCache:
         results: list[Match] = []
         for ancestor, loaded in self._applicable(root, path):
             rel_str = self._rel_path_str(ancestor, path)
+            ignore_file = ancestor / IGNORE_FILENAME
             for line_idx, pattern in loaded.entries:
-                if pattern.match_file(rel_str) is not None:
-                    raw_line = (
-                        loaded.lines[line_idx]
-                        if line_idx < len(loaded.lines) else ""
-                    )
-                    results.append(Match(
-                        ignore_file=ancestor / IGNORE_FILENAME,
-                        line=line_idx + 1,
-                        pattern=raw_line,
-                        negation=not bool(pattern.include),
-                    ))
+                if pattern.match_file(rel_str) is None:
+                    continue
+                raw_line = (
+                    loaded.lines[line_idx]
+                    if line_idx < len(loaded.lines) else ""
+                )
+                results.append(Match(
+                    ignore_file=ignore_file,
+                    line=line_idx + 1,
+                    pattern=raw_line,
+                    negation=not bool(pattern.include),
+                    is_dropped=(ignore_file, line_idx) in self._dropped,
+                ))
         return results
 
     # ---- internal helpers ------------------------------------------------

@@ -76,8 +76,6 @@ def _reconcile_path(path: Path, cache: RuleCache, report: Report) -> bool | None
             return True
         if currently_ignored and not should_ignore:
             if path.name == IGNORE_FILENAME:
-                # Spec: .dropboxignore is never itself ignored; warn so users
-                # notice when Dropbox's UI (or another tool) re-marks it.
                 logger.warning(
                     ".dropboxignore at %s was marked ignored; overriding back to synced",
                     path,

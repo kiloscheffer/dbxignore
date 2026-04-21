@@ -24,8 +24,8 @@ def _discover_roots() -> list[Path]:
 def _format_ignore_file_loc(path: Path, roots: list[Path]) -> str:
     """Return path relative to the nearest root, or absolute if none matches.
 
-    Used by ``status`` to show compact source locations for conflicted
-    rules. Task 9 will also wire this into ``explain``.
+    Used by ``status`` and ``explain`` to show compact source locations for
+    conflicted rules.
     """
     for r in roots:
         try:
@@ -195,9 +195,24 @@ def explain(path: Path) -> None:
     if not matches:
         click.echo(f"no match for {path}")
         return
+
+    # Build lookup: (source, line) -> Conflict so we can annotate dropped rows.
+    conflicts_by_drop = {
+        (c.dropped_source, c.dropped_line): c
+        for c in cache.conflicts()
+    }
+
     for m in matches:
-        arrow = "!" if m.negation else "="
-        click.echo(f"{m.ignore_file}:{m.line}: {arrow} {m.pattern}")
+        loc = _format_ignore_file_loc(m.ignore_file, discovered)
+        prefix = "[dropped]  " if m.is_dropped else ""
+        raw = m.pattern.strip()
+        suffix = ""
+        if m.is_dropped:
+            c = conflicts_by_drop.get((m.ignore_file, m.line))
+            if c is not None:
+                masking_loc = _format_ignore_file_loc(c.masking_source, discovered)
+                suffix = f"  (masked by {masking_loc}:{c.masking_line})"
+        click.echo(f"{loc}:{m.line}  {prefix}{raw}{suffix}")
 
 
 @main.command()

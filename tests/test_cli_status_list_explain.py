@@ -127,3 +127,26 @@ def test_status_omits_conflicts_section_when_empty(tmp_path, monkeypatch):
     result = click.testing.CliRunner().invoke(cli.main, ["status"])
     assert result.exit_code == 0
     assert "rule conflicts" not in result.output
+
+
+def test_explain_annotates_dropped_negations(tmp_path, monkeypatch):
+    import click.testing
+
+    from dropboxignore import cli
+
+    root = tmp_path
+    (root / ".dropboxignore").write_text(
+        "build/\n!build/keep/\n", encoding="utf-8"
+    )
+    (root / "build").mkdir()
+    (root / "build" / "keep").mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+
+    result = click.testing.CliRunner().invoke(
+        cli.main, ["explain", str(root / "build" / "keep")],
+    )
+    assert result.exit_code == 0
+    assert "build/" in result.output
+    assert "[dropped]" in result.output
+    assert "!build/keep/" in result.output
+    assert "masked by" in result.output

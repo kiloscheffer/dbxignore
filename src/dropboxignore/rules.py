@@ -91,6 +91,25 @@ class Match:
 
 
 @dataclass(frozen=True)
+class Conflict:
+    """A dropped negation rule and the earlier include rule that masks it.
+
+    Emitted by ``RuleCache._recompute_conflicts`` when a negation's literal
+    prefix lives under a directory matched by an earlier include rule —
+    Dropbox's ignored-folder inheritance makes such negations inert. Used
+    for the WARNING log, ``dropboxignore status`` reporting, and the
+    ``[dropped]`` annotation in ``explain()`` output.
+    """
+
+    dropped_source: Path      # the .dropboxignore file containing the negation
+    dropped_line: int         # 1-based source line of the negation
+    dropped_pattern: str      # raw pattern text (e.g. "!build/keep/")
+    masking_source: Path      # the .dropboxignore file containing the include
+    masking_line: int         # 1-based source line of the masking include
+    masking_pattern: str      # raw pattern text (e.g. "build/")
+
+
+@dataclass(frozen=True)
 class _LoadedRules:
     """Parsed contents of one .dropboxignore file.
 

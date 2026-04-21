@@ -1,14 +1,14 @@
 # dropboxignore
 
-Hierarchical `.dropboxignore` files for Dropbox on Windows. Drop a `.dropboxignore` into any folder under your Dropbox root and matching paths get the `com.dropbox.ignored` NTFS alternate data stream set automatically — no more `node_modules/` cluttering your sync.
+Hierarchical `.dropboxignore` files for Dropbox. Drop a `.dropboxignore` into any folder under your Dropbox root and matching paths get the Dropbox ignore marker set automatically — no more `node_modules/` cluttering your sync. Windows (NTFS alternate data streams) and Linux (`user.*` xattrs) supported.
 
 ## Requirements
 
-- Windows 10 or 11 (NTFS)
+- **Windows 10/11** (NTFS), **or** a modern Linux distro with a systemd user session
 - Dropbox desktop client installed
-- Either Python ≥ 3.11 with [`uv`](https://docs.astral.sh/uv/) **or** the pre-built `.exe` from a GitHub Release
+- Python ≥ 3.11 with [`uv`](https://docs.astral.sh/uv/). The pre-built `.exe` (Windows only) is an alternative on Windows.
 
-## Install (source)
+## Install (Windows, from source)
 
 ```powershell
 uv tool install git+https://github.com/kiloscheffer/dropboxignore
@@ -17,11 +17,41 @@ dropboxignore install
 
 `dropboxignore install` registers a Task Scheduler entry that launches the daemon (`pythonw -m dropboxignore daemon`) at every user logon.
 
+## Install (Linux)
+
+Requires a systemd user session (standard on Ubuntu, Fedora, Debian, Arch, and most modern distros; WSL2 requires `systemd=true` in `/etc/wsl.conf`).
+
+```bash
+uv tool install git+https://github.com/kiloscheffer/dropboxignore
+dropboxignore install                    # writes systemd user unit, enables it
+systemctl --user status dropboxignore.service
+```
+
+`dropboxignore install` writes `~/.config/systemd/user/dropboxignore.service` and runs `systemctl --user enable --now` so the daemon starts at login.
+
+To uninstall:
+
+```bash
+dropboxignore uninstall                  # disables unit, removes the file
+dropboxignore uninstall --purge          # also clears every xattr marker
+```
+
+Notes:
+- Dropbox on Linux marks ignored paths with the xattr `user.com.dropbox.ignored=1`. Files on filesystems that don't support `user.*` xattrs (tmpfs without `user_xattr`, vfat, some FUSE mounts) are skipped with a `WARNING` in the daemon log — not a fatal error.
+- Several common operations strip xattrs silently: `cp` without `-a`, `mv` across filesystems, most archivers, `vim`'s default save-via-rename. The watchdog plus hourly sweep re-apply markers automatically; no action needed.
+- Linux symlinks cannot carry `user.*` xattrs (kernel restriction). A symlink matched by a rule logs one `WARNING` per sweep and is skipped. Its target is not affected.
+
 ## Install (.exe)
 
 1. Download `dropboxignore.exe` and `dropboxignored.exe` from the latest [Release](https://github.com/kiloscheffer/dropboxignore/releases).
 2. Place both in a stable directory (e.g. `%LOCALAPPDATA%\dropboxignore\bin\`) and add it to your `PATH`.
 3. Run `dropboxignore install`.
+
+## Platform support
+
+- **Windows 10 / 11** — first-class (v0.1). Uses NTFS Alternate Data Streams.
+- **Linux** — first-class (v0.2). Uses `user.com.dropbox.ignored` xattrs. Tested on Ubuntu 22.04 / 24.04. Requires a systemd user session.
+- **macOS** — planned for v0.3. Dropbox on macOS uses a different attribute mechanism (Apple File Provider) that requires runtime detection — not yet implemented.
 
 ## `.dropboxignore` syntax
 
@@ -53,7 +83,7 @@ target/
 
 | Command | Purpose |
 |---|---|
-| `dropboxignore install` / `uninstall` | Register / remove the Task Scheduler entry. `uninstall --purge` also clears every existing marker (any stray marker on a `.dropboxignore` file itself is logged at `WARNING` before being cleared). |
+| `dropboxignore install` / `uninstall` | Register / remove the daemon with the platform's user-scoped service manager (Task Scheduler on Windows, systemd user unit on Linux). `uninstall --purge` also clears every existing marker (any stray marker on a `.dropboxignore` file itself is logged at `WARNING` before being cleared). |
 | `dropboxignore daemon` | Run the watcher + hourly sweep in the foreground. Usually invoked by Task Scheduler. |
 | `dropboxignore apply [PATH]` | One-shot reconcile of the whole Dropbox (or a subtree). |
 | `dropboxignore status` | Is the daemon running? Last sweep counts, last error. |
@@ -64,7 +94,7 @@ target/
 
 - **Source of truth.** `.dropboxignore` files declare what is ignored. Removing a rule unignores the matching paths on the next reconcile. A path marked ignored via Dropbox's right-click menu but not matching any rule will be unignored.
 - **Hybrid trigger.** The daemon reacts to filesystem events in real time *and* runs an hourly safety-net sweep. If the daemon is offline, an initial sweep at the next start catches any drift.
-- **Multi-root.** Personal and Business Dropbox roots are discovered automatically from `%APPDATA%\Dropbox\info.json`.
+- **Multi-root.** Personal and Business Dropbox roots are discovered automatically from `%APPDATA%\Dropbox\info.json` (Windows) or `~/.dropbox/info.json` (Linux).
 
 ## Configuration
 
@@ -77,8 +107,11 @@ Environment variables read at daemon startup:
 | `DROPBOXIGNORE_DEBOUNCE_OTHER_MS` | `500` | Debounce for other file events. |
 | `DROPBOXIGNORE_LOG_LEVEL` | `INFO` | Daemon log level. |
 
-Logs: `%LOCALAPPDATA%\dropboxignore\daemon.log` (rotated, 25 MB total).
-State: `%LOCALAPPDATA%\dropboxignore\state.json`.
+Logs:
+- Windows — `%LOCALAPPDATA%\dropboxignore\daemon.log` (rotated, 25 MB total).
+- Linux — daemon output goes to the systemd journal; read with `journalctl --user -u dropboxignore.service`.
+
+State: `%LOCALAPPDATA%\dropboxignore\state.json` (Windows). On Linux the state file path follows the same `state.default_path()` logic; check `dropboxignore status` output for the exact location.
 
 ## License
 

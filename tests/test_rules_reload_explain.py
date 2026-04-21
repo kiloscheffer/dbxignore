@@ -293,3 +293,25 @@ def test_explain_includes_dropped_negation_with_flag(tmp_path):
     # Dropped matches still carry their source + line info so the CLI can
     # format "[dropped] ... (masked by ...)".
     assert by_pattern["!build/keep/"].line == 2
+
+
+def test_explain_is_dropped_false_for_non_conflicted_negation(tmp_path):
+    """*.log + !important.log has no conflict — the negation should appear
+    in explain() with is_dropped=False."""
+    from dropboxignore.rules import RuleCache
+
+    root = tmp_path
+    (root / ".dropboxignore").write_text(
+        "*.log\n!important.log\n", encoding="utf-8"
+    )
+    (root / "important.log").touch()
+    cache = RuleCache()
+    cache.load_root(root)
+
+    assert cache.conflicts() == []  # guard: no conflict in this setup
+    results = cache.explain(root / "important.log")
+    by_pattern = {m.pattern.strip(): m for m in results}
+
+    assert "!important.log" in by_pattern
+    assert by_pattern["!important.log"].is_dropped is False
+    assert by_pattern["!important.log"].negation is True

@@ -83,3 +83,29 @@ def test_cli_uninstall_reports_schtasks_failure(monkeypatch):
     assert "Failed to uninstall daemon service" in result.output
     assert "Access is denied" in result.output
     assert "Uninstalled dropboxignore daemon service" not in result.output
+
+
+def test_cli_install_reports_backend_failure(monkeypatch):
+    """cli.install must echo the failure to stderr and exit non-zero when
+    install_service raises — not surface a raw traceback and not print
+    "Installed" anyway. Mirrors the uninstall contract."""
+    from click.testing import CliRunner
+
+    import dropboxignore.install as install_pkg
+    from dropboxignore import cli
+
+    def raising_install():
+        raise RuntimeError("schtasks /Create returned 1: ERROR: Access is denied.")
+
+    monkeypatch.setattr(install_pkg, "install_service", raising_install)
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["install"])
+
+    assert result.exit_code != 0, result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit), (
+        f"expected clean SystemExit, got: {result.exception!r}"
+    )
+    assert "Failed to install daemon service" in result.output
+    assert "Access is denied" in result.output
+    assert "Installed dropboxignore daemon service" not in result.output

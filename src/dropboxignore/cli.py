@@ -181,7 +181,11 @@ def daemon() -> None:
 def install() -> None:
     """Register the daemon with the platform's user-scoped service manager."""
     from dropboxignore.install import install_service
-    install_service()
+    try:
+        install_service()
+    except RuntimeError as exc:
+        click.echo(f"Failed to install daemon service: {exc}", err=True)
+        sys.exit(2)
     click.echo("Installed dropboxignore daemon service.")
 
 

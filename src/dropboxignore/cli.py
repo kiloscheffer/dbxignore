@@ -21,6 +21,21 @@ def _discover_roots() -> list[Path]:
     return roots.discover()
 
 
+def _format_ignore_file_loc(path: Path, roots: list[Path]) -> str:
+    """Return path relative to the nearest root, or absolute if none matches.
+
+    Used by ``status`` and ``explain`` to show compact source locations for
+    conflicted rules.
+    """
+    for r in roots:
+        try:
+            rel = path.relative_to(r)
+            return str(rel)
+        except ValueError:
+            continue
+    return str(path)
+
+
 def _process_is_alive(pid: int | None) -> bool:
     if pid is None:
         return False
@@ -89,22 +104,37 @@ def status() -> None:
     s = state.read()
     if s is None:
         click.echo("dropboxignore: no state file found (daemon never ran).")
-        return
+    else:
+        alive = _process_is_alive(s.daemon_pid)
+        click.echo(f"daemon: {'running' if alive else 'not running'} (pid={s.daemon_pid})")
+        if s.daemon_started:
+            click.echo(f"started: {s.daemon_started.isoformat()}")
+        if s.last_sweep:
+            click.echo(
+                f"last sweep: {s.last_sweep.isoformat()}  "
+                f"marked={s.last_sweep_marked} cleared={s.last_sweep_cleared} "
+                f"errors={s.last_sweep_errors}  duration={s.last_sweep_duration_s:.2f}s"
+            )
+        if s.last_error:
+            click.echo(f"last error: {s.last_error.path} — {s.last_error.message}")
+        for r in s.watched_roots:
+            click.echo(f"watching: {r}")
 
-    alive = _process_is_alive(s.daemon_pid)
-    click.echo(f"daemon: {'running' if alive else 'not running'} (pid={s.daemon_pid})")
-    if s.daemon_started:
-        click.echo(f"started: {s.daemon_started.isoformat()}")
-    if s.last_sweep:
-        click.echo(
-            f"last sweep: {s.last_sweep.isoformat()}  "
-            f"marked={s.last_sweep_marked} cleared={s.last_sweep_cleared} "
-            f"errors={s.last_sweep_errors}  duration={s.last_sweep_duration_s:.2f}s"
-        )
-    if s.last_error:
-        click.echo(f"last error: {s.last_error.path} — {s.last_error.message}")
-    for r in s.watched_roots:
-        click.echo(f"watching: {r}")
+    # Conflicts section — present only when RuleCache has any.
+    discovered = _discover_roots()
+    cache = RuleCache()
+    for r in discovered:
+        cache.load_root(r)
+    conflicts = cache.conflicts()
+    if conflicts:
+        click.echo(f"rule conflicts ({len(conflicts)}):")
+        for c in conflicts:
+            dropped_loc = _format_ignore_file_loc(c.dropped_source, discovered)
+            masking_loc = _format_ignore_file_loc(c.masking_source, discovered)
+            click.echo(
+                f"  {dropped_loc}:{c.dropped_line}  {c.dropped_pattern}  "
+                f"masked by {masking_loc}:{c.masking_line}  {c.masking_pattern}"
+            )
 
 
 @main.command("list")

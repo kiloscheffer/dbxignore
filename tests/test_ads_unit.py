@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,10 @@ from dropboxignore import ads
 
 
 @pytest.mark.windows_only
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason=r"Path(r'C:\...') is only absolute on Windows",
+)
 def test_stream_path_uses_long_path_prefix_and_stream_name():
     p = Path(r"C:\Dropbox\some\dir")
     result = ads._stream_path(p)

@@ -11,7 +11,7 @@ Hierarchical `.dropboxignore` files for Dropbox on Windows. Drop a `.dropboxigno
 ## Install (source)
 
 ```powershell
-uv tool install git+https://github.com/<you>/dropboxignore
+uv tool install git+https://github.com/kiloscheffer/dropboxignore
 dropboxignore install
 ```
 
@@ -19,7 +19,7 @@ dropboxignore install
 
 ## Install (.exe)
 
-1. Download `dropboxignore.exe` and `dropboxignored.exe` from the latest [Release](https://github.com/<you>/dropboxignore/releases).
+1. Download `dropboxignore.exe` and `dropboxignored.exe` from the latest [Release](https://github.com/kiloscheffer/dropboxignore/releases).
 2. Place both in a stable directory (e.g. `%LOCALAPPDATA%\dropboxignore\bin\`) and add it to your `PATH`.
 3. Run `dropboxignore install`.
 
@@ -53,7 +53,7 @@ target/
 
 | Command | Purpose |
 |---|---|
-| `dropboxignore install` / `uninstall` | Register / remove the Task Scheduler entry. `uninstall --purge` also clears every existing marker. |
+| `dropboxignore install` / `uninstall` | Register / remove the Task Scheduler entry. `uninstall --purge` also clears every existing marker (any stray marker on a `.dropboxignore` file itself is logged at `WARNING` before being cleared). |
 | `dropboxignore daemon` | Run the watcher + hourly sweep in the foreground. Usually invoked by Task Scheduler. |
 | `dropboxignore apply [PATH]` | One-shot reconcile of the whole Dropbox (or a subtree). |
 | `dropboxignore status` | Is the daemon running? Last sweep counts, last error. |
@@ -73,7 +73,7 @@ Environment variables read at daemon startup:
 | Variable | Default | Purpose |
 |---|---|---|
 | `DROPBOXIGNORE_DEBOUNCE_RULES_MS` | `100` | Debounce window for `.dropboxignore` file events. |
-| `DROPBOXIGNORE_DEBOUNCE_DIRS_MS` | `0` | Debounce for directory-creation events. |
+| `DROPBOXIGNORE_DEBOUNCE_DIRS_MS` | `0` | Debounce for directory-creation events (`0` = react immediately, no coalescing). |
 | `DROPBOXIGNORE_DEBOUNCE_OTHER_MS` | `500` | Debounce for other file events. |
 | `DROPBOXIGNORE_LOG_LEVEL` | `INFO` | Daemon log level. |
 

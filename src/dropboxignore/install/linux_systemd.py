@@ -40,6 +40,22 @@ def _detect_invocation() -> tuple[Path, str]:
     return Path(python), "-m dropboxignore daemon"
 
 
+def _run_systemctl(cmd: list[str]) -> None:
+    """Run a systemctl command; convert CalledProcessError → RuntimeError.
+
+    Callers (notably cli.install / cli.uninstall) catch RuntimeError to
+    surface failures cleanly. subprocess.CalledProcessError is not a
+    RuntimeError, so without this wrapping a failed systemctl call would
+    escape as a raw traceback.
+    """
+    try:
+        subprocess.run(cmd, check=True)  # noqa: S603 — hardcoded args, no user data
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"{' '.join(cmd)} failed with exit code {exc.returncode}"
+        ) from exc
+
+
 def build_unit_content(exe_path: Path, arguments: str = "") -> str:
     """Return the full [Unit]/[Service]/[Install] text for the systemd user unit."""
     exec_start = f"{exe_path} {arguments}".strip()
@@ -67,12 +83,8 @@ def install_unit() -> None:
     path.write_text(content, encoding="utf-8")
     logger.info("Wrote systemd user unit to %s", path)
 
-    subprocess.run(  # noqa: S603 — hardcoded args, no user data
-        ["systemctl", "--user", "daemon-reload"], check=True,
-    )
-    subprocess.run(  # noqa: S603 — hardcoded args, no user data
-        ["systemctl", "--user", "enable", "--now", UNIT_NAME], check=True,
-    )
+    _run_systemctl(["systemctl", "--user", "daemon-reload"])
+    _run_systemctl(["systemctl", "--user", "enable", "--now", UNIT_NAME])
     logger.info("Enabled and started %s", UNIT_NAME)
 
 
@@ -86,6 +98,4 @@ def uninstall_unit() -> None:
     if path.exists():
         path.unlink()
         logger.info("Removed %s", path)
-    subprocess.run(  # noqa: S603 — hardcoded args, no user data
-        ["systemctl", "--user", "daemon-reload"], check=True,
-    )
+    _run_systemctl(["systemctl", "--user", "daemon-reload"])

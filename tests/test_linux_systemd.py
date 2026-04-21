@@ -110,3 +110,26 @@ def test_install_raises_when_executable_not_found(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="dropboxignored not on PATH"):
         linux_systemd.install_unit()
+
+
+def test_install_wraps_calledprocesserror_from_systemctl(tmp_path, monkeypatch):
+    """A failing systemctl must raise RuntimeError, not CalledProcessError.
+
+    cli.install / cli.uninstall catch RuntimeError; a CalledProcessError
+    would escape as a raw traceback.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "dropboxignore.install.linux_systemd._detect_invocation",
+        lambda: (Path("/usr/local/bin/dropboxignored"), ""),
+    )
+
+    def fake_run_fails(cmd, check, capture_output=False, text=False):
+        raise subprocess.CalledProcessError(1, cmd, output="", stderr="no user session")
+
+    monkeypatch.setattr(subprocess, "run", fake_run_fails)
+
+    from dropboxignore.install import linux_systemd
+
+    with pytest.raises(RuntimeError, match="daemon-reload"):
+        linux_systemd.install_unit()

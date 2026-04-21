@@ -41,9 +41,11 @@ The daemon's watchdog events are classified (`_classify` → `EventKind.{RULES,D
 - Log-contract tests use `caplog.at_level(logging.WARNING, logger="dropboxignore.<module>")` — narrow to the submodule that emits the log (see `tests/test_reconcile_edges.py`).
 - Windows-only tests: set `pytestmark = pytest.mark.windows_only` at module level and guard with `if sys.platform != "win32": pytest.skip(..., allow_module_level=True)` so non-Windows collection skips cleanly.
 - Daemon/sweep tests that trigger state writes: `monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")` redirects the persisted state off `LOCALAPPDATA` and keeps the test hermetic.
+- Root-discovery test seams, by layer: CLI tests monkeypatch `cli._discover_roots`; daemon tests monkeypatch `daemon.roots_module.discover`; `roots.discover()` unit tests set `APPDATA` to point at a staged `Dropbox/info.json`. Pick the layer that matches the code path under test.
 
 ## Release
 
+- `.github/workflows/test.yml` runs ruff + the portable pytest subset on `ubuntu-latest` and `windows-latest` for every push/PR; the Windows leg also runs `pytest -m windows_only`.
 - Push tag `v*` → `.github/workflows/release.yml` builds wheel + `dropboxignore.exe` / `dropboxignored.exe` (via `pyinstaller/dropboxignore.spec`) and publishes a GitHub Release.
 
 ## Docs

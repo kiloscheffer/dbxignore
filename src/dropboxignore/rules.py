@@ -428,14 +428,22 @@ class RuleCache:
 
         Called after any mutation (load_root, reload_file, remove_file).
         Caller must hold self._lock.
+
+        Writes new containers and swaps the attribute references atomically
+        so lock-free readers (``match()``, ``explain()``) never see a
+        torn intermediate state.
         """
-        self._dropped.clear()
-        self._conflicts.clear()
+        new_dropped: set[tuple[Path, int]] = set()
+        new_conflicts: list[Conflict] = []
         for root in self._roots:
             sequence = self._build_sequence(root)
             for c in _detect_conflicts(sequence, root=root):
-                self._conflicts.append(c)
-                self._dropped.add((c.dropped_source, c.dropped_line - 1))
+                new_conflicts.append(c)
+                # _build_sequence stores line=line_idx+1 (1-based); _dropped
+                # is keyed by 0-based line_idx because that's what
+                # `loaded.entries` yields and what match()/explain() iterate.
+                line_idx = c.dropped_line - 1
+                new_dropped.add((c.dropped_source, line_idx))
                 logger.warning(
                     "negation `%s` at %s:%d is masked by include `%s` at %s:%d "
                     "(Dropbox inherits ignored state from ancestor directories). "
@@ -444,11 +452,14 @@ class RuleCache:
                     c.dropped_pattern, c.dropped_source, c.dropped_line,
                     c.masking_pattern, c.masking_source, c.masking_line,
                 )
+        self._dropped = new_dropped
+        self._conflicts = new_conflicts
 
     def _build_sequence(self, root: Path) -> list[_SequenceEntry]:
         """Flatten all .dropboxignore rules under root into evaluation order.
 
-        Shallower files first; within a file, source-line order.
+        Shallower files first; within a file, source-line order. Caller
+        must hold self._lock — this iterates self._rules.
         """
         files_under_root = sorted(
             (p for p in self._rules if p.is_relative_to(root)),

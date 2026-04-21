@@ -202,3 +202,42 @@ def test_rulecache_detects_cross_file_conflict(tmp_path):
     assert c.masking_source == (root / ".dropboxignore").resolve()
     assert c.dropped_pattern == "!keep/"
     assert c.masking_pattern == "build/"
+
+
+def test_match_treats_dropped_negation_as_absent(tmp_path):
+    """With `build/` + `!build/keep/`, the negation is dropped, so
+    build/keep/ is matched via the include (gitignore semantics with the
+    negation absent)."""
+    from dropboxignore.rules import RuleCache
+
+    root = tmp_path
+    (root / ".dropboxignore").write_text(
+        "build/\n!build/keep/\n", encoding="utf-8"
+    )
+    (root / "build").mkdir()
+    (root / "build" / "keep").mkdir()
+    cache = RuleCache()
+    cache.load_root(root)
+
+    assert cache.match(root / "build") is True
+    # The negation is dropped — build/keep/ still matches the `build/` rule.
+    assert cache.match(root / "build" / "keep") is True
+
+
+def test_match_honors_non_conflicted_negation(tmp_path):
+    """*.log + !important.log: the negation is NOT dropped (no ignored
+    ancestor), so important.log is excluded and others are included."""
+    from dropboxignore.rules import RuleCache
+
+    root = tmp_path
+    (root / ".dropboxignore").write_text(
+        "*.log\n!important.log\n", encoding="utf-8"
+    )
+    (root / "important.log").touch()
+    (root / "debug.log").touch()
+    cache = RuleCache()
+    cache.load_root(root)
+
+    assert cache.conflicts() == []  # guard: no conflict here
+    assert cache.match(root / "important.log") is False
+    assert cache.match(root / "debug.log") is True

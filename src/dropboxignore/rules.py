@@ -305,7 +305,10 @@ class RuleCache:
         matched = False
         for ancestor, loaded in self._applicable(root, path):
             rel_str = self._rel_path_str(ancestor, path)
-            for _line_idx, pattern in loaded.entries:
+            ignore_file = ancestor / IGNORE_FILENAME
+            for line_idx, pattern in loaded.entries:
+                if (ignore_file, line_idx) in self._dropped:
+                    continue
                 if pattern.match_file(rel_str) is not None:
                     matched = bool(pattern.include)
         return matched

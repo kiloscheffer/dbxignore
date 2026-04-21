@@ -241,3 +241,30 @@ def test_match_honors_non_conflicted_negation(tmp_path):
     assert cache.conflicts() == []  # guard: no conflict here
     assert cache.match(root / "important.log") is False
     assert cache.match(root / "debug.log") is True
+
+
+def test_recompute_logs_warning_per_conflict(tmp_path, caplog):
+    import logging
+
+    from dropboxignore.rules import RuleCache
+
+    root = tmp_path
+    (root / ".dropboxignore").write_text(
+        "build/\n!build/keep/\n", encoding="utf-8"
+    )
+    cache = RuleCache()
+
+    with caplog.at_level(logging.WARNING, logger="dropboxignore.rules"):
+        cache.load_root(root)
+
+    warnings = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING
+        and r.name == "dropboxignore.rules"
+        and "negation" in r.message
+    ]
+    assert len(warnings) == 1
+    msg = warnings[0].message
+    assert "!build/keep/" in msg
+    assert "build/" in msg
+    assert "Dropping the negation" in msg

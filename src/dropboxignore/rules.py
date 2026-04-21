@@ -39,6 +39,47 @@ def _build_spec(lines: list[str]) -> pathspec.PathSpec:
     return pathspec.PathSpec.from_lines(_CaseInsensitiveGitIgnorePattern, lines)
 
 
+def literal_prefix(pattern: str) -> str | None:
+    """Return the leading literal path segments of a gitignore pattern.
+
+    The returned value is the prefix up to (and including) the last ``/``
+    before the first glob metacharacter (``*``, ``?``, ``[``), or the whole
+    pattern if it contains no glob. A leading ``/`` anchor is stripped.
+
+    Returns ``None`` when there is no literal anchor — e.g. patterns that
+    begin with a glob (``**/cache/``), or that place a glob inside the first
+    segment (``foo*/bar/``). The detection layer uses ``None`` to skip
+    conflict analysis for that pattern (documented limitation).
+
+    Input is the path portion of a gitignore pattern. Callers should pass
+    the raw line with any leading ``!`` already stripped — pathspec
+    already tracks include vs. negation via ``pattern.include``.
+    """
+    if not pattern:
+        return None
+    p = pattern.lstrip("/")
+    if not p:
+        return None
+    boundary = next(
+        (i for i, c in enumerate(p) if c in "*?["),
+        len(p),
+    )
+    if boundary < len(p):
+        last_sep = p[:boundary].rfind("/")
+        if last_sep == -1:
+            return None
+        return p[:last_sep + 1]
+    # No glob present: return whole pattern. If it ends in `/`, we keep the
+    # trailing slash; otherwise we cut at the last `/` so the prefix is a
+    # directory-shaped string (the detector walks directory ancestors).
+    if "/" not in p:
+        return p
+    if p.endswith("/"):
+        return p
+    last_sep = p.rfind("/")
+    return p[:last_sep + 1]
+
+
 @dataclass(frozen=True)
 class Match:
     """A single matching rule for the ``explain`` diagnostic."""

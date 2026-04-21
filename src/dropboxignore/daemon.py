@@ -8,6 +8,7 @@ import logging
 import logging.handlers
 import os
 import signal
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -112,21 +113,38 @@ def _log_dir() -> Path:
 
 @contextlib.contextmanager
 def _configured_logging() -> Iterator[None]:
-    """Scope a rotating file handler to the block; restore prior logger state on exit."""
+    """Scope log handlers to the block; restore prior logger state on exit.
+
+    Always installs a RotatingFileHandler at ``_log_dir()/daemon.log``. On
+    Linux, additionally attaches a ``StreamHandler(sys.stderr)`` so that
+    records flow to systemd-journald when the daemon runs as a user unit
+    (``journalctl --user -u dropboxignore.service`` surfaces them). The
+    rotating file remains authoritative — identical records land in both
+    sinks, so grabbing ``daemon.log`` still yields a complete debug record
+    on Linux, matching the Windows workflow.
+    """
     level_name = os.environ.get("DROPBOXIGNORE_LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
 
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+
     log_dir = _log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
-    handler = logging.handlers.RotatingFileHandler(
+    file_handler = logging.handlers.RotatingFileHandler(
         log_dir / "daemon.log",
         maxBytes=5 * 1024 * 1024,
         backupCount=4,
         encoding="utf-8",
     )
-    handler.setFormatter(logging.Formatter(
-        "%(asctime)s %(levelname)s %(name)s: %(message)s"
-    ))
+    file_handler.setFormatter(formatter)
+
+    new_handlers: list[logging.Handler] = [file_handler]
+    if sys.platform.startswith("linux"):
+        stderr_handler = logging.StreamHandler(sys.stderr)
+        stderr_handler.setFormatter(formatter)
+        new_handlers.append(stderr_handler)
 
     pkg_logger = logging.getLogger("dropboxignore")
     saved_handlers = list(pkg_logger.handlers)
@@ -135,7 +153,8 @@ def _configured_logging() -> Iterator[None]:
 
     for h in list(pkg_logger.handlers):
         pkg_logger.removeHandler(h)
-    pkg_logger.addHandler(handler)
+    for h in new_handlers:
+        pkg_logger.addHandler(h)
     pkg_logger.propagate = False
     pkg_logger.setLevel(level)
     try:

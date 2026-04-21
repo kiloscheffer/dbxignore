@@ -16,13 +16,15 @@ Both the v0.1 Windows `install_task` and the new Linux `install_unit` can fail w
 
 **Fix:** `cli.install` now mirrors `cli.uninstall`'s try/except around the backend call, echoing `Failed to install daemon service: {exc}` to stderr and exiting with code 2. Test `test_cli_install_reports_backend_failure` in `tests/test_install.py` pins the contract (message, exit code, and that "Installed ..." is *not* printed on failure).
 
-## 3. No Linux daemon smoke test exercises the full event loop
+## 3. No Linux daemon smoke test exercises the full event loop — **RESOLVED**
 
-`test_daemon_smoke.py` is `@pytest.mark.windows_only` and exercises the Windows-specific real-ADS path through the daemon's watchdog event dispatch. There is no Linux-gated counterpart. Dispatch logic is covered via `fake_markers` in `test_daemon_dispatch.py`, `test_daemon_sweep.py`, etc., but the integrated "real xattr writes reach the filesystem through the daemon's actual watchdog loop" path is not tested.
+`test_daemon_smoke.py` was `@pytest.mark.windows_only` with no Linux counterpart — `fake_markers`-based dispatch tests covered the event logic but the integrated "real xattr writes reach the filesystem through the daemon's actual watchdog loop" path was not exercised on Linux.
 
-**Proposed fix:** add `tests/test_daemon_smoke_linux.py` (`linux_only`, `_xattr_supported` autouse skip) that spins up the daemon against a temporary Dropbox-root-shaped tree, writes a `.dropboxignore`, waits for debounce, and asserts the expected xattr landed on matching files. Mirror the shape of `test_daemon_smoke.py` on Windows.
+**Fix:** new `tests/test_daemon_smoke_linux.py` — `pytest.mark.linux_only` + `_xattr_supported` autouse skip, monkey-patches `daemon.roots_module.discover` to point at `tmp_path`, routes state/log off the real per-user dir via `XDG_STATE_HOME`, waits for the daemon's `watching roots:` log line (readiness signal — inotify only sees events fired after `observer.schedule()`), then asserts (phase 1) adding a `build/` rule + creating `build/` marks the directory, and (phase 2) emptying the rule clears it. Runs in ~0.25s on inotify.
 
-Touches: `tests/test_daemon_smoke_linux.py` (new).
+**Deviation from the Windows smoke:** the Windows version's phase 2 adds `!build/keep/` as a negation; the Linux version drops the rule entirely. Surfaced a product bug in the prune+negation interaction — see new item 10 — which happens to be masked by Windows event timing. A Linux smoke that exercised negation flaked reliably; the simpler rule-add/remove flow is sufficient to prove the event pipeline and avoids the edge case that's now tracked separately.
+
+Touched: `tests/test_daemon_smoke_linux.py` (new).
 
 ## 4. Manual Ubuntu VPS smoke check — **RESOLVED**
 
@@ -85,6 +87,32 @@ Touches: `src/dropboxignore/cli.py` (`uninstall`), `tests/test_install.py` (new 
 
 Touched: `src/dropboxignore/install/linux_systemd.py`, `tests/test_linux_systemd.py`, `README.md`.
 
+## 10. Prune + negation leaves stale markers on children of ignored directories
+
+`reconcile_subtree()` prunes descent at any directory whose `_reconcile_path` returns True (ignored) — a correctness-preserving optimization under normal gitignore semantics, since once a parent is ignored Dropbox won't sync its contents. But when a user adds a negation rule like `!build/keep/` after `build/keep/` has already been marked (e.g. because DIR_CREATE dispatched with the old rule cache before RULES reloaded), the subsequent full-tree reconcile marks `build/`, prunes descent into it, and never visits `build/keep/` to evaluate the negation. The stale child marker persists indefinitely — neither event-driven reconciles nor the hourly sweep recover it, because both use the same `reconcile_subtree` code path.
+
+Reproducer — flaky on Linux, masked on Windows by ReadDirectoryChangesW timing:
+
+```
+1. Write .dropboxignore = `build/\n`
+2. mkdir build/  → marked
+3. Rewrite .dropboxignore = `build/\n!build/keep/\n`
+4. mkdir build/keep/
+   — DIR_CREATE fires first (0ms debounce) with OLD cache (`build/`) → marks build/keep/
+   — RULES fires 100ms later, reloads with new rules, reconciles root
+   — reconcile at `build/` → still matches → prune, no descent
+   — `build/keep/` never re-evaluated, keeps stale marker
+```
+
+Surfaced by item 3's Linux daemon smoke: the Windows smoke test with this exact scenario passes reliably because ReadDirectoryChangesW timing makes RULES dispatch before DIR_CREATE, so the child is never marked in the first place. inotify fires DIR_CREATE near-instantly and wins the race. The Linux smoke was narrowed to a rule-add/remove scenario that doesn't hit this edge case.
+
+**Proposed fix:** options, none trivial:
+- Always descend on rule-change reconciles (skip the prune optimization when the cache reloaded since the last full sweep). Adds per-sweep cost on big trees but is localized.
+- Detect negation patterns whose prefix is ignored, schedule a targeted second reconcile pass on those subtrees. More complex but doesn't regress perf in the common case.
+- Give up the prune optimization entirely. Adds maybe hundreds of ms to a 50k-file sweep — possibly acceptable given sweeps are hourly.
+
+Touches: `src/dropboxignore/reconcile.py`, `tests/test_reconcile_basic.py` (new test reproducing the stale-marker scenario).
+
 ---
 
 ## How these surfaced
@@ -94,10 +122,11 @@ Items 2, 3 also flagged by the end-of-branch end-to-end reviewer (see commit `95
 Item 4 is a plan-specified manual check that required environmental access; it was run 2026-04-21 and confirmed two adjacent symptoms as items 8 (empirically) and 9 (new).
 Items 6, 7, 8 surfaced during the item-1 implementation pass and its README-accuracy audit.
 Item 9 surfaced during the item-4 VPS smoke — the shell-env vs. unit-env gap made the escape hatch from item 5 unusable under systemd without a drop-in override.
+Item 10 surfaced during item 3's Linux daemon smoke — a negation-based assertion flaked, investigation revealed the prune optimization silently breaks negation semantics for previously-marked descendants.
 
 ## Status
 
 Remaining open after v0.2 follow-ups:
-- Item 3 — Linux daemon smoke test (tracked for v0.3).
 - Item 6 — Retire legacy Linux state-path fallback (v0.4 branch).
 - Item 8 — `uninstall --purge` state/log cleanup (design decision: broaden `--purge` vs add `--purge-state`). Empirically confirmed by item 4's VPS run.
+- Item 10 — Prune + negation leaves stale markers on children of ignored directories. Real product bug; cross-platform but surfaced on Linux due to inotify timing.

@@ -181,7 +181,13 @@ def list_ignored(path: Path | None) -> None:
 @main.command()
 @click.argument("path", type=click.Path(exists=False, path_type=Path))
 def explain(path: Path) -> None:
-    """Show which .dropboxignore rule (if any) matches the path."""
+    """Show which .dropboxignore rule (if any) matches the path.
+
+    Dropped negations (rules that can't take effect because an ancestor
+    directory is ignored) appear prefixed with ``[dropped]`` and a pointer
+    to the masking rule. See README §"Negations and Dropbox's ignore
+    inheritance" for why.
+    """
     discovered = _discover_roots()
     if not discovered:
         click.echo("No Dropbox roots found.", err=True)

@@ -1,0 +1,23 @@
+name: commit-check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: commit-check/commit-check-action@v2.6.0
+        with:
+          message: true
+          branch: true
+          job-summary: true
+          pr-comments: true

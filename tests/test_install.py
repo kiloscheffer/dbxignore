@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from dropboxignore import install
+from dropboxignore.install import windows_task as install
 
 
 def test_build_xml_contains_logon_trigger_and_action():
@@ -65,20 +65,21 @@ def test_uninstall_task_succeeds_silently_on_zero_exit(monkeypatch):
 
 def test_cli_uninstall_reports_schtasks_failure(monkeypatch):
     """cli.uninstall must echo the failure to stderr and exit non-zero when
-    uninstall_task raises — not print "Uninstalled" anyway."""
+    uninstall_service raises — not print "Uninstalled" anyway."""
     from click.testing import CliRunner
 
+    import dropboxignore.install as install_pkg
     from dropboxignore import cli
 
     def raising_uninstall():
         raise RuntimeError("schtasks /Delete returned 1: ERROR: Access is denied.")
 
-    monkeypatch.setattr(install, "uninstall_task", raising_uninstall)
+    monkeypatch.setattr(install_pkg, "uninstall_service", raising_uninstall)
 
     runner = CliRunner()
     result = runner.invoke(cli.main, ["uninstall"])
 
     assert result.exit_code != 0, result.output
-    assert "Failed to uninstall scheduled task" in result.output
+    assert "Failed to uninstall daemon service" in result.output
     assert "Access is denied" in result.output
-    assert "Uninstalled scheduled task" not in result.output
+    assert "Uninstalled dropboxignore daemon service" not in result.output

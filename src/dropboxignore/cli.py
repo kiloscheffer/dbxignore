@@ -179,23 +179,23 @@ def daemon() -> None:
 
 @main.command()
 def install() -> None:
-    """Register the daemon as a Task Scheduler entry (logon trigger)."""
-    from dropboxignore import install as install_mod
-    install_mod.install_task()
-    click.echo("Installed scheduled task 'dropboxignore'.")
+    """Register the daemon with the platform's user-scoped service manager."""
+    from dropboxignore.install import install_service
+    install_service()
+    click.echo("Installed dropboxignore daemon service.")
 
 
 @main.command()
 @click.option("--purge", is_flag=True, help="Also clear every com.dropbox.ignored marker.")
 def uninstall(purge: bool) -> None:
     """Remove the scheduled task. With --purge, also clear all ADS markers."""
-    from dropboxignore import install as install_mod
+    from dropboxignore.install import uninstall_service
     try:
-        install_mod.uninstall_task()
+        uninstall_service()
     except RuntimeError as exc:
-        click.echo(f"Failed to uninstall scheduled task: {exc}", err=True)
+        click.echo(f"Failed to uninstall daemon service: {exc}", err=True)
         sys.exit(2)
-    click.echo("Uninstalled scheduled task 'dropboxignore'.")
+    click.echo("Uninstalled dropboxignore daemon service.")
 
     if purge:
         discovered = _discover_roots()

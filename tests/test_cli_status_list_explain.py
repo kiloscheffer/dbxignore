@@ -9,6 +9,7 @@ from dropboxignore import cli, state
 
 def test_status_reports_no_state_when_file_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "default_path", lambda: tmp_path / "missing.json")
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [])
     runner = CliRunner()
     result = runner.invoke(cli.main, ["status"])
     assert result.exit_code == 0
@@ -29,6 +30,7 @@ def test_status_reports_running_daemon(tmp_path, monkeypatch):
     path = tmp_path / "state.json"
     state.write(s, path)
     monkeypatch.setattr(state, "default_path", lambda: path)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [])
 
     runner = CliRunner()
     result = runner.invoke(cli.main, ["status"])

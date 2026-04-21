@@ -24,8 +24,8 @@ def _discover_roots() -> list[Path]:
 def _format_ignore_file_loc(path: Path, roots: list[Path]) -> str:
     """Return path relative to the nearest root, or absolute if none matches.
 
-    Used by ``status`` and ``explain`` to show compact source locations for
-    conflicted rules.
+    Used by ``status`` to show compact source locations for conflicted
+    rules. Task 9 will also wire this into ``explain``.
     """
     for r in roots:
         try:

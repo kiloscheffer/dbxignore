@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import sys
 from pathlib import Path
 
 import pytest
@@ -39,8 +40,11 @@ def isolated_pkg_logger():
 
 @pytest.fixture
 def log_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
-    return tmp_path / "LocalAppData" / "dropboxignore"
+    if sys.platform == "win32":
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
+        return tmp_path / "LocalAppData" / "dropboxignore"
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    return tmp_path / "state" / "dropboxignore"
 
 
 def test_configured_logging_installs_rotating_handler(

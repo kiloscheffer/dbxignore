@@ -108,11 +108,13 @@ Environment variables read at daemon startup:
 | `DROPBOXIGNORE_LOG_LEVEL` | `INFO` | Daemon log level. |
 | `DROPBOXIGNORE_ROOT` | *(unset)* | Escape hatch for non-stock Dropbox installs: overrides `info.json` discovery and treats the given absolute path as the sole Dropbox root. If the path doesn't exist, a WARNING is logged and no roots are returned (so `dropboxignore apply` exits with "No Dropbox roots found"). |
 
-Logs:
-- Windows — `%LOCALAPPDATA%\dropboxignore\daemon.log` (rotated, 25 MB total).
-- Linux — daemon output goes to the systemd journal; read with `journalctl --user -u dropboxignore.service`.
+Logs (rotated, 25 MB total):
+- Windows — `%LOCALAPPDATA%\dropboxignore\daemon.log`.
+- Linux — `$XDG_STATE_HOME/dropboxignore/daemon.log` (fallback `~/.local/state/dropboxignore/daemon.log`). systemd-journal capture of stdout/stderr is incidental; the rotating file is authoritative.
 
-State: `%LOCALAPPDATA%\dropboxignore\state.json` (Windows). On Linux the state file path follows the same `state.default_path()` logic; check `dropboxignore status` output for the exact location.
+State:
+- Windows — `%LOCALAPPDATA%\dropboxignore\state.json`.
+- Linux — `$XDG_STATE_HOME/dropboxignore/state.json` (fallback `~/.local/state/dropboxignore/state.json`). Installs that pre-date the XDG move are read transparently from the legacy `~/AppData/Local/dropboxignore/state.json` for one release, with a WARNING; the next daemon write persists to the XDG path.
 
 ## License
 

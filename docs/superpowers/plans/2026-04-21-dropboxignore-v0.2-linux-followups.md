@@ -2,13 +2,13 @@
 
 Items surfaced during execution of [`2026-04-21-dropboxignore-v0.2-linux.md`](./2026-04-21-dropboxignore-v0.2-linux.md) that were intentionally deferred out of scope. Carry into v0.3 planning or address as standalone PRs.
 
-## 1. Linux state file path is Windows-styled
+## 1. Linux state file path is Windows-styled — **RESOLVED**
 
-`state.default_path()` reads `LOCALAPPDATA` on every platform. On Linux where `LOCALAPPDATA` is unset, the fallback resolves to `~/AppData/Local/dropboxignore/state.json` — a Windows-shaped directory tree sitting inside a Linux HOME. Functional but non-idiomatic; users expect XDG compliance.
+`state.default_path()` and `daemon._log_dir()` previously read `LOCALAPPDATA` on every platform, producing `~/AppData/Local/dropboxignore/...` on Linux — a Windows-shaped tree inside a Linux HOME. Functional but non-idiomatic.
 
-**Proposed fix:** branch on `sys.platform` the same way `roots._info_json_path()` does. Use `~/.local/state/dropboxignore/state.json` (XDG Base Directory spec) on Linux, preserve `LOCALAPPDATA` on Windows. Migration: first read from the new path; fall back to the legacy Windows-styled path on Linux for one release if present, log a warning, and persist going forward at the XDG path.
+**Fix:** platform branching now lives in a shared `state.user_state_dir()` helper that both `default_path()` and `daemon._log_dir()` call. Linux reads `$XDG_STATE_HOME` with a fallback to `~/.local/state`, under `dropboxignore/`; Windows preserves `LOCALAPPDATA` with the existing `~/AppData/Local` fallback. `state.read()` (no-arg form) transparently falls back to the legacy Linux path for one release, logs a WARNING naming both paths, and the next `write()` persists to the XDG path. Explicit `state.read(path)` is unaffected. Five tests in `tests/test_state.py` pin the contract (Windows + Linux happy paths, XDG_STATE_HOME fallback, legacy migration + warning, XDG-wins-when-both-exist, explicit-path-does-not-trigger-fallback). `tests/test_daemon_logging.py::log_dir` fixture now branches on platform to exercise the same code path for the log directory.
 
-Touches: `src/dropboxignore/state.py`, potentially `daemon.py` log-path derivation.
+Touched: `src/dropboxignore/state.py`, `src/dropboxignore/daemon.py`, `tests/test_state.py`, `tests/test_daemon_logging.py`, `CLAUDE.md`.
 
 ## 2. `cli.install` has no error handling — **RESOLVED**
 
@@ -45,6 +45,34 @@ Needs to be run on Kilo's Ubuntu VPS (or equivalent) with a real Dropbox install
 
 **Fix:** `roots.discover()` now checks `DROPBOXIGNORE_ROOT` before touching `info.json`. Set to an existing absolute path → `[Path(env)]`; nonexistent path → WARNING + `[]` (so the CLI's "No Dropbox roots found" surfaces rather than a silent no-op); empty string → treated as unset. Single-root only (spec); the override sits above `_info_json_path()` so it also works on platforms that return `None` there. Documented in README "Configuration" and CLAUDE.md "Gotchas". Four tests in `tests/test_roots.py` pin the contract (happy path, wins-over-info.json, empty-string fallback, missing-path WARNING).
 
+## 6. Retire the legacy Linux state-path fallback in v0.4
+
+Item 1's fix landed a Linux-only read-time fallback in `state.read()` that looks at the pre-XDG `~/AppData/Local/dropboxignore/state.json` when the XDG path is empty, logs a WARNING, and lets the next `write()` persist forward to the XDG path. The code and docs describe this as a **one-release** bridge, but there is no enforcement — without a tracked follow-up, the fallback will quietly become permanent and accumulate test-maintenance burden.
+
+**Proposed fix:** in the v0.4 branch, delete `state._legacy_linux_path`, delete the `sys.platform.startswith("linux")` block in `state.read()`, and delete the two migration tests in `tests/test_state.py` (`test_read_falls_back_to_legacy_linux_path_with_warning`, `test_read_prefers_xdg_when_both_exist`). The `test_read_explicit_path_does_not_trigger_legacy_fallback` test can go too since its whole premise is the bridge. Release notes for v0.4 should call out that users who are still running v0.1-era state files will get a fresh (zero-counter) state on first run.
+
+Touches: `src/dropboxignore/state.py`, `tests/test_state.py`, README "State" section.
+
+## 7. Linux daemon logs do not reach the systemd journal
+
+`_configured_logging()` installs a `RotatingFileHandler` and sets `propagate=False` on the `dropboxignore` package logger, which means every `logger.*` call bypasses stderr entirely. On Linux, systemd-journal therefore only captures what *escapes* the logging system — uncaught exceptions, subprocess prints, `watchdog`'s own stderr — and `journalctl --user -u dropboxignore.service` is mostly empty. Linux operators expect the opposite. (README v0.2 had to be corrected during item 1 to stop claiming "daemon output goes to the systemd journal.")
+
+**Design options:**
+- **A — dual sink.** On Linux, additionally attach a `StreamHandler(sys.stderr)` inside `_configured_logging()` so the rotating file *and* systemd capture the same records. Preserves Windows parity (file-based log is still authoritative for local inspection, rotation, and bundling into bug reports) and gives Linux ops `journalctl` parity. Cost: log records appear twice on disk (once in `daemon.log`, once in journald).
+- **B — journald-first on Linux.** Drop the file handler on Linux and rely on `journalctl` for rotation, filtering, and retention. More idiomatic, but loses the file-on-disk bundling that makes cross-platform bug reports uniform.
+
+Recommendation: A, for symmetry with Windows and to keep the Windows-shaped debugging workflow (grab `daemon.log`, send to maintainer) working identically on both platforms. Revisit if log volume ever matters.
+
+Touches: `src/dropboxignore/daemon.py` (`_configured_logging`), `tests/test_daemon_logging.py` (assert both handlers present on Linux), README "Logs" section.
+
+## 8. `uninstall --purge` leaves `state.json` and `daemon.log` behind
+
+`cli.uninstall --purge` clears every ignore marker it can find under the discovered roots but does not touch `state.default_path()` or `_log_dir()/daemon.log`. After `dropboxignore uninstall --purge`, two files linger under `%LOCALAPPDATA%\dropboxignore\` (Windows) or `~/.local/state/dropboxignore/` (Linux). Minor, but it violates the principle-of-least-surprise of `--purge` — the flag's docstring says "clear every ignore marker" which is narrower than user expectation.
+
+**Proposed fix:** either (a) broaden `--purge` to also delete `state.default_path()` and the rotating log files, and rename the docstring accordingly ("clear every ignore marker *and* local dropboxignore state"); or (b) add a second flag `--purge-state` for the state/log sweep, keeping `--purge` marker-only. Option (a) is what users seem to expect ("uninstall + purge = no trace left"); option (b) is safer because it prevents someone from losing sweep stats with a single keystroke.
+
+Touches: `src/dropboxignore/cli.py` (`uninstall`), `tests/test_install.py` (new assertions around post-purge filesystem state), README "Install" / "Uninstall" section.
+
 ---
 
 ## How these surfaced
@@ -52,3 +80,13 @@ Needs to be run on Kilo's Ubuntu VPS (or equivalent) with a real Dropbox install
 Items 1, 2, 5 surfaced in per-task code-quality reviews but were out of plan scope.
 Items 2, 3 also flagged by the end-of-branch end-to-end reviewer (see commit `957fd32` which addressed other findings from the same review).
 Item 4 is a plan-specified manual check that requires environmental access.
+Items 6, 7, 8 surfaced during the item-1 implementation pass and its README-accuracy audit.
+
+## Status
+
+Remaining open after v0.2 follow-ups:
+- Item 3 — Linux daemon smoke test (tracked for v0.3).
+- Item 4 — Manual Ubuntu VPS smoke verification (requires environmental access).
+- Item 6 — Retire legacy Linux state-path fallback (v0.4 branch).
+- Item 7 — Linux daemon logs → systemd journal (design decision + small code change).
+- Item 8 — `uninstall --purge` state/log cleanup (design decision: broaden `--purge` vs add `--purge-state`).

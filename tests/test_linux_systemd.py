@@ -41,6 +41,141 @@ def test_unit_file_content_appends_arguments(tmp_path):
     )
 
 
+def test_unit_content_has_no_environment_line_by_default():
+    from dropboxignore.install import linux_systemd
+
+    content = linux_systemd.build_unit_content(
+        Path("/usr/local/bin/dropboxignored"),
+    )
+    assert "Environment=" not in content
+
+
+def test_unit_content_emits_environment_before_exec_start():
+    """Environment= must appear inside [Service] and before ExecStart= so the
+    daemon sees the variable when it launches."""
+    from dropboxignore.install import linux_systemd
+
+    content = linux_systemd.build_unit_content(
+        Path("/usr/local/bin/dropboxignored"),
+        environment={"DROPBOXIGNORE_ROOT": "/home/kilo/dbx"},
+    )
+    assert 'Environment="DROPBOXIGNORE_ROOT=/home/kilo/dbx"' in content
+
+    service_section = content.split("[Service]", 1)[1].split("[Install]", 1)[0]
+    env_idx = service_section.index('Environment="DROPBOXIGNORE_ROOT=')
+    exec_idx = service_section.index("ExecStart=")
+    assert env_idx < exec_idx
+
+
+def test_unit_content_quotes_environment_value_with_spaces():
+    """Paths with spaces (e.g. ``/home/u/My Dropbox``) must survive intact —
+    the outer-quoted Environment= form wraps the whole KEY=VALUE so the
+    value can contain whitespace without systemd tokenizing on it."""
+    from dropboxignore.install import linux_systemd
+
+    content = linux_systemd.build_unit_content(
+        Path("/usr/local/bin/dropboxignored"),
+        environment={"DROPBOXIGNORE_ROOT": "/home/u/My Dropbox"},
+    )
+    assert 'Environment="DROPBOXIGNORE_ROOT=/home/u/My Dropbox"' in content
+
+
+def test_unit_content_escapes_backslash_and_quote_in_environment_value():
+    """Backslash and double-quote must be escaped so systemd's parser
+    doesn't misread them as escape sequences or an early end-of-string."""
+    from dropboxignore.install import linux_systemd
+
+    content = linux_systemd.build_unit_content(
+        Path("/usr/local/bin/dropboxignored"),
+        environment={"DROPBOXIGNORE_ROOT": r'/path with "quote" and \slash'},
+    )
+    assert (
+        r'Environment="DROPBOXIGNORE_ROOT=/path with \"quote\" and \\slash"'
+        in content
+    )
+
+
+def test_unit_content_accepts_none_environment():
+    """environment=None is equivalent to omitting the argument entirely."""
+    from dropboxignore.install import linux_systemd
+
+    content = linux_systemd.build_unit_content(
+        Path("/usr/local/bin/dropboxignored"),
+        environment=None,
+    )
+    assert "Environment=" not in content
+
+
+def test_install_propagates_dropboxignore_root_env(tmp_path, monkeypatch):
+    """When DROPBOXIGNORE_ROOT is set in the install process's env, the
+    generated unit must carry it forward — that's the fix for item 9."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("DROPBOXIGNORE_ROOT", "/home/kilo/dbx-smoke")
+    monkeypatch.setattr(
+        "dropboxignore.install.linux_systemd._detect_invocation",
+        lambda: (Path("/usr/local/bin/dropboxignored"), ""),
+    )
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda cmd, check, capture_output=False, text=False:
+            subprocess.CompletedProcess(cmd, 0, "", ""),
+    )
+
+    from dropboxignore.install import linux_systemd
+
+    linux_systemd.install_unit()
+
+    unit_path = tmp_path / ".config" / "systemd" / "user" / "dropboxignore.service"
+    assert 'Environment="DROPBOXIGNORE_ROOT=/home/kilo/dbx-smoke"' in unit_path.read_text()
+
+
+def test_install_omits_environment_when_dropboxignore_root_unset(tmp_path, monkeypatch):
+    """No env var → no Environment= line. Stock-Dropbox users shouldn't see
+    boilerplate they don't need."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("DROPBOXIGNORE_ROOT", raising=False)
+    monkeypatch.setattr(
+        "dropboxignore.install.linux_systemd._detect_invocation",
+        lambda: (Path("/usr/local/bin/dropboxignored"), ""),
+    )
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda cmd, check, capture_output=False, text=False:
+            subprocess.CompletedProcess(cmd, 0, "", ""),
+    )
+
+    from dropboxignore.install import linux_systemd
+
+    linux_systemd.install_unit()
+
+    unit_path = tmp_path / ".config" / "systemd" / "user" / "dropboxignore.service"
+    assert "Environment=" not in unit_path.read_text()
+
+
+def test_install_ignores_empty_dropboxignore_root(tmp_path, monkeypatch):
+    """Empty string means 'shell sourced a template with an unset placeholder' —
+    treat as unset rather than forwarding a meaningless blank value that would
+    cause ``roots.discover()`` to fall through to ``info.json`` anyway."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("DROPBOXIGNORE_ROOT", "")
+    monkeypatch.setattr(
+        "dropboxignore.install.linux_systemd._detect_invocation",
+        lambda: (Path("/usr/local/bin/dropboxignored"), ""),
+    )
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda cmd, check, capture_output=False, text=False:
+            subprocess.CompletedProcess(cmd, 0, "", ""),
+    )
+
+    from dropboxignore.install import linux_systemd
+
+    linux_systemd.install_unit()
+
+    unit_path = tmp_path / ".config" / "systemd" / "user" / "dropboxignore.service"
+    assert "Environment=" not in unit_path.read_text()
+
+
 def test_install_writes_unit_and_invokes_systemctl(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(

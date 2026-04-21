@@ -77,17 +77,13 @@ Touched: `src/dropboxignore/daemon.py`, `tests/test_daemon_logging.py`, `README.
 
 Touches: `src/dropboxignore/cli.py` (`uninstall`), `tests/test_install.py` (new assertions around post-purge filesystem state), README "Install" / "Uninstall" section.
 
-## 9. Systemd user unit doesn't propagate `DROPBOXIGNORE_ROOT`
+## 9. Systemd user unit doesn't propagate `DROPBOXIGNORE_ROOT` — **RESOLVED**
 
-The `install/linux_systemd.py` template writes a unit file with no `Environment=` directives. When a user exports `DROPBOXIGNORE_ROOT=/path/to/dir` in their shell and runs `dropboxignore install`, the resulting systemd user unit does *not* forward that value — the daemon launches with a clean env and calls `roots.discover()`, which falls back to looking for `~/.dropbox/info.json` and logs the usual "no Dropbox roots discovered; exiting" ERROR. Surfaced during item 4's VPS smoke, where a drop-in override at `~/.config/systemd/user/dropboxignore.service.d/scratch-root.conf` was the workaround.
+`install/linux_systemd.py` previously wrote a unit file with no `Environment=` directives, so a user who exported `DROPBOXIGNORE_ROOT=…` in their shell and ran `dropboxignore install` got a systemd-launched daemon that didn't see the variable — `roots.discover()` fell through to `~/.dropbox/info.json` discovery and logged "no Dropbox roots discovered; exiting".
 
-Two possible fixes (not mutually exclusive):
-- **Teach `install` to inject the env var.** If `os.environ.get("DROPBOXIGNORE_ROOT")` is set at install time, add a corresponding `Environment=DROPBOXIGNORE_ROOT=…` line to the generated unit. Simple, opt-out-by-unsetting-before-install, but baked in at install time — if the user later moves their Dropbox, they re-run `install`.
-- **Document the drop-in pattern in the README.** Cheap, keeps `install` dumb, makes the workaround discoverable for anyone hitting the same wall.
+**Fix:** `build_unit_content()` now accepts an optional `environment: dict[str, str]` and emits one `Environment="KEY=VALUE"` line per entry, placed in `[Service]` before `ExecStart=`. `install_unit()` reads `DROPBOXIGNORE_ROOT` from `os.environ` at install time (via a narrow `_FORWARDED_ENV_VARS` allow-list — other `DROPBOXIGNORE_*` tuning vars deliberately don't propagate) and forwards it into the unit. Empty-string and unset both skip the line; set-but-nonexistent paths still propagate (`roots.discover()` already handles the nonexistent-path WARNING). The outer-quoted form handles paths with spaces; `\\` and `"` in values are escaped by `_escape_systemd_env_value`. README Install-on-Linux section now calls out the "export before install" workflow. Eight tests in `tests/test_linux_systemd.py` pin the contract.
 
-The first option is probably sufficient. Requires a small change in `src/dropboxignore/install/linux_systemd.py` and a new test in `tests/test_linux_systemd.py`.
-
-Touches: `src/dropboxignore/install/linux_systemd.py`, `tests/test_linux_systemd.py`, optionally README "Install (Linux)" section.
+Touched: `src/dropboxignore/install/linux_systemd.py`, `tests/test_linux_systemd.py`, `README.md`.
 
 ---
 
@@ -105,4 +101,3 @@ Remaining open after v0.2 follow-ups:
 - Item 3 — Linux daemon smoke test (tracked for v0.3).
 - Item 6 — Retire legacy Linux state-path fallback (v0.4 branch).
 - Item 8 — `uninstall --purge` state/log cleanup (design decision: broaden `--purge` vs add `--purge-state`). Empirically confirmed by item 4's VPS run.
-- Item 9 — Systemd user unit doesn't propagate `DROPBOXIGNORE_ROOT`. Small code change + test.

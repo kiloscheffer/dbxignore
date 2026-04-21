@@ -14,16 +14,20 @@ def _stub_event(kind: str, src_path: str, is_directory: bool = False, dest_path:
     return e
 
 
-def test_classify_rules_file_created():
-    ev = _stub_event("created", r"C:\Dropbox\proj\.dropboxignore")
-    kind, key = daemon._classify(ev, roots=[Path(r"C:\Dropbox")])
+def test_classify_rules_file_created(tmp_path):
+    root = tmp_path
+    src = root / "proj" / ".dropboxignore"
+    ev = _stub_event("created", str(src))
+    kind, key = daemon._classify(ev, roots=[root])
     assert kind == EventKind.RULES
-    assert key == r"C:\Dropbox\proj\.dropboxignore".lower()
+    assert key == str(src).lower()
 
 
-def test_classify_directory_created():
-    ev = _stub_event("created", r"C:\Dropbox\proj\node_modules", is_directory=True)
-    kind, key = daemon._classify(ev, roots=[Path(r"C:\Dropbox")])
+def test_classify_directory_created(tmp_path):
+    root = tmp_path
+    src = root / "proj" / "node_modules"
+    ev = _stub_event("created", str(src), is_directory=True)
+    kind, _key = daemon._classify(ev, roots=[root])
     assert kind == EventKind.DIR_CREATE
 
 

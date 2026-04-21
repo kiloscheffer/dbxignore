@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import time
@@ -91,5 +92,13 @@ def _reconcile_path(path: Path, cache: RuleCache, report: Report) -> bool | None
         report.errors.append((path, f"write: {exc}"))
         # Write failed: the ADS state is still whatever we read.
         return currently_ignored
+    except OSError as exc:
+        if exc.errno in (errno.ENOTSUP, errno.EOPNOTSUPP):
+            logger.warning(
+                "Filesystem does not support ignore markers on %s: %s", path, exc
+            )
+            report.errors.append((path, f"unsupported: {exc}"))
+            return None
+        raise
 
     return currently_ignored

@@ -1,0 +1,12 @@
+{
+  "personal": {
+    "path": "C:\\Dropbox",
+    "host": 1234567890,
+    "is_team": false
+  },
+  "business": {
+    "path": "C:\\Dropbox (Work)",
+    "host": 9876543210,
+    "is_team": true
+  }
+}

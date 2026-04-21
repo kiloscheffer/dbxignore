@@ -1,0 +1,226 @@
+"""Command-line interface for dropboxignore."""
+
+from __future__ import annotations
+
+import logging
+import os
+import sys
+from pathlib import Path
+
+import click
+
+from dropboxignore import ads, reconcile, roots, state
+from dropboxignore.roots import find_containing
+from dropboxignore.rules import IGNORE_FILENAME, RuleCache
+
+logger = logging.getLogger(__name__)
+
+
+def _discover_roots() -> list[Path]:
+    """Indirection so tests can monkeypatch root discovery."""
+    return roots.discover()
+
+
+def _process_is_alive(pid: int | None) -> bool:
+    if pid is None:
+        return False
+    try:
+        import psutil
+        return psutil.pid_exists(pid)
+    except ImportError:
+        try:
+            os.kill(pid, 0)
+            return True
+        except (OSError, ProcessLookupError):
+            return False
+
+
+@click.group()
+@click.option("--verbose", "-v", is_flag=True, help="Enable DEBUG-level logging.")
+@click.pass_context
+def main(ctx: click.Context, verbose: bool) -> None:
+    """Manage hierarchical .dropboxignore rules for Dropbox on Windows."""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(level=level, format="%(levelname)s %(name)s: %(message)s")
+    ctx.ensure_object(dict)
+
+
+@main.command()
+@click.argument("path", required=False, type=click.Path(path_type=Path))
+def apply(path: Path | None) -> None:
+    """Run one reconcile pass (whole Dropbox, or a subtree)."""
+    discovered = _discover_roots()
+    if not discovered:
+        click.echo("No Dropbox roots found. Is Dropbox installed?", err=True)
+        sys.exit(2)
+
+    cache = RuleCache()
+    for r in discovered:
+        cache.load_root(r)
+
+    if path is None:
+        targets: list[tuple[Path, Path]] = [(r, r) for r in discovered]
+    else:
+        resolved = path.resolve()
+        matched_root = find_containing(resolved, discovered)
+        if matched_root is None:
+            click.echo(f"Path {path} is not under any Dropbox root.", err=True)
+            sys.exit(2)
+        targets = [(matched_root, resolved)]
+
+    total_marked = total_cleared = total_errors = 0
+    total_duration = 0.0
+    for r, subdir in targets:
+        report = reconcile.reconcile_subtree(r, subdir, cache)
+        total_marked += report.marked
+        total_cleared += report.cleared
+        total_errors += len(report.errors)
+        total_duration += report.duration_s
+
+    click.echo(
+        f"apply: marked={total_marked} cleared={total_cleared} "
+        f"errors={total_errors} duration={total_duration:.2f}s"
+    )
+
+
+@main.command()
+def status() -> None:
+    """Show daemon status and last sweep summary."""
+    s = state.read()
+    if s is None:
+        click.echo("dropboxignore: no state file found (daemon never ran).")
+        return
+
+    alive = _process_is_alive(s.daemon_pid)
+    click.echo(f"daemon: {'running' if alive else 'not running'} (pid={s.daemon_pid})")
+    if s.daemon_started:
+        click.echo(f"started: {s.daemon_started.isoformat()}")
+    if s.last_sweep:
+        click.echo(
+            f"last sweep: {s.last_sweep.isoformat()}  "
+            f"marked={s.last_sweep_marked} cleared={s.last_sweep_cleared} "
+            f"errors={s.last_sweep_errors}  duration={s.last_sweep_duration_s:.2f}s"
+        )
+    if s.last_error:
+        click.echo(f"last error: {s.last_error.path} — {s.last_error.message}")
+    for r in s.watched_roots:
+        click.echo(f"watching: {r}")
+
+
+@main.command("list")
+@click.argument("path", required=False, type=click.Path(path_type=Path))
+def list_ignored(path: Path | None) -> None:
+    """List every path currently bearing the com.dropbox.ignored ADS marker."""
+    discovered = _discover_roots()
+    if not discovered:
+        click.echo("No Dropbox roots found.", err=True)
+        sys.exit(2)
+
+    if path is None:
+        targets = discovered
+    else:
+        target = path.resolve()
+        if find_containing(target, discovered) is None:
+            click.echo(f"Path {path} is not under any Dropbox root.", err=True)
+            sys.exit(2)
+        targets = [target]
+
+    for target in targets:
+        for current, dirnames, filenames in os.walk(target, followlinks=False):
+            current_path = Path(current)
+            kept_dirs: list[str] = []
+            for name in dirnames:
+                p = current_path / name
+                try:
+                    if ads.is_ignored(p):
+                        click.echo(str(p))
+                    else:
+                        kept_dirs.append(name)
+                except (FileNotFoundError, PermissionError):
+                    kept_dirs.append(name)
+            dirnames[:] = kept_dirs
+            for name in filenames:
+                p = current_path / name
+                try:
+                    if ads.is_ignored(p):
+                        click.echo(str(p))
+                except (FileNotFoundError, PermissionError):
+                    continue
+
+
+@main.command()
+@click.argument("path", type=click.Path(exists=False, path_type=Path))
+def explain(path: Path) -> None:
+    """Show which .dropboxignore rule (if any) matches the path."""
+    discovered = _discover_roots()
+    if not discovered:
+        click.echo("No Dropbox roots found.", err=True)
+        sys.exit(2)
+
+    cache = RuleCache()
+    for r in discovered:
+        cache.load_root(r)
+
+    matches = cache.explain(path.resolve())
+    if not matches:
+        click.echo(f"no match for {path}")
+        return
+    for m in matches:
+        arrow = "!" if m.negation else "="
+        click.echo(f"{m.ignore_file}:{m.line}: {arrow} {m.pattern}")
+
+
+@main.command()
+def daemon() -> None:
+    """Run the watcher + hourly sweep daemon (foreground)."""
+    from dropboxignore import daemon as daemon_mod
+    daemon_mod.run()
+
+
+@main.command()
+def install() -> None:
+    """Register the daemon as a Task Scheduler entry (logon trigger)."""
+    from dropboxignore import install as install_mod
+    install_mod.install_task()
+    click.echo("Installed scheduled task 'dropboxignore'.")
+
+
+@main.command()
+@click.option("--purge", is_flag=True, help="Also clear every com.dropbox.ignored marker.")
+def uninstall(purge: bool) -> None:
+    """Remove the scheduled task. With --purge, also clear all ADS markers."""
+    from dropboxignore import install as install_mod
+    try:
+        install_mod.uninstall_task()
+    except RuntimeError as exc:
+        click.echo(f"Failed to uninstall scheduled task: {exc}", err=True)
+        sys.exit(2)
+    click.echo("Uninstalled scheduled task 'dropboxignore'.")
+
+    if purge:
+        discovered = _discover_roots()
+        cleared = 0
+        for r in discovered:
+            for current, dirnames, filenames in os.walk(r, followlinks=False):
+                current_path = Path(current)
+                for name in dirnames + filenames:
+                    p = current_path / name
+                    try:
+                        if ads.is_ignored(p):
+                            if p.name == IGNORE_FILENAME:
+                                logger.warning(
+                                    ".dropboxignore at %s was marked ignored; "
+                                    "overriding back to synced",
+                                    p,
+                                )
+                            ads.clear_ignored(p)
+                            cleared += 1
+                    except (FileNotFoundError, PermissionError):
+                        continue
+        click.echo(f"Cleared {cleared} com.dropbox.ignored markers.")
+
+
+def daemon_main() -> None:
+    """Entry point for the dropboxignored script shim."""
+    sys.argv.insert(1, "daemon")
+    main()

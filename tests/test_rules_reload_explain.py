@@ -152,3 +152,53 @@ def test_rulecache_conflicts_removed_when_file_removed(tmp_path):
 
     cache.remove_file(ignore_file)
     assert cache.conflicts() == []
+
+
+def test_rulecache_conflicts_do_not_leak_across_roots(tmp_path):
+    """A conflict in root A must not appear in root B's conflicts list.
+    The is_relative_to(root) filter in _build_sequence is what prevents
+    this leakage; this test guards that filter."""
+    from dropboxignore.rules import RuleCache
+
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    root_a.mkdir()
+    root_b.mkdir()
+    (root_a / ".dropboxignore").write_text(
+        "build/\n!build/keep/\n", encoding="utf-8"
+    )
+    (root_b / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+
+    cache = RuleCache()
+    cache.load_root(root_a)
+    cache.load_root(root_b)
+
+    conflicts = cache.conflicts()
+    assert len(conflicts) == 1
+    assert conflicts[0].dropped_source.is_relative_to(root_a)
+
+
+def test_rulecache_detects_cross_file_conflict(tmp_path):
+    """Root .dropboxignore ignores build/; a nested .dropboxignore inside
+    build/ tries to re-include keep/. The conflict spans two files —
+    _build_sequence must order the root file before the nested one so
+    the negation in the nested file sees `build/` as an earlier include."""
+    from dropboxignore.rules import RuleCache
+
+    root = tmp_path
+    (root / "build").mkdir()
+    (root / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+    (root / "build" / ".dropboxignore").write_text(
+        "!keep/\n", encoding="utf-8"
+    )
+
+    cache = RuleCache()
+    cache.load_root(root)
+
+    conflicts = cache.conflicts()
+    assert len(conflicts) == 1
+    c = conflicts[0]
+    assert c.dropped_source == (root / "build" / ".dropboxignore").resolve()
+    assert c.masking_source == (root / ".dropboxignore").resolve()
+    assert c.dropped_pattern == "!keep/"
+    assert c.masking_pattern == "build/"

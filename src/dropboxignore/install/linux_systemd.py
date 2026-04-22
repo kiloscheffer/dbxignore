@@ -144,3 +144,25 @@ def uninstall_unit() -> None:
         path.unlink()
         logger.info("Removed %s", path)
     _run_systemctl(["systemctl", "--user", "daemon-reload"])
+
+
+def remove_dropin_directory() -> Path | None:
+    """Remove the systemd drop-in directory for the unit, if it exists.
+
+    Drop-in directories live at ``~/.config/systemd/user/<unit-name>.d/``
+    and are where users put ``Environment=`` overrides (see the
+    "Install (Linux)" section of the README). On a full `--purge`
+    uninstall, we clean this up too so no dropboxignore-related artifacts
+    linger.
+
+    Returns the path that was removed, or ``None`` if HOME is unset or
+    the directory didn't exist.
+    """
+    home = os.environ.get("HOME")
+    if not home:
+        return None
+    dropin_dir = Path(home) / ".config" / "systemd" / "user" / f"{UNIT_NAME}.d"
+    if not dropin_dir.exists():
+        return None
+    shutil.rmtree(dropin_dir)
+    return dropin_dir

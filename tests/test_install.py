@@ -109,3 +109,179 @@ def test_cli_install_reports_backend_failure(monkeypatch):
     assert "Failed to install daemon service" in result.output
     assert "Access is denied" in result.output
     assert "Installed dropboxignore daemon service" not in result.output
+
+
+def test_purge_removes_state_json(tmp_path, monkeypatch, fake_markers):
+    """--purge deletes state.default_path()."""
+    import click.testing
+
+    from dropboxignore import cli, state
+
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    state_json = state_dir / "state.json"
+    state_json.write_text('{"schema": 1}', encoding="utf-8")
+
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [])
+    monkeypatch.setattr(
+        "dropboxignore.install.uninstall_service", lambda: None
+    )
+
+    result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
+    assert result.exit_code == 0
+    assert not state_json.exists()
+
+
+def test_purge_removes_daemon_log_and_rotations(tmp_path, monkeypatch, fake_markers):
+    """--purge deletes daemon.log plus rotated daemon.log.1..4."""
+    import click.testing
+
+    from dropboxignore import cli, state
+
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    for name in ["daemon.log", "daemon.log.1", "daemon.log.2", "daemon.log.3", "daemon.log.4"]:
+        (state_dir / name).write_text("entry\n", encoding="utf-8")
+
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [])
+    monkeypatch.setattr(
+        "dropboxignore.install.uninstall_service", lambda: None
+    )
+
+    result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
+    assert result.exit_code == 0
+    for name in ["daemon.log", "daemon.log.1", "daemon.log.2", "daemon.log.3", "daemon.log.4"]:
+        assert not (state_dir / name).exists(), f"{name} survived --purge"
+
+
+def test_purge_rmdirs_empty_state_dir(tmp_path, monkeypatch, fake_markers):
+    """After files are deleted, if the state dir is empty, rmdir removes it."""
+    import click.testing
+
+    from dropboxignore import cli, state
+
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    (state_dir / "state.json").write_text('{"schema": 1}', encoding="utf-8")
+
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [])
+    monkeypatch.setattr(
+        "dropboxignore.install.uninstall_service", lambda: None
+    )
+
+    click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
+    assert not state_dir.exists()
+
+
+def test_purge_preserves_state_dir_with_foreign_content(tmp_path, monkeypatch, fake_markers):
+    """If the user has dropped something else in the state dir, rmdir fails
+    silently and we preserve their content."""
+    import click.testing
+
+    from dropboxignore import cli, state
+
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    (state_dir / "state.json").write_text('{"schema": 1}', encoding="utf-8")
+    (state_dir / "user-authored-note.txt").write_text(
+        "my notes on the ignore config\n", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [])
+    monkeypatch.setattr(
+        "dropboxignore.install.uninstall_service", lambda: None
+    )
+
+    click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
+    # State dir survives because it's not empty.
+    assert state_dir.exists()
+    # Our file is gone.
+    assert not (state_dir / "state.json").exists()
+    # Their file survives.
+    assert (state_dir / "user-authored-note.txt").exists()
+
+
+def test_purge_handles_missing_state_dir(tmp_path, monkeypatch, fake_markers):
+    """--purge on a fresh install (no state dir yet) succeeds cleanly."""
+    import click.testing
+
+    from dropboxignore import cli, state
+
+    state_dir = tmp_path / "never_created"
+
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [])
+    monkeypatch.setattr(
+        "dropboxignore.install.uninstall_service", lambda: None
+    )
+
+    result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
+    assert result.exit_code == 0
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux-only")
+def test_purge_removes_systemd_dropin_dir(tmp_path, monkeypatch, fake_markers):
+    """On Linux, --purge also removes ~/.config/systemd/user/<unit>.d/."""
+    import click.testing
+
+    from dropboxignore import cli, state
+
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+
+    dropin_dir = tmp_path / ".config" / "systemd" / "user" / "dropboxignore.service.d"
+    dropin_dir.mkdir(parents=True)
+    (dropin_dir / "scratch-root.conf").write_text(
+        "[Service]\nEnvironment=DROPBOXIGNORE_ROOT=/home/u/dbx\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [])
+    monkeypatch.setattr(
+        "dropboxignore.install.uninstall_service", lambda: None
+    )
+
+    click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
+    assert not dropin_dir.exists()
+
+
+def test_purge_preserves_files_not_matching_daemon_log_rotation(
+    tmp_path, monkeypatch, fake_markers
+):
+    """RotatingFileHandler only creates daemon.log and daemon.log.<N>.
+    Files like `daemon.log_backup` or `daemon.logger` are not our artifacts —
+    even if they start with `daemon.log`. --purge must not touch them."""
+    import click.testing
+
+    from dropboxignore import cli, state
+
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    (state_dir / "daemon.log").write_text("entry\n", encoding="utf-8")
+    (state_dir / "daemon.log.1").write_text("entry\n", encoding="utf-8")
+    # These names start with "daemon.log" but aren't rotation files:
+    (state_dir / "daemon.log_backup").write_text("user content\n", encoding="utf-8")
+    (state_dir / "daemon.logger").write_text("user content\n", encoding="utf-8")
+
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [])
+    monkeypatch.setattr(
+        "dropboxignore.install.uninstall_service", lambda: None
+    )
+
+    click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
+
+    # Rotation files gone.
+    assert not (state_dir / "daemon.log").exists()
+    assert not (state_dir / "daemon.log.1").exists()
+    # User content preserved.
+    assert (state_dir / "daemon.log_backup").exists()
+    assert (state_dir / "daemon.logger").exists()
+    # State dir survives because user content remains.
+    assert state_dir.exists()

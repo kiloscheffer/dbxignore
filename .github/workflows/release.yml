@@ -25,7 +25,9 @@ jobs:
         run: uv build
 
       - name: Build Windows binaries
-        run: uv run pyinstaller pyinstaller/dropboxignore.spec
+        # pyinstaller is a build-only tool, not a runtime or dev dep — install
+        # ephemerally for this run rather than declaring it in pyproject.toml.
+        run: uv run --with pyinstaller pyinstaller pyinstaller/dropboxignore.spec
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2

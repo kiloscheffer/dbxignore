@@ -53,7 +53,17 @@ def _purge_local_state() -> None:
     state_json = state.default_path()
     if state_json.exists():
         candidates.append(state_json)
-    candidates.extend(sorted(state_dir.glob("daemon.log*")))
+    # Base file plus RotatingFileHandler backups. The handler only creates
+    # integer-suffixed rotations (daemon.log, daemon.log.1, daemon.log.2, ...).
+    # A bare glob `daemon.log*` would also catch unrelated files like
+    # `daemon.log_backup`, which we must not silently delete.
+    base_log = state_dir / "daemon.log"
+    if base_log.exists():
+        candidates.append(base_log)
+    for p in sorted(state_dir.glob("daemon.log.*")):
+        suffix = p.name.removeprefix("daemon.log.")
+        if suffix.isdigit():
+            candidates.append(p)
 
     removed = 0
     for p in candidates:

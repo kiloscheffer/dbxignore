@@ -65,7 +65,9 @@ The daemon's watchdog events are classified (`_classify` → `EventKind.{RULES,D
 ## Release
 
 - `.github/workflows/test.yml` runs ruff + the portable pytest subset on `ubuntu-latest` and `windows-latest` for every push/PR. The Windows leg additionally runs `pytest -m windows_only`; the Linux leg additionally runs `pytest -m linux_only`.
-- Push tag `v*` → `.github/workflows/release.yml` builds wheel + `dropboxignore.exe` / `dropboxignored.exe` (via `pyinstaller/dropboxignore.spec`) and publishes a GitHub Release.
+- Push tag `v*` → `.github/workflows/release.yml` builds wheel + `dropboxignore.exe` / `dropboxignored.exe` (via `pyinstaller/dropboxignore.spec`) and publishes a GitHub Release. `hatch-vcs` derives the version from the tag — no manual `pyproject.toml` bump needed.
+- `CHANGELOG.md` at repo root follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): new entries accrue under an `[Unreleased]` heading (add it at the top when the first post-release change lands) and roll into a version heading with its release date when the tag goes out. Hand-crafted per-version release bodies live under `docs/release-notes/v<X.Y.Z>.md` for use with `gh release edit v<X.Y.Z> --notes-file docs/release-notes/v<X.Y.Z>.md` after the workflow publishes.
+- This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes ride MINOR bumps with explicit **Breaking** callouts in the CHANGELOG — v0.2.0 introduced two (broadened `--purge`, changed `explain` format). Post-1.0, breaking changes will bump MAJOR.
 
 ## Docs
 

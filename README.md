@@ -35,7 +35,7 @@ To uninstall:
 
 ```bash
 dropboxignore uninstall                  # disables unit, removes the file
-dropboxignore uninstall --purge          # also clears every xattr marker
+dropboxignore uninstall --purge          # clears markers, state files, logs, systemd drop-in
 ```
 
 Notes:
@@ -85,7 +85,7 @@ target/
 
 | Command | Purpose |
 |---|---|
-| `dropboxignore install` / `uninstall` | Register / remove the daemon with the platform's user-scoped service manager (Task Scheduler on Windows, systemd user unit on Linux). `uninstall --purge` also clears every existing marker (any stray marker on a `.dropboxignore` file itself is logged at `WARNING` before being cleared). |
+| `dropboxignore install` / `uninstall` | Register / remove the daemon with the platform's user-scoped service manager (Task Scheduler on Windows, systemd user unit on Linux). `uninstall --purge` also clears every existing marker, removes local dropboxignore state (`state.json`, `daemon.log*`, the state directory), and on Linux removes any systemd drop-in directory. Any stray marker on a `.dropboxignore` file itself is logged at `WARNING` before being cleared. |
 | `dropboxignore daemon` | Run the watcher + hourly sweep in the foreground. Usually invoked by Task Scheduler. |
 | `dropboxignore apply [PATH]` | One-shot reconcile of the whole Dropbox (or a subtree). |
 | `dropboxignore status` | Is the daemon running? Last sweep counts, last error. |

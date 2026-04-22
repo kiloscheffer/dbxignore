@@ -45,3 +45,10 @@ jobs:
             dist/dropboxignore.exe
             dist/dropboxignored.exe
           generate_release_notes: true
+          # When `GH_RELEASE_TOKEN` is configured as a repo secret (a PAT with
+          # `contents: write` scope belonging to the repo owner), releases are
+          # authored under the owner's GitHub identity. Falls back to the
+          # default `github.token` (author: github-actions[bot]) when the
+          # secret isn't set, so the workflow never fails because of a
+          # missing secret — it just reverts to the bot-author attribution.
+          token: ${{ secrets.GH_RELEASE_TOKEN || github.token }}

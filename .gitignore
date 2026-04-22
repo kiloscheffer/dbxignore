@@ -11,3 +11,6 @@ src/dropboxignore/_version.py
 .uv/
 *.dist-info/
 __editable__*.pth
+
+# Claude Code session state (ScheduleWakeup lock files, etc.)
+.claude/

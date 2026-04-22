@@ -21,6 +21,21 @@ def _discover_roots() -> list[Path]:
     return roots.discover()
 
 
+def _format_ignore_file_loc(path: Path, roots: list[Path]) -> str:
+    """Return path relative to the nearest root, or absolute if none matches.
+
+    Used by ``status`` and ``explain`` to show compact source locations for
+    conflicted rules.
+    """
+    for r in roots:
+        try:
+            rel = path.relative_to(r)
+            return str(rel)
+        except ValueError:
+            continue
+    return str(path)
+
+
 def _process_is_alive(pid: int | None) -> bool:
     if pid is None:
         return False
@@ -56,7 +71,7 @@ def apply(path: Path | None) -> None:
 
     cache = RuleCache()
     for r in discovered:
-        cache.load_root(r)
+        cache.load_root(r, log_warnings=False)
 
     if path is None:
         targets: list[tuple[Path, Path]] = [(r, r) for r in discovered]
@@ -89,22 +104,40 @@ def status() -> None:
     s = state.read()
     if s is None:
         click.echo("dropboxignore: no state file found (daemon never ran).")
-        return
+    else:
+        alive = _process_is_alive(s.daemon_pid)
+        click.echo(f"daemon: {'running' if alive else 'not running'} (pid={s.daemon_pid})")
+        if s.daemon_started:
+            click.echo(f"started: {s.daemon_started.isoformat()}")
+        if s.last_sweep:
+            click.echo(
+                f"last sweep: {s.last_sweep.isoformat()}  "
+                f"marked={s.last_sweep_marked} cleared={s.last_sweep_cleared} "
+                f"errors={s.last_sweep_errors}  duration={s.last_sweep_duration_s:.2f}s"
+            )
+        if s.last_error:
+            click.echo(f"last error: {s.last_error.path} — {s.last_error.message}")
+        for r in s.watched_roots:
+            click.echo(f"watching: {r}")
 
-    alive = _process_is_alive(s.daemon_pid)
-    click.echo(f"daemon: {'running' if alive else 'not running'} (pid={s.daemon_pid})")
-    if s.daemon_started:
-        click.echo(f"started: {s.daemon_started.isoformat()}")
-    if s.last_sweep:
-        click.echo(
-            f"last sweep: {s.last_sweep.isoformat()}  "
-            f"marked={s.last_sweep_marked} cleared={s.last_sweep_cleared} "
-            f"errors={s.last_sweep_errors}  duration={s.last_sweep_duration_s:.2f}s"
-        )
-    if s.last_error:
-        click.echo(f"last error: {s.last_error.path} — {s.last_error.message}")
-    for r in s.watched_roots:
-        click.echo(f"watching: {r}")
+    # Conflicts section — present only when RuleCache has any.
+    # Skip the rule-cache walk entirely when there are no roots — otherwise
+    # `status` pays for an rglob we don't need.
+    discovered = _discover_roots()
+    if discovered:
+        cache = RuleCache()
+        for r in discovered:
+            cache.load_root(r, log_warnings=False)
+        conflicts = cache.conflicts()
+        if conflicts:
+            click.echo(f"rule conflicts ({len(conflicts)}):")
+            for c in conflicts:
+                dropped_loc = _format_ignore_file_loc(c.dropped_source, discovered)
+                masking_loc = _format_ignore_file_loc(c.masking_source, discovered)
+                click.echo(
+                    f"  {dropped_loc}:{c.dropped_line}  {c.dropped_pattern}  "
+                    f"masked by {masking_loc}:{c.masking_line}  {c.masking_pattern}"
+                )
 
 
 @main.command("list")
@@ -151,7 +184,13 @@ def list_ignored(path: Path | None) -> None:
 @main.command()
 @click.argument("path", type=click.Path(exists=False, path_type=Path))
 def explain(path: Path) -> None:
-    """Show which .dropboxignore rule (if any) matches the path."""
+    """Show which .dropboxignore rule (if any) matches the path.
+
+    Dropped negations (rules that can't take effect because an ancestor
+    directory is ignored) appear prefixed with ``[dropped]`` and a pointer
+    to the masking rule. See README §"Negations and Dropbox's ignore
+    inheritance" for why.
+    """
     discovered = _discover_roots()
     if not discovered:
         click.echo("No Dropbox roots found.", err=True)
@@ -159,15 +198,30 @@ def explain(path: Path) -> None:
 
     cache = RuleCache()
     for r in discovered:
-        cache.load_root(r)
+        cache.load_root(r, log_warnings=False)
 
     matches = cache.explain(path.resolve())
     if not matches:
         click.echo(f"no match for {path}")
         return
+
+    # Build lookup: (source, line) -> Conflict so we can annotate dropped rows.
+    conflicts_by_drop = {
+        (c.dropped_source, c.dropped_line): c
+        for c in cache.conflicts()
+    }
+
     for m in matches:
-        arrow = "!" if m.negation else "="
-        click.echo(f"{m.ignore_file}:{m.line}: {arrow} {m.pattern}")
+        loc = _format_ignore_file_loc(m.ignore_file, discovered)
+        prefix = "[dropped]  " if m.is_dropped else ""
+        raw = m.pattern.strip()
+        suffix = ""
+        if m.is_dropped:
+            c = conflicts_by_drop.get((m.ignore_file, m.line))
+            if c is not None:
+                masking_loc = _format_ignore_file_loc(c.masking_source, discovered)
+                suffix = f"  (masked by {masking_loc}:{c.masking_line})"
+        click.echo(f"{loc}:{m.line}  {prefix}{raw}{suffix}")
 
 
 @main.command()

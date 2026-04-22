@@ -87,31 +87,13 @@ Touches: `src/dropboxignore/cli.py` (`uninstall`), `tests/test_install.py` (new 
 
 Touched: `src/dropboxignore/install/linux_systemd.py`, `tests/test_linux_systemd.py`, `README.md`.
 
-## 10. Prune + negation leaves stale markers on children of ignored directories
+## 10. Prune + negation leaves stale markers — **RESOLVED**
 
-`reconcile_subtree()` prunes descent at any directory whose `_reconcile_path` returns True (ignored) — a correctness-preserving optimization under normal gitignore semantics, since once a parent is ignored Dropbox won't sync its contents. But when a user adds a negation rule like `!build/keep/` after `build/keep/` has already been marked (e.g. because DIR_CREATE dispatched with the old rule cache before RULES reloaded), the subsequent full-tree reconcile marks `build/`, prunes descent into it, and never visits `build/keep/` to evaluate the negation. The stale child marker persists indefinitely — neither event-driven reconciles nor the hourly sweep recover it, because both use the same `reconcile_subtree` code path.
+The prune optimization is correct under Dropbox's inheritance model (once a directory is marked, Dropbox skips all descendants). What we actually had was a semantic mismatch: `.dropboxignore` accepted gitignore-style negations whose targets live under ignored ancestors, but Dropbox's inheritance makes those negations inert regardless of xattr state.
 
-Reproducer — flaky on Linux, masked on Windows by ReadDirectoryChangesW timing:
+**Fix:** detect such conflicts statically at rule-load time, drop the conflicted negation from the active rule set, and surface the conflict via the daemon log (WARNING), `dropboxignore status`, and `dropboxignore explain`. Prune stays. See the [negation-semantics design doc](../specs/2026-04-21-dropboxignore-negation-semantics.md) for the full rationale and algorithm.
 
-```
-1. Write .dropboxignore = `build/\n`
-2. mkdir build/  → marked
-3. Rewrite .dropboxignore = `build/\n!build/keep/\n`
-4. mkdir build/keep/
-   — DIR_CREATE fires first (0ms debounce) with OLD cache (`build/`) → marks build/keep/
-   — RULES fires 100ms later, reloads with new rules, reconciles root
-   — reconcile at `build/` → still matches → prune, no descent
-   — `build/keep/` never re-evaluated, keeps stale marker
-```
-
-Surfaced by item 3's Linux daemon smoke: the Windows smoke test with this exact scenario passes reliably because ReadDirectoryChangesW timing makes RULES dispatch before DIR_CREATE, so the child is never marked in the first place. inotify fires DIR_CREATE near-instantly and wins the race. The Linux smoke was narrowed to a rule-add/remove scenario that doesn't hit this edge case.
-
-**Proposed fix:** options, none trivial:
-- Always descend on rule-change reconciles (skip the prune optimization when the cache reloaded since the last full sweep). Adds per-sweep cost on big trees but is localized.
-- Detect negation patterns whose prefix is ignored, schedule a targeted second reconcile pass on those subtrees. More complex but doesn't regress perf in the common case.
-- Give up the prune optimization entirely. Adds maybe hundreds of ms to a 50k-file sweep — possibly acceptable given sweeps are hourly.
-
-Touches: `src/dropboxignore/reconcile.py`, `tests/test_reconcile_basic.py` (new test reproducing the stale-marker scenario).
+Touched: `src/dropboxignore/rules.py`, `src/dropboxignore/cli.py`, `tests/test_rules_conflicts.py` (new), `tests/test_rules_reload_explain.py`, `tests/test_cli_status_list_explain.py`, `tests/test_daemon_smoke.py` (Windows assertions flipped), `tests/test_daemon_smoke_linux.py` (negation sub-test added), `README.md`, `CLAUDE.md`.
 
 ---
 
@@ -129,4 +111,3 @@ Item 10 surfaced during item 3's Linux daemon smoke — a negation-based asserti
 Remaining open after v0.2 follow-ups:
 - Item 6 — Retire legacy Linux state-path fallback (v0.4 branch).
 - Item 8 — `uninstall --purge` state/log cleanup (design decision: broaden `--purge` vs add `--purge-state`). Empirically confirmed by item 4's VPS run.
-- Item 10 — Prune + negation leaves stale markers on children of ignored directories. Real product bug; cross-platform but surfaced on Linux due to inotify timing.

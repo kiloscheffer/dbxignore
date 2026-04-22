@@ -39,6 +39,47 @@ def _build_spec(lines: list[str]) -> pathspec.PathSpec:
     return pathspec.PathSpec.from_lines(_CaseInsensitiveGitIgnorePattern, lines)
 
 
+def literal_prefix(pattern: str) -> str | None:
+    """Return the leading literal path segments of a gitignore pattern.
+
+    The returned value is the prefix up to (and including) the last ``/``
+    before the first glob metacharacter (``*``, ``?``, ``[``), or the whole
+    pattern if it contains no glob. A leading ``/`` anchor is stripped.
+
+    Returns ``None`` when there is no literal anchor — e.g. patterns that
+    begin with a glob (``**/cache/``), or that place a glob inside the first
+    segment (``foo*/bar/``). The detection layer uses ``None`` to skip
+    conflict analysis for that pattern (documented limitation).
+
+    Input is the path portion of a gitignore pattern. Callers should pass
+    the raw line with any leading ``!`` already stripped — pathspec
+    already tracks include vs. negation via ``pattern.include``.
+    """
+    if not pattern:
+        return None
+    p = pattern.lstrip("/")
+    if not p:
+        return None
+    boundary = next(
+        (i for i, c in enumerate(p) if c in "*?["),
+        len(p),
+    )
+    if boundary < len(p):
+        last_sep = p[:boundary].rfind("/")
+        if last_sep == -1:
+            return None
+        return p[:last_sep + 1]
+    # No glob present: return whole pattern. If it ends in `/`, we keep the
+    # trailing slash; otherwise we cut at the last `/` so the prefix is a
+    # directory-shaped string (the detector walks directory ancestors).
+    if "/" not in p:
+        return p
+    if p.endswith("/"):
+        return p
+    last_sep = p.rfind("/")
+    return p[:last_sep + 1]
+
+
 @dataclass(frozen=True)
 class Match:
     """A single matching rule for the ``explain`` diagnostic."""
@@ -47,6 +88,127 @@ class Match:
     line: int
     pattern: str
     negation: bool
+    is_dropped: bool = False
+
+
+@dataclass(frozen=True)
+class Conflict:
+    """A dropped negation rule and the earlier include rule that masks it.
+
+    Emitted by ``RuleCache._recompute_conflicts`` when a negation's literal
+    prefix lives under a directory matched by an earlier include rule —
+    Dropbox's ignored-folder inheritance makes such negations inert. Used
+    for the WARNING log, ``dropboxignore status`` reporting, and the
+    ``[dropped]`` annotation in ``explain()`` output.
+    """
+
+    dropped_source: Path      # the .dropboxignore file containing the negation
+    dropped_line: int         # 1-based source line of the negation
+    dropped_pattern: str      # raw pattern text (e.g. "!build/keep/")
+    masking_source: Path      # the .dropboxignore file containing the include
+    masking_line: int         # 1-based source line of the masking include
+    masking_pattern: str      # raw pattern text (e.g. "build/")
+
+
+def _ancestors_of(prefix: str, ancestor_dir: Path, root: Path) -> list[Path]:
+    """Yield absolute ancestor directory paths for a negation's literal prefix.
+
+    The negation's literal prefix is relative to its own ``.dropboxignore``
+    file's directory (``ancestor_dir``). We produce absolute directory paths
+    starting from the prefix itself (if it's a directory shape) and walking
+    up to ``root``, inclusive.
+
+    Example: prefix=``build/keep/``, ancestor_dir=``/root``, root=``/root``
+    yields ``[/root/build/keep, /root/build, /root]``.
+    """
+    # Resolve the prefix against its scoping directory and strip the trailing
+    # slash so we can navigate via Path.parent.
+    target = (ancestor_dir / prefix.rstrip("/")).resolve()
+    results: list[Path] = []
+    current = target
+    while True:
+        results.append(current)
+        if current == root:
+            break
+        if not current.is_relative_to(root):
+            # Target escapes the root (unusual; likely malformed rule). Stop.
+            break
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return results
+
+
+def _find_masking_include(
+    earlier_entries: list, ancestors: list[Path]
+) -> object | None:
+    """Return the first earlier include whose pattern matches any ancestor.
+
+    The ancestor is expressed as a path relative to each include's
+    ``ancestor_dir`` (directory-shaped, with trailing slash), so pathspec's
+    directory-rule matching fires.
+    """
+    for earlier in earlier_entries:
+        if not earlier.pattern.include:
+            continue
+        for anc in ancestors:
+            try:
+                rel = anc.relative_to(earlier.ancestor_dir).as_posix() + "/"
+            except ValueError:
+                # This ancestor isn't under the earlier rule's scope.
+                continue
+            if earlier.pattern.match_file(rel) is not None:
+                return earlier
+    return None
+
+
+def _detect_conflicts(
+    sequence: list, *, root: Path
+) -> list[Conflict]:
+    """Static rule-conflict detection.
+
+    Input ``sequence`` is a list of entries in evaluation order. Each entry
+    must expose ``source`` (Path), ``line`` (int, 1-based), ``raw`` (str,
+    the source-line text), ``ancestor_dir`` (Path, the scoping directory
+    of the pattern), and ``pattern`` (a pathspec pattern with ``.include``
+    and ``.match_file``).
+
+    Returns one ``Conflict`` per negation entry whose literal prefix is
+    matched-as-ignored by any earlier include rule in the sequence.
+    Skips negations whose pattern has no extractable literal prefix
+    (documented limitation for glob-prefix patterns).
+    """
+    conflicts: list[Conflict] = []
+    for i, entry in enumerate(sequence):
+        if entry.pattern.include:
+            continue  # include rules are potential masks, not subjects
+        # Strip the leading `!` before extracting the literal prefix.
+        raw = entry.raw.lstrip()
+        if raw.startswith("!"):
+            raw = raw[1:]
+        prefix = literal_prefix(raw)
+        if prefix is None:
+            continue
+        if not prefix.endswith("/"):
+            # File-level target; Dropbox's ignored-folder inheritance only
+            # applies to directories. A rule like `*.log` + `!important.log`
+            # has no ancestor-inheritance conflict to flag.
+            continue
+        ancestors = _ancestors_of(prefix, entry.ancestor_dir, root)
+
+        masking = _find_masking_include(sequence[:i], ancestors)
+        if masking is None:
+            continue
+        conflicts.append(Conflict(
+            dropped_source=entry.source,
+            dropped_line=entry.line,
+            dropped_pattern=entry.raw.strip(),
+            masking_source=masking.source,
+            masking_line=masking.line,
+            masking_pattern=masking.raw.strip(),
+        ))
+    return conflicts
 
 
 @dataclass(frozen=True)
@@ -68,6 +230,18 @@ class _LoadedRules:
     size: int
 
 
+@dataclass(frozen=True)
+class _SequenceEntry:
+    """One rule in the flattened evaluation-order sequence used by
+    conflict detection. Internal to RuleCache."""
+
+    source: Path           # the .dropboxignore file this rule came from
+    line: int              # 1-based source line number
+    raw: str               # source-line text (without trailing newline)
+    ancestor_dir: Path     # directory the pattern is scoped to
+    pattern: object        # GitIgnoreSpecPattern; duck-typed (.include, .match_file)
+
+
 class RuleCache:
     """Maintains parsed rules from every .dropboxignore under the root(s)."""
 
@@ -78,8 +252,13 @@ class RuleCache:
         # thread may pop/insert; without this lock that's "dictionary changed
         # size during iteration". RLock so load_root can nest into _load_file.
         self._lock = threading.RLock()
+        # Detection state — recomputed on every mutation. Keyed by
+        # (ignore_file_path, line_idx) so match()/explain() can filter
+        # without rebuilding per call.
+        self._dropped: set[tuple[Path, int]] = set()
+        self._conflicts: list[Conflict] = []
 
-    def load_root(self, root: Path) -> None:
+    def load_root(self, root: Path, *, log_warnings: bool = True) -> None:
         root = root.resolve()
         with self._lock:
             if root not in self._roots:
@@ -96,17 +275,20 @@ class RuleCache:
                 if p not in seen and p.is_relative_to(root)
             ]:
                 del self._rules[stale]
+            self._recompute_conflicts(log_warnings=log_warnings)
 
-    def reload_file(self, ignore_file: Path) -> None:
+    def reload_file(self, ignore_file: Path, *, log_warnings: bool = True) -> None:
         """Re-read a single .dropboxignore file, replacing any cached version."""
         with self._lock:
             self._rules.pop(ignore_file.resolve(), None)
             self._load_file(ignore_file)
+            self._recompute_conflicts(log_warnings=log_warnings)
 
-    def remove_file(self, ignore_file: Path) -> None:
+    def remove_file(self, ignore_file: Path, *, log_warnings: bool = True) -> None:
         """Drop all cached state for a .dropboxignore file (e.g. after deletion)."""
         with self._lock:
             self._rules.pop(ignore_file.resolve(), None)
+            self._recompute_conflicts(log_warnings=log_warnings)
 
     def match(self, path: Path) -> bool:
         if not path.is_absolute():
@@ -124,7 +306,10 @@ class RuleCache:
         matched = False
         for ancestor, loaded in self._applicable(root, path):
             rel_str = self._rel_path_str(ancestor, path)
-            for _line_idx, pattern in loaded.entries:
+            ignore_file = ancestor / IGNORE_FILENAME
+            for line_idx, pattern in loaded.entries:
+                if (ignore_file, line_idx) in self._dropped:
+                    continue
                 if pattern.match_file(rel_str) is not None:
                     matched = bool(pattern.include)
         return matched
@@ -135,6 +320,11 @@ class RuleCache:
         Each entry identifies which .dropboxignore file and which source line
         matched, plus whether the match was a negation. Useful for the
         ``dropboxignore explain`` CLI command.
+
+        Unlike ``match()``, ``explain()`` includes rules that were dropped
+        from the active rule set by conflict detection — each such entry
+        has ``is_dropped=True`` so the CLI can annotate it with a
+        ``[dropped]`` marker and a masked-by pointer.
         """
         if not path.is_absolute():
             raise ValueError(f"explain() requires an absolute path; got {path!r}")
@@ -147,18 +337,21 @@ class RuleCache:
         results: list[Match] = []
         for ancestor, loaded in self._applicable(root, path):
             rel_str = self._rel_path_str(ancestor, path)
+            ignore_file = ancestor / IGNORE_FILENAME
             for line_idx, pattern in loaded.entries:
-                if pattern.match_file(rel_str) is not None:
-                    raw_line = (
-                        loaded.lines[line_idx]
-                        if line_idx < len(loaded.lines) else ""
-                    )
-                    results.append(Match(
-                        ignore_file=ancestor / IGNORE_FILENAME,
-                        line=line_idx + 1,
-                        pattern=raw_line,
-                        negation=not bool(pattern.include),
-                    ))
+                if pattern.match_file(rel_str) is None:
+                    continue
+                raw_line = (
+                    loaded.lines[line_idx]
+                    if line_idx < len(loaded.lines) else ""
+                )
+                results.append(Match(
+                    ignore_file=ignore_file,
+                    line=line_idx + 1,
+                    pattern=raw_line,
+                    negation=not bool(pattern.include),
+                    is_dropped=(ignore_file, line_idx) in self._dropped,
+                ))
         return results
 
     # ---- internal helpers ------------------------------------------------
@@ -236,6 +429,78 @@ class RuleCache:
             current = current / part
             result.append(current)
         return result
+
+    def conflicts(self) -> list[Conflict]:
+        """Current conflicts across all loaded roots, in detection order."""
+        with self._lock:
+            return list(self._conflicts)
+
+    def _recompute_conflicts(self, *, log_warnings: bool = True) -> None:
+        """Rebuild _dropped and _conflicts from the current _rules.
+
+        Called after any mutation (load_root, reload_file, remove_file).
+        Caller must hold self._lock.
+
+        Writes new containers and swaps the attribute references atomically
+        so lock-free readers (``match()``, ``explain()``) never see a
+        torn intermediate state.
+
+        When ``log_warnings`` is True (the default — appropriate for the
+        daemon's reconcile path), each detected conflict emits a WARNING
+        record. CLI one-shots that surface conflicts via structured stdout
+        (``status``, ``explain``) should pass ``log_warnings=False`` to
+        avoid stderr duplication.
+        """
+        new_dropped: set[tuple[Path, int]] = set()
+        new_conflicts: list[Conflict] = []
+        for root in self._roots:
+            sequence = self._build_sequence(root)
+            for c in _detect_conflicts(sequence, root=root):
+                new_conflicts.append(c)
+                # _build_sequence stores line=line_idx+1 (1-based); _dropped
+                # is keyed by 0-based line_idx because that's what
+                # `loaded.entries` yields and what match()/explain() iterate.
+                line_idx = c.dropped_line - 1
+                new_dropped.add((c.dropped_source, line_idx))
+                if log_warnings:
+                    logger.warning(
+                        "negation `%s` at %s:%d is masked by include `%s` at %s:%d "
+                        "(Dropbox inherits ignored state from ancestor directories). "
+                        "Dropping the negation from the active rule set. "
+                        "See README §Gotchas.",
+                        c.dropped_pattern, c.dropped_source, c.dropped_line,
+                        c.masking_pattern, c.masking_source, c.masking_line,
+                    )
+        self._dropped = new_dropped
+        self._conflicts = new_conflicts
+
+    def _build_sequence(self, root: Path) -> list[_SequenceEntry]:
+        """Flatten all .dropboxignore rules under root into evaluation order.
+
+        Shallower files first; within a file, source-line order. Caller
+        must hold self._lock — this iterates self._rules.
+        """
+        files_under_root = sorted(
+            (p for p in self._rules if p.is_relative_to(root)),
+            key=lambda p: (len(p.parts), p.as_posix()),
+        )
+        sequence: list[_SequenceEntry] = []
+        for ignore_file in files_under_root:
+            loaded = self._rules[ignore_file]
+            ancestor_dir = ignore_file.parent
+            for line_idx, pattern in loaded.entries:
+                raw = (
+                    loaded.lines[line_idx]
+                    if line_idx < len(loaded.lines) else ""
+                )
+                sequence.append(_SequenceEntry(
+                    source=ignore_file,
+                    line=line_idx + 1,
+                    raw=raw,
+                    ancestor_dir=ancestor_dir,
+                    pattern=pattern,
+                ))
+        return sequence
 
 
 def _build_entries(

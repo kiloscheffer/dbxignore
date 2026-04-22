@@ -104,3 +104,214 @@ def test_load_file_survives_malformed_pattern(tmp_path, write_file, caplog):
         r.levelname == "WARNING" and "Invalid .dropboxignore" in r.message
         for r in caplog.records
     )
+
+
+def test_rulecache_populates_conflicts_on_load(tmp_path):
+    from dropboxignore.rules import RuleCache
+
+    root = tmp_path
+    (root / ".dropboxignore").write_text(
+        "build/\n!build/keep/\n", encoding="utf-8"
+    )
+    cache = RuleCache()
+    cache.load_root(root)
+
+    conflicts = cache.conflicts()
+    assert len(conflicts) == 1
+    c = conflicts[0]
+    assert c.dropped_pattern == "!build/keep/"
+    assert c.masking_pattern == "build/"
+
+
+def test_rulecache_clears_conflicts_on_reload_without_conflict(tmp_path):
+    from dropboxignore.rules import RuleCache
+
+    root = tmp_path
+    ignore_file = root / ".dropboxignore"
+    ignore_file.write_text("build/\n!build/keep/\n", encoding="utf-8")
+    cache = RuleCache()
+    cache.load_root(root)
+    assert len(cache.conflicts()) == 1
+
+    # Fix the rules: drop the negation.
+    ignore_file.write_text("build/\n", encoding="utf-8")
+    cache.reload_file(ignore_file)
+
+    assert cache.conflicts() == []
+
+
+def test_rulecache_conflicts_removed_when_file_removed(tmp_path):
+    from dropboxignore.rules import RuleCache
+
+    root = tmp_path
+    ignore_file = root / ".dropboxignore"
+    ignore_file.write_text("build/\n!build/keep/\n", encoding="utf-8")
+    cache = RuleCache()
+    cache.load_root(root)
+    assert len(cache.conflicts()) == 1
+
+    cache.remove_file(ignore_file)
+    assert cache.conflicts() == []
+
+
+def test_rulecache_conflicts_do_not_leak_across_roots(tmp_path):
+    """A conflict in root A must not appear in root B's conflicts list.
+    The is_relative_to(root) filter in _build_sequence is what prevents
+    this leakage; this test guards that filter."""
+    from dropboxignore.rules import RuleCache
+
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    root_a.mkdir()
+    root_b.mkdir()
+    (root_a / ".dropboxignore").write_text(
+        "build/\n!build/keep/\n", encoding="utf-8"
+    )
+    (root_b / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+
+    cache = RuleCache()
+    cache.load_root(root_a)
+    cache.load_root(root_b)
+
+    conflicts = cache.conflicts()
+    assert len(conflicts) == 1
+    assert conflicts[0].dropped_source.is_relative_to(root_a)
+
+
+def test_rulecache_detects_cross_file_conflict(tmp_path):
+    """Root .dropboxignore ignores build/; a nested .dropboxignore inside
+    build/ tries to re-include keep/. The conflict spans two files —
+    _build_sequence must order the root file before the nested one so
+    the negation in the nested file sees `build/` as an earlier include."""
+    from dropboxignore.rules import RuleCache
+
+    root = tmp_path
+    (root / "build").mkdir()
+    (root / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+    (root / "build" / ".dropboxignore").write_text(
+        "!keep/\n", encoding="utf-8"
+    )
+
+    cache = RuleCache()
+    cache.load_root(root)
+
+    conflicts = cache.conflicts()
+    assert len(conflicts) == 1
+    c = conflicts[0]
+    assert c.dropped_source == (root / "build" / ".dropboxignore").resolve()
+    assert c.masking_source == (root / ".dropboxignore").resolve()
+    assert c.dropped_pattern == "!keep/"
+    assert c.masking_pattern == "build/"
+
+
+def test_match_treats_dropped_negation_as_absent(tmp_path):
+    """With `build/` + `!build/keep/`, the negation is dropped, so
+    build/keep/ is matched via the include (gitignore semantics with the
+    negation absent)."""
+    from dropboxignore.rules import RuleCache
+
+    root = tmp_path
+    (root / ".dropboxignore").write_text(
+        "build/\n!build/keep/\n", encoding="utf-8"
+    )
+    (root / "build").mkdir()
+    (root / "build" / "keep").mkdir()
+    cache = RuleCache()
+    cache.load_root(root)
+
+    assert cache.match(root / "build") is True
+    # The negation is dropped — build/keep/ still matches the `build/` rule.
+    assert cache.match(root / "build" / "keep") is True
+
+
+def test_match_honors_non_conflicted_negation(tmp_path):
+    """*.log + !important.log: the negation is NOT dropped (no ignored
+    ancestor), so important.log is excluded and others are included."""
+    from dropboxignore.rules import RuleCache
+
+    root = tmp_path
+    (root / ".dropboxignore").write_text(
+        "*.log\n!important.log\n", encoding="utf-8"
+    )
+    (root / "important.log").touch()
+    (root / "debug.log").touch()
+    cache = RuleCache()
+    cache.load_root(root)
+
+    assert cache.conflicts() == []  # guard: no conflict here
+    assert cache.match(root / "important.log") is False
+    assert cache.match(root / "debug.log") is True
+
+
+def test_recompute_logs_warning_per_conflict(tmp_path, caplog):
+    import logging
+
+    from dropboxignore.rules import RuleCache
+
+    root = tmp_path
+    (root / ".dropboxignore").write_text(
+        "build/\n!build/keep/\n", encoding="utf-8"
+    )
+    cache = RuleCache()
+
+    with caplog.at_level(logging.WARNING, logger="dropboxignore.rules"):
+        cache.load_root(root)
+
+    warnings = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING
+        and r.name == "dropboxignore.rules"
+        and "negation" in r.message
+    ]
+    assert len(warnings) == 1
+    msg = warnings[0].message
+    assert "!build/keep/" in msg
+    assert "build/" in msg
+    assert "Dropping the negation" in msg
+
+
+def test_explain_includes_dropped_negation_with_flag(tmp_path):
+    from dropboxignore.rules import RuleCache
+
+    root = tmp_path
+    (root / ".dropboxignore").write_text(
+        "build/\n!build/keep/\n", encoding="utf-8"
+    )
+    (root / "build").mkdir()
+    (root / "build" / "keep").mkdir()
+    cache = RuleCache()
+    cache.load_root(root)
+
+    results = cache.explain(root / "build" / "keep")
+    by_pattern = {m.pattern.strip(): m for m in results}
+
+    assert "build/" in by_pattern
+    assert by_pattern["build/"].is_dropped is False
+
+    assert "!build/keep/" in by_pattern
+    assert by_pattern["!build/keep/"].is_dropped is True
+    # Dropped matches still carry their source + line info so the CLI can
+    # format "[dropped] ... (masked by ...)".
+    assert by_pattern["!build/keep/"].line == 2
+
+
+def test_explain_is_dropped_false_for_non_conflicted_negation(tmp_path):
+    """*.log + !important.log has no conflict — the negation should appear
+    in explain() with is_dropped=False."""
+    from dropboxignore.rules import RuleCache
+
+    root = tmp_path
+    (root / ".dropboxignore").write_text(
+        "*.log\n!important.log\n", encoding="utf-8"
+    )
+    (root / "important.log").touch()
+    cache = RuleCache()
+    cache.load_root(root)
+
+    assert cache.conflicts() == []  # guard: no conflict in this setup
+    results = cache.explain(root / "important.log")
+    by_pattern = {m.pattern.strip(): m for m in results}
+
+    assert "!important.log" in by_pattern
+    assert by_pattern["!important.log"].is_dropped is False
+    assert by_pattern["!important.log"].negation is True

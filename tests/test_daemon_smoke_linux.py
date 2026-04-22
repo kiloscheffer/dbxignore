@@ -111,3 +111,48 @@ def test_daemon_reacts_to_dropboxignore_add_and_remove(tmp_path, monkeypatch):
     finally:
         stop.set()
         t.join(timeout=5.0)
+
+
+def test_daemon_drops_conflicted_negation(tmp_path, monkeypatch):
+    """Adding `!build/keep/` after `build/` triggers the conflict-detection
+    layer: the negation is dropped from the active rule set at rule-load
+    time. `build/keep/` stays marked (either directly or via inheritance),
+    and daemon.log records the WARNING.
+
+    This is the Linux counterpart to the Windows smoke's negation phase.
+    """
+    from dropboxignore import daemon, markers
+
+    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    log_path = tmp_path / "state" / "dropboxignore" / "daemon.log"
+
+    stop = threading.Event()
+    t = threading.Thread(target=daemon.run, args=(stop,), daemon=True)
+    t.start()
+    try:
+        assert _wait_for_daemon_watching(log_path)
+
+        # Phase 1 — rule + directory → marker.
+        (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+        (tmp_path / "build").mkdir()
+        assert _poll_until(lambda: markers.is_ignored(tmp_path / "build"))
+
+        # Phase 2 — add a conflicted negation; child must NOT un-ignore.
+        (tmp_path / ".dropboxignore").write_text(
+            "build/\n!build/keep/\n", encoding="utf-8"
+        )
+        (tmp_path / "build" / "keep").mkdir()
+        assert _poll_until(
+            lambda: markers.is_ignored(tmp_path / "build" / "keep"),
+            timeout_s=3.0,
+        ), "conflicted negation should not un-ignore build/keep/"
+
+        assert _poll_until(
+            lambda: "!build/keep/" in log_path.read_text()
+            and "masked by" in log_path.read_text(),
+            timeout_s=3.0,
+        ), "daemon.log should contain the conflict WARNING"
+    finally:
+        stop.set()
+        t.join(timeout=5.0)

@@ -56,6 +56,15 @@ The daemon's watchdog events are classified (`_classify` → `EventKind.{RULES,D
 
 - Never commit directly to `main`. Work on a topic branch and open a PR — that's what triggers `.github/workflows/test.yml` (the platform-gated test tiers `pytest -m windows_only` and `pytest -m linux_only` **only run in CI**) and `.github/workflows/commit-check.yml` (commit-message + branch-name validation). A local `uv run pytest` can only exercise one platform, so a single green local run is not a merge gate. The PR matrix is.
 - **`cchk.toml` at repo root is the single source of truth** for allowed commit types (Conventional Commits, see `allow_commit_types`), branch types (Conventional Branch, see `allow_branch_types`), and the subject-length cap. Don't restate those lists here or elsewhere — reference the file so it can't drift. Local enforcement is optional but encouraged: `uv tool install pre-commit && pre-commit install --hook-type commit-msg --hook-type pre-push` wires the same rules at commit/push time. CI re-runs them on every PR via `commit-check/commit-check-action@v2.6.0`.
+- **Pre-flight against every commit, not just HEAD.** CI runs `commit-check` against the full `origin/main..HEAD` range; a local check that only validates the planned PR title can pass while an intermediate commit fails CI (happened on PR #12 — one commit's description starting with `--` tripped commit-check's regex). Before pushing, loop over every commit's subject:
+  ```bash
+  git log --pretty=format:'%s%n' origin/main..HEAD | while IFS= read -r msg; do
+    [ -z "$msg" ] && continue
+    printf '%s\n' "$msg" > /tmp/m.txt
+    commit-check --message --no-banner --compact /tmp/m.txt || echo "FAIL: $msg"
+  done
+  ```
+  Local green then matches CI green on the message check.
 - Branch names follow `<type>/<slug>` where `<type>` is from `cchk.toml`'s `allow_branch_types` and `<slug>` is lowercase-alphanumeric + hyphens. Note the asymmetry with commit subjects: the branch prefix `feature/` is the long form while the Conventional Commits subject tag `feat:` is the short form. Same repo, two conventions. Examples: `feature/v0.2-linux`, `fix/v0.2-followups-2-5`, `fix/v0.2-followup-1-linux-xdg-paths`.
 - Commit subjects follow Conventional Commits: `<type>(<scope>): <description>` where `<type>` is from `cchk.toml`'s `allow_commit_types`. Scope tags mirror package names or doc categories, not ticket numbers. `!` before the colon — or a `BREAKING CHANGE:` footer — signals a breaking change.
 - Split commits along revertability lines: a code change and a doc-only backlog update belong in separate commits because they could plausibly be reverted at different times. PR #4 is the template — one `feat` commit for the behavior change, one `docs` commit for the new follow-up entries.

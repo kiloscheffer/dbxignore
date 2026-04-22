@@ -116,6 +116,34 @@ Next time a release-workflow change lands, we can dispatch-run it manually befor
 
 Touches: `.github/workflows/release.yml`.
 
+## 10. Publish releases as the repo owner, not `github-actions[bot]`
+
+v0.2.0 was published by `github-actions[bot]` because `softprops/action-gh-release` authenticates via the default `GITHUB_TOKEN`. Visible in `gh release view v0.2.0` → `author: github-actions[bot]`. The release is still authoritative and tied to the repo's audit trail, but the UI-facing attribution reads as machine-authored rather than owner-authored.
+
+Two mechanisms to fix:
+
+- **Personal access token (PAT)** with `contents: write` + `actions: write` scopes. Store as a repo secret (`GH_RELEASE_TOKEN` or similar); pass to the action via `token: ${{ secrets.GH_RELEASE_TOKEN }}`. Simplest. Cost: secret management + periodic rotation.
+- **GitHub App** with identity. More complex setup; justified if the token needs organization-wide reach or the PAT's personal scope would be too broad.
+
+PAT is the standard solo-dev choice. Requires a one-time setup (generate PAT → add secret → update workflow), then releases surface under your GitHub identity.
+
+Touches: `.github/workflows/release.yml` (add `token:` input to the `softprops/action-gh-release` step); repo secrets (one-time, outside of the repo tree).
+
+## 11. Publish releases to PyPI from the release workflow
+
+`dropboxignore` isn't on PyPI today. Users install via `uv tool install git+https://github.com/kiloscheffer/dropboxignore` (source build from git) or by downloading the wheel from GitHub Releases manually. `pip install dropboxignore` doesn't work. Discoverability penalty: PyPI search + `pip`-based pipelines skip this project entirely.
+
+Fix: add a step to `release.yml` that uploads `dist/*.whl` + `dist/*.tar.gz` to PyPI after the GitHub Release is published. Two auth mechanisms:
+
+- **Trusted Publishing via OIDC** (GitHub's recommended approach since 2023). No secrets; PyPI verifies the workflow's GitHub identity via OIDC token. One-time setup: register the repo as a Trusted Publisher on PyPI (account admin page). Workflow uses `pypa/gh-action-pypi-publish@release/v1` with no credentials; the action extracts the OIDC token automatically.
+- **API token** stored as a PyPI secret. Older pattern; works but requires token rotation.
+
+Trusted Publishing is the cleaner choice — no secrets to leak or rotate. One-time PyPI registration, then all future releases publish automatically on tag push.
+
+There's also a question of whether to claim the name `dropboxignore` on PyPI even if we don't publish yet (name squatting is frowned upon but reservation for a project about to publish is legitimate). Register-and-publish-v0.2.0 is the clean path; name reservation without a release is worth skipping.
+
+Touches: `.github/workflows/release.yml` (add PyPI upload step); PyPI account (one-time — register project as Trusted Publisher).
+
 ---
 
 ## Status

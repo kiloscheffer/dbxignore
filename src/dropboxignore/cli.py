@@ -36,6 +36,45 @@ def _format_ignore_file_loc(path: Path, roots: list[Path]) -> str:
     return str(path)
 
 
+def _purge_local_state() -> None:
+    """Delete state.json, daemon.log and rotated backups, then rmdir the state dir.
+
+    Called by ``uninstall --purge`` after the ignore markers are cleared.
+    Best-effort: per-file OSError is swallowed and logged on stderr (daemon
+    may still hold daemon.log open on Windows during a brief race after
+    uninstall_service returns). ``rmdir`` of the containing directory only
+    succeeds if it's empty — if the user has dropped something else in
+    there, we preserve it.
+    """
+    state_dir = state.user_state_dir()
+    if not state_dir.exists():
+        return
+    candidates = []
+    state_json = state.default_path()
+    if state_json.exists():
+        candidates.append(state_json)
+    candidates.extend(sorted(state_dir.glob("daemon.log*")))
+
+    removed = 0
+    for p in candidates:
+        try:
+            p.unlink()
+            removed += 1
+        except OSError as exc:
+            click.echo(f"Could not remove {p}: {exc}", err=True)
+
+    if removed:
+        click.echo(f"Removed {removed} local state file(s) from {state_dir}.")
+
+    # Remove the state dir itself if now empty. Use rmdir (not rmtree):
+    # rmdir fails if non-empty, preserving any user-authored content.
+    try:
+        state_dir.rmdir()
+        click.echo(f"Removed state directory {state_dir}.")
+    except OSError:
+        pass
+
+
 def _process_is_alive(pid: int | None) -> bool:
     if pid is None:
         return False
@@ -244,9 +283,24 @@ def install() -> None:
 
 
 @main.command()
-@click.option("--purge", is_flag=True, help="Also clear every ignore marker.")
+@click.option(
+    "--purge",
+    is_flag=True,
+    help=(
+        "Also clear every ignore marker and remove local dropboxignore state "
+        "(state.json, daemon.log*, the state directory, and any systemd "
+        "drop-in directory on Linux)."
+    ),
+)
 def uninstall(purge: bool) -> None:
-    """Remove the daemon service. With --purge, also clear all ignore markers."""
+    """Remove the daemon service.
+
+    With --purge, also clear every ignore marker under each discovered
+    Dropbox root, delete ``state.json`` and ``daemon.log*`` from the
+    per-user state directory, remove that directory if it's empty, and
+    on Linux remove the systemd drop-in directory if it exists. The goal
+    is to leave no dropboxignore-authored artifacts on disk.
+    """
     from dropboxignore.install import uninstall_service
     try:
         uninstall_service()
@@ -256,6 +310,7 @@ def uninstall(purge: bool) -> None:
     click.echo("Uninstalled dropboxignore daemon service.")
 
     if purge:
+        # (1) Clear xattr markers.
         discovered = _discover_roots()
         cleared = 0
         for r in discovered:
@@ -276,6 +331,16 @@ def uninstall(purge: bool) -> None:
                     except OSError:
                         continue
         click.echo(f"Cleared {cleared} ignore markers.")
+
+        # (2) Remove state.json, daemon.log*, state dir (cross-platform).
+        _purge_local_state()
+
+        # (3) Remove the systemd drop-in directory (Linux only).
+        if sys.platform.startswith("linux"):
+            from dropboxignore.install import linux_systemd
+            removed_dropin = linux_systemd.remove_dropin_directory()
+            if removed_dropin is not None:
+                click.echo(f"Removed systemd drop-in directory {removed_dropin}.")
 
 
 def daemon_main() -> None:

@@ -65,7 +65,11 @@ Static analysis at rule-load time. The detector runs inside `RuleCache._recomput
 ```python
 def literal_prefix(pattern: str) -> str | None:
     """Return leading path segments before the first glob, or None."""
+    if not pattern:
+        return None
     p = pattern.lstrip("/")
+    if not p:
+        return None
     boundary = next(
         (i for i, c in enumerate(p) if c in "*?["),
         len(p),
@@ -75,15 +79,31 @@ def literal_prefix(pattern: str) -> str | None:
         if last_sep == -1:
             return None          # glob in the first segment, no anchor
         return p[:last_sep + 1]  # include trailing slash
-    return p or None
+    # No glob present. If there's no `/`, return the whole thing (it's a
+    # single segment and downstream code treats it as a file target, which
+    # the file-target guard in _detect_conflicts then filters out). If it
+    # ends with `/`, return as-is. Otherwise cut at the last `/` so the
+    # prefix is a directory-shaped string — the ancestor-walk consumer
+    # needs a directory to anchor on, not a file path.
+    if "/" not in p:
+        return p
+    if p.endswith("/"):
+        return p
+    last_sep = p.rfind("/")
+    return p[:last_sep + 1]
 ```
 
 Examples:
 - `build/keep/` → `build/keep/`
+- `build/keep` → `build/` (no trailing slash → cut at last `/`)
 - `src/**/test.py` → `src/`
 - `foo*/bar/` → `None` (glob in first segment)
 - `**/cache/` → `None` (starts with glob)
-- `/anchored/` → `anchored/` (leading-slash normalized)
+- `/anchored/path/` → `anchored/path/` (leading-slash normalized)
+- `""` → `None` (empty input)
+- `plain` → `plain` (single segment, no glob; downstream file-target guard skips)
+
+*Note:* An earlier draft of this pseudocode ended with `return p or None` for the no-glob case, which returned the full pattern as-is even for non-directory shapes like `"build/keep"`. That form was inadequate because `_detect_conflicts` only flags negations whose literal prefix is a directory (trailing `/`); passing a file-path through would falsely skip detection on the enclosing directory. The updated form above cuts at the last `/` for no-trailing-slash inputs, which both preserves the file-target skip (via `_detect_conflicts`' directory guard) and keeps the ancestor walk directory-shaped.
 
 **Conflict check.** For each entry in the sequence, in order:
 

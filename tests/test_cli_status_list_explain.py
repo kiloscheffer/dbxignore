@@ -149,4 +149,36 @@ def test_explain_annotates_dropped_negations(tmp_path, monkeypatch):
     assert "build/" in result.output
     assert "[dropped]" in result.output
     assert "!build/keep/" in result.output
+
+
+def test_status_does_not_log_conflict_warning_to_stderr(tmp_path, monkeypatch, caplog):
+    """`status` surfaces conflicts via stdout (the `rule conflicts (N):`
+    section). The WARNING emitted by `_recompute_conflicts` on the daemon
+    path would double up the info on stderr; CLI one-shots suppress it."""
+    import logging
+
+    import click.testing
+
+    from dropboxignore import cli, state
+
+    root = tmp_path
+    (root / ".dropboxignore").write_text(
+        "build/\n!build/keep/\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+
+    with caplog.at_level(logging.WARNING, logger="dropboxignore.rules"):
+        result = click.testing.CliRunner().invoke(cli.main, ["status"])
+
+    assert result.exit_code == 0
+    assert "rule conflicts (1):" in result.output
+    conflict_warnings = [
+        r for r in caplog.records
+        if r.name == "dropboxignore.rules" and "negation" in r.message
+    ]
+    assert conflict_warnings == [], (
+        f"status should not emit conflict WARNINGs; got: "
+        f"{[r.message for r in conflict_warnings]}"
+    )
     assert "masked by" in result.output

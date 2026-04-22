@@ -258,7 +258,7 @@ class RuleCache:
         self._dropped: set[tuple[Path, int]] = set()
         self._conflicts: list[Conflict] = []
 
-    def load_root(self, root: Path) -> None:
+    def load_root(self, root: Path, *, log_warnings: bool = True) -> None:
         root = root.resolve()
         with self._lock:
             if root not in self._roots:
@@ -275,20 +275,20 @@ class RuleCache:
                 if p not in seen and p.is_relative_to(root)
             ]:
                 del self._rules[stale]
-            self._recompute_conflicts()
+            self._recompute_conflicts(log_warnings=log_warnings)
 
-    def reload_file(self, ignore_file: Path) -> None:
+    def reload_file(self, ignore_file: Path, *, log_warnings: bool = True) -> None:
         """Re-read a single .dropboxignore file, replacing any cached version."""
         with self._lock:
             self._rules.pop(ignore_file.resolve(), None)
             self._load_file(ignore_file)
-            self._recompute_conflicts()
+            self._recompute_conflicts(log_warnings=log_warnings)
 
-    def remove_file(self, ignore_file: Path) -> None:
+    def remove_file(self, ignore_file: Path, *, log_warnings: bool = True) -> None:
         """Drop all cached state for a .dropboxignore file (e.g. after deletion)."""
         with self._lock:
             self._rules.pop(ignore_file.resolve(), None)
-            self._recompute_conflicts()
+            self._recompute_conflicts(log_warnings=log_warnings)
 
     def match(self, path: Path) -> bool:
         if not path.is_absolute():
@@ -435,7 +435,7 @@ class RuleCache:
         with self._lock:
             return list(self._conflicts)
 
-    def _recompute_conflicts(self) -> None:
+    def _recompute_conflicts(self, *, log_warnings: bool = True) -> None:
         """Rebuild _dropped and _conflicts from the current _rules.
 
         Called after any mutation (load_root, reload_file, remove_file).
@@ -444,6 +444,12 @@ class RuleCache:
         Writes new containers and swaps the attribute references atomically
         so lock-free readers (``match()``, ``explain()``) never see a
         torn intermediate state.
+
+        When ``log_warnings`` is True (the default — appropriate for the
+        daemon's reconcile path), each detected conflict emits a WARNING
+        record. CLI one-shots that surface conflicts via structured stdout
+        (``status``, ``explain``) should pass ``log_warnings=False`` to
+        avoid stderr duplication.
         """
         new_dropped: set[tuple[Path, int]] = set()
         new_conflicts: list[Conflict] = []
@@ -456,14 +462,15 @@ class RuleCache:
                 # `loaded.entries` yields and what match()/explain() iterate.
                 line_idx = c.dropped_line - 1
                 new_dropped.add((c.dropped_source, line_idx))
-                logger.warning(
-                    "negation `%s` at %s:%d is masked by include `%s` at %s:%d "
-                    "(Dropbox inherits ignored state from ancestor directories). "
-                    "Dropping the negation from the active rule set. "
-                    "See README §Gotchas.",
-                    c.dropped_pattern, c.dropped_source, c.dropped_line,
-                    c.masking_pattern, c.masking_source, c.masking_line,
-                )
+                if log_warnings:
+                    logger.warning(
+                        "negation `%s` at %s:%d is masked by include `%s` at %s:%d "
+                        "(Dropbox inherits ignored state from ancestor directories). "
+                        "Dropping the negation from the active rule set. "
+                        "See README §Gotchas.",
+                        c.dropped_pattern, c.dropped_source, c.dropped_line,
+                        c.masking_pattern, c.masking_source, c.masking_line,
+                    )
         self._dropped = new_dropped
         self._conflicts = new_conflicts
 

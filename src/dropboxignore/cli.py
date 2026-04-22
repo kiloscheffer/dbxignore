@@ -71,7 +71,7 @@ def apply(path: Path | None) -> None:
 
     cache = RuleCache()
     for r in discovered:
-        cache.load_root(r)
+        cache.load_root(r, log_warnings=False)
 
     if path is None:
         targets: list[tuple[Path, Path]] = [(r, r) for r in discovered]
@@ -127,7 +127,7 @@ def status() -> None:
     if discovered:
         cache = RuleCache()
         for r in discovered:
-            cache.load_root(r)
+            cache.load_root(r, log_warnings=False)
         conflicts = cache.conflicts()
         if conflicts:
             click.echo(f"rule conflicts ({len(conflicts)}):")
@@ -198,7 +198,7 @@ def explain(path: Path) -> None:
 
     cache = RuleCache()
     for r in discovered:
-        cache.load_root(r)
+        cache.load_root(r, log_warnings=False)
 
     matches = cache.explain(path.resolve())
     if not matches:

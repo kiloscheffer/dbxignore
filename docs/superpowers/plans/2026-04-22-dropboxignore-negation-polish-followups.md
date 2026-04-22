@@ -1,6 +1,6 @@
-# dropboxignore — negation-detection polish follow-ups
+# dropboxignore — post-v0.2 polish follow-ups
 
-Items surfaced during the end-of-branch review of PR #11 (the negation-semantics feature resolving v0.2 follow-up item 10). All are Minor on a per-item basis — none block the feature as shipped — but they're worth tracking so they don't accumulate into systemic drift.
+Items surfaced during PR #11's end-of-branch review (negation-semantics, item 10) and adjacent v0.2-maturation PRs. All are polish-scope — none block the features as shipped — but worth tracking so they don't accumulate into systemic drift.
 
 Carry into a v0.3 polish PR or address as standalone small PRs whenever the file in question is next touched.
 
@@ -76,6 +76,26 @@ But there's no explicit test pinning this. If a future refactor accidentally cha
 Fix: a three-entry test in `tests/test_rules_conflicts.py` with `build/` + `!build/keep/` + `src/`, asserting exactly one conflict and that the presence of `src/` didn't change detection.
 
 Touches: `tests/test_rules_conflicts.py` (one new test).
+
+## 8. Pre-flight should run commit-check against every branch commit, not just HEAD
+
+The task-15 pre-flight pattern used in recent PRs runs `commit-check --message` against the planned PR title or HEAD subject only. CI (`commit-check-action@v2.6.0`) runs the check against **every commit in the PR** — i.e. the full `origin/main..HEAD` range.
+
+Surfaced by PR #12: one intermediate commit (`docs: --purge scope broadened (...)`) passed my local HEAD check (which ran against a different planned subject) but failed CI because its description starts with `--`, which commit-check's Conventional Commits regex treats as ambiguous with flag syntax. The force-push round-trip to amend was avoidable.
+
+**Proposed fix:** add a pre-flight snippet to the CLAUDE.md Git workflow section that matches what CI runs:
+
+```bash
+git log --pretty=format:'%s%n' origin/main..HEAD | while IFS= read -r msg; do
+  [ -z "$msg" ] && continue
+  printf '%s\n' "$msg" > /tmp/m.txt
+  commit-check --message --no-banner --compact /tmp/m.txt || echo "FAIL: $msg"
+done
+```
+
+Local green becomes CI green on the message check. Prevents recurrence of the PR #12 force-push round-trip.
+
+Touches: `CLAUDE.md` (Git workflow section, new bullet or extended existing one).
 
 ---
 

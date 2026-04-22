@@ -268,3 +268,37 @@ def test_install_wraps_calledprocesserror_from_systemctl(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="daemon-reload"):
         linux_systemd.install_unit()
+
+
+def test_remove_dropin_directory_removes_existing(tmp_path, monkeypatch):
+    """Drop-in dir with a user-authored override file gets removed
+    wholesale on --purge cleanup."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    dropin_dir = tmp_path / ".config" / "systemd" / "user" / "dropboxignore.service.d"
+    dropin_dir.mkdir(parents=True)
+    (dropin_dir / "scratch-root.conf").write_text(
+        "[Service]\nEnvironment=DROPBOXIGNORE_ROOT=/home/u/dbx\n",
+        encoding="utf-8",
+    )
+
+    from dropboxignore.install import linux_systemd
+    result = linux_systemd.remove_dropin_directory()
+
+    assert result == dropin_dir
+    assert not dropin_dir.exists()
+
+
+def test_remove_dropin_directory_absent_returns_none(tmp_path, monkeypatch):
+    """Drop-in dir not present → return None, no error."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    from dropboxignore.install import linux_systemd
+    assert linux_systemd.remove_dropin_directory() is None
+
+
+def test_remove_dropin_directory_no_home_returns_none(monkeypatch):
+    """HOME unset → return None (can't locate the dir; silent skip)."""
+    monkeypatch.delenv("HOME", raising=False)
+
+    from dropboxignore.install import linux_systemd
+    assert linux_systemd.remove_dropin_directory() is None

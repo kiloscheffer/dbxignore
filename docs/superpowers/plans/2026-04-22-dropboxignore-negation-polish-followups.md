@@ -97,6 +97,25 @@ Local green becomes CI green on the message check. Prevents recurrence of the PR
 
 Touches: `CLAUDE.md` (Git workflow section, new bullet or extended existing one).
 
+## 9. Release workflow should have a `workflow_dispatch` trigger
+
+`.github/workflows/release.yml` triggers only on `push: tags: ['v*']`. That meant the workflow's first real exercise was the v0.2.0 release itself — where it failed at the PyInstaller step (pyinstaller wasn't installed; see PR #14 for the fix). The bug had been latent for the entire lifetime of the workflow; no PR before v0.2.0 exercised it.
+
+Adding a second trigger lets us dry-run the release build without creating a tag:
+
+```yaml
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+```
+
+With `workflow_dispatch`, the workflow becomes runnable via `gh workflow run release.yml` or the GitHub UI. Two tweaks needed in the body: the `Publish GitHub Release` step should probably gate on `if: startsWith(github.ref, 'refs/tags/')` so manual runs don't attempt to publish a Release from a non-tag ref; the workflow can still build and upload artifacts as step outputs / run artifacts for verification.
+
+Next time a release-workflow change lands, we can dispatch-run it manually before tagging. Prevents the "first exercise is the actual release" failure mode.
+
+Touches: `.github/workflows/release.yml`.
+
 ---
 
 ## Status

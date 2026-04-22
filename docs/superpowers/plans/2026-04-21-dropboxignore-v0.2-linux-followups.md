@@ -71,13 +71,15 @@ Touches: `src/dropboxignore/state.py`, `tests/test_state.py`, README "State" sec
 
 Touched: `src/dropboxignore/daemon.py`, `tests/test_daemon_logging.py`, `README.md`, `CLAUDE.md`.
 
-## 8. `uninstall --purge` leaves `state.json` and `daemon.log` behind
+## 8. `uninstall --purge` leaves `state.json` and `daemon.log` behind — **RESOLVED**
 
-`cli.uninstall --purge` clears every ignore marker it can find under the discovered roots but does not touch `state.default_path()` or `_log_dir()/daemon.log`. After `dropboxignore uninstall --purge`, two files linger under `%LOCALAPPDATA%\dropboxignore\` (Windows) or `~/.local/state/dropboxignore/` (Linux). Minor, but it violates the principle-of-least-surprise of `--purge` — the flag's docstring says "clear every ignore marker" which is narrower than user expectation.
+`cli.uninstall --purge` originally only cleared ignore markers. The `--purge` name implies "remove everything we created" but the behavior was narrower than the name — users who ran it and then discovered `state.json` and `daemon.log*` still lingering under `%LOCALAPPDATA%\dropboxignore\` (Windows) or `~/.local/state/dropboxignore/` (Linux) were surprised. Empirically confirmed by the v0.2 VPS smoke (item 4).
 
-**Proposed fix:** either (a) broaden `--purge` to also delete `state.default_path()` and the rotating log files, and rename the docstring accordingly ("clear every ignore marker *and* local dropboxignore state"); or (b) add a second flag `--purge-state` for the state/log sweep, keeping `--purge` marker-only. Option (a) is what users seem to expect ("uninstall + purge = no trace left"); option (b) is safer because it prevents someone from losing sweep stats with a single keystroke.
+**Fix:** broadened `--purge` to match its name — it now clears every ignore marker, deletes `state.json` and `daemon.log` + rotated backups from `state.user_state_dir()`, `rmdir`s that directory if empty (preserving any user-authored content via `rmdir` rather than `rmtree`), and on Linux removes the systemd drop-in directory `~/.config/systemd/user/dropboxignore.service.d/`. The flag's `help` text and the `uninstall` command docstring now enumerate the full cleanup scope. Dropbox's sync behavior is unaffected — we only remove our own bookkeeping and artifacts. Seven tests in `tests/test_install.py` pin each cleanup surface plus the boundary case where user-placed files in the state dir (`daemon.log_backup`, `daemon.logger`) survive the narrowed rotation glob.
 
-Touches: `src/dropboxignore/cli.py` (`uninstall`), `tests/test_install.py` (new assertions around post-purge filesystem state), README "Install" / "Uninstall" section.
+**Potential fallback not taken:** if users later report that they want the narrow marker-only behavior back, add a `--purge-markers-only` flag that preserves state + logs. Keep `--purge` as the totalizing form either way — "purge" as a word does not survive renaming without user confusion.
+
+Touched: `src/dropboxignore/cli.py`, `src/dropboxignore/install/linux_systemd.py`, `tests/test_install.py`, `tests/test_linux_systemd.py`, `README.md`.
 
 ## 9. Systemd user unit doesn't propagate `DROPBOXIGNORE_ROOT` — **RESOLVED**
 
@@ -110,4 +112,3 @@ Item 10 surfaced during item 3's Linux daemon smoke — a negation-based asserti
 
 Remaining open after v0.2 follow-ups:
 - Item 6 — Retire legacy Linux state-path fallback (v0.4 branch).
-- Item 8 — `uninstall --purge` state/log cleanup (design decision: broaden `--purge` vs add `--purge-state`). Empirically confirmed by item 4's VPS run.

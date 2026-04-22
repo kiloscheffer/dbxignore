@@ -121,20 +121,23 @@ def status() -> None:
             click.echo(f"watching: {r}")
 
     # Conflicts section — present only when RuleCache has any.
+    # Skip the rule-cache walk entirely when there are no roots — otherwise
+    # `status` pays for an rglob we don't need.
     discovered = _discover_roots()
-    cache = RuleCache()
-    for r in discovered:
-        cache.load_root(r)
-    conflicts = cache.conflicts()
-    if conflicts:
-        click.echo(f"rule conflicts ({len(conflicts)}):")
-        for c in conflicts:
-            dropped_loc = _format_ignore_file_loc(c.dropped_source, discovered)
-            masking_loc = _format_ignore_file_loc(c.masking_source, discovered)
-            click.echo(
-                f"  {dropped_loc}:{c.dropped_line}  {c.dropped_pattern}  "
-                f"masked by {masking_loc}:{c.masking_line}  {c.masking_pattern}"
-            )
+    if discovered:
+        cache = RuleCache()
+        for r in discovered:
+            cache.load_root(r)
+        conflicts = cache.conflicts()
+        if conflicts:
+            click.echo(f"rule conflicts ({len(conflicts)}):")
+            for c in conflicts:
+                dropped_loc = _format_ignore_file_loc(c.dropped_source, discovered)
+                masking_loc = _format_ignore_file_loc(c.masking_source, discovered)
+                click.echo(
+                    f"  {dropped_loc}:{c.dropped_line}  {c.dropped_pattern}  "
+                    f"masked by {masking_loc}:{c.masking_line}  {c.masking_pattern}"
+                )
 
 
 @main.command("list")

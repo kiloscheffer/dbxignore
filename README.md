@@ -1,6 +1,21 @@
-# dropboxignore
+# dbxignore
 
 Hierarchical `.dropboxignore` files for Dropbox. Drop a `.dropboxignore` into any folder under your Dropbox root and matching paths get the Dropbox ignore marker set automatically — no more `node_modules/` cluttering your sync. Windows (NTFS alternate data streams) and Linux (`user.*` xattrs) supported.
+
+## Upgrading from v0.2.x
+
+The project was renamed from `dropboxignore` to `dbxignore` in v0.3.0
+(the old name collides with an unrelated 2019 PyPI project). Upgrade is
+a one-time manual step:
+
+```bash
+dropboxignore uninstall --purge   # on v0.2.x — removes state, logs, service
+pip install dbxignore              # or: uv pip install dbxignore
+dbxignore install                  # registers the new service under new names
+```
+
+Your `.dropboxignore` rule files carry over untouched — they're never
+modified by install/uninstall.
 
 ## Requirements
 
@@ -11,31 +26,31 @@ Hierarchical `.dropboxignore` files for Dropbox. Drop a `.dropboxignore` into an
 ## Install (Windows, from source)
 
 ```powershell
-uv tool install git+https://github.com/kiloscheffer/dropboxignore
-dropboxignore install
+uv tool install git+https://github.com/kiloscheffer/dbxignore
+dbxignore install
 ```
 
-`dropboxignore install` registers a Task Scheduler entry that launches the daemon (`pythonw -m dropboxignore daemon`) at every user logon.
+`dbxignore install` registers a Task Scheduler entry that launches the daemon (`pythonw -m dbxignore daemon`) at every user logon.
 
 ## Install (Linux)
 
 Requires a systemd user session (standard on Ubuntu, Fedora, Debian, Arch, and most modern distros; WSL2 requires `systemd=true` in `/etc/wsl.conf`).
 
 ```bash
-uv tool install git+https://github.com/kiloscheffer/dropboxignore
-dropboxignore install                    # writes systemd user unit, enables it
-systemctl --user status dropboxignore.service
+uv tool install git+https://github.com/kiloscheffer/dbxignore
+dbxignore install                    # writes systemd user unit, enables it
+systemctl --user status dbxignore.service
 ```
 
-`dropboxignore install` writes `~/.config/systemd/user/dropboxignore.service` and runs `systemctl --user enable --now` so the daemon starts at login.
+`dbxignore install` writes `~/.config/systemd/user/dbxignore.service` and runs `systemctl --user enable --now` so the daemon starts at login.
 
-For non-stock Dropbox installs, export `DROPBOXIGNORE_ROOT` before running `dropboxignore install` — the install step will read the variable from your shell environment and write a corresponding `Environment="DROPBOXIGNORE_ROOT=..."` line into the generated unit's `[Service]` block. Without this, a shell-exported value won't reach the daemon when systemd launches it. If your Dropbox location ever changes, re-run `dropboxignore install` after updating the export.
+For non-stock Dropbox installs, export `DBXIGNORE_ROOT` before running `dbxignore install` — the install step will read the variable from your shell environment and write a corresponding `Environment="DBXIGNORE_ROOT=..."` line into the generated unit's `[Service]` block. Without this, a shell-exported value won't reach the daemon when systemd launches it. If your Dropbox location ever changes, re-run `dbxignore install` after updating the export.
 
 To uninstall:
 
 ```bash
-dropboxignore uninstall                  # disables unit, removes the file
-dropboxignore uninstall --purge          # clears markers, state files, logs, systemd drop-in
+dbxignore uninstall                  # disables unit, removes the file
+dbxignore uninstall --purge          # clears markers, state files, logs, systemd drop-in
 ```
 
 Notes:
@@ -45,9 +60,9 @@ Notes:
 
 ## Install (.exe)
 
-1. Download `dropboxignore.exe` and `dropboxignored.exe` from the latest [Release](https://github.com/kiloscheffer/dropboxignore/releases).
-2. Place both in a stable directory (e.g. `%LOCALAPPDATA%\dropboxignore\bin\`) and add it to your `PATH`.
-3. Run `dropboxignore install`.
+1. Download `dbxignore.exe` and `dbxignored.exe` from the latest [Release](https://github.com/kiloscheffer/dbxignore/releases).
+2. Place both in a stable directory (e.g. `%LOCALAPPDATA%\dbxignore\bin\`) and add it to your `PATH`.
+3. Run `dbxignore install`.
 
 ## Platform support
 
@@ -85,12 +100,12 @@ target/
 
 | Command | Purpose |
 |---|---|
-| `dropboxignore install` / `uninstall` | Register / remove the daemon with the platform's user-scoped service manager (Task Scheduler on Windows, systemd user unit on Linux). `uninstall --purge` also clears every existing marker, removes local dropboxignore state (`state.json`, `daemon.log*`, the state directory), and on Linux removes any systemd drop-in directory. Any stray marker on a `.dropboxignore` file itself is logged at `WARNING` before being cleared. |
-| `dropboxignore daemon` | Run the watcher + hourly sweep in the foreground. Usually invoked by Task Scheduler. |
-| `dropboxignore apply [PATH]` | One-shot reconcile of the whole Dropbox (or a subtree). |
-| `dropboxignore status` | Is the daemon running? Last sweep counts, last error. |
-| `dropboxignore list [PATH]` | Print every path currently bearing the ignore marker. |
-| `dropboxignore explain PATH` | Which `.dropboxignore` rule (if any) matches the path? |
+| `dbxignore install` / `uninstall` | Register / remove the daemon with the platform's user-scoped service manager (Task Scheduler on Windows, systemd user unit on Linux). `uninstall --purge` also clears every existing marker, removes local dbxignore state (`state.json`, `daemon.log*`, the state directory), and on Linux removes any systemd drop-in directory. Any stray marker on a `.dropboxignore` file itself is logged at `WARNING` before being cleared. |
+| `dbxignore daemon` | Run the watcher + hourly sweep in the foreground. Usually invoked by Task Scheduler. |
+| `dbxignore apply [PATH]` | One-shot reconcile of the whole Dropbox (or a subtree). |
+| `dbxignore status` | Is the daemon running? Last sweep counts, last error. |
+| `dbxignore list [PATH]` | Print every path currently bearing the ignore marker. |
+| `dbxignore explain PATH` | Which `.dropboxignore` rule (if any) matches the path? |
 
 ## Behaviour
 
@@ -102,7 +117,7 @@ target/
 
 Dropbox marks files and folders as ignored using xattrs. When a folder carries the ignore marker, Dropbox does not sync that folder or anything inside it — children inherit the ignored state regardless of whether they individually carry the marker. This matters for gitignore-style negation rules in your `.dropboxignore`.
 
-If you write a negation whose target lives under a directory ignored by an earlier rule — the canonical case is `build/` followed by `!build/keep/` — the negation cannot take effect. Dropbox will ignore `build/keep/` because `build/` is ignored, no matter what xattr we put on the child. dropboxignore detects this at the moment you save the `.dropboxignore`, logs a WARNING naming both rules, and drops the conflicted negation from the active rule set.
+If you write a negation whose target lives under a directory ignored by an earlier rule — the canonical case is `build/` followed by `!build/keep/` — the negation cannot take effect. Dropbox will ignore `build/keep/` because `build/` is ignored, no matter what xattr we put on the child. dbxignore detects this at the moment you save the `.dropboxignore`, logs a WARNING naming both rules, and drops the conflicted negation from the active rule set.
 
 Negations that don't conflict with an ignored ancestor work normally. For example:
 
@@ -121,19 +136,19 @@ Environment variables read at daemon startup:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DROPBOXIGNORE_DEBOUNCE_RULES_MS` | `100` | Debounce window for `.dropboxignore` file events. |
-| `DROPBOXIGNORE_DEBOUNCE_DIRS_MS` | `0` | Debounce for directory-creation events (`0` = react immediately, no coalescing). |
-| `DROPBOXIGNORE_DEBOUNCE_OTHER_MS` | `500` | Debounce for other file events. |
-| `DROPBOXIGNORE_LOG_LEVEL` | `INFO` | Daemon log level. |
-| `DROPBOXIGNORE_ROOT` | *(unset)* | Escape hatch for non-stock Dropbox installs: overrides `info.json` discovery and treats the given absolute path as the sole Dropbox root. If the path doesn't exist, a WARNING is logged and no roots are returned (so `dropboxignore apply` exits with "No Dropbox roots found"). |
+| `DBXIGNORE_DEBOUNCE_RULES_MS` | `100` | Debounce window for `.dropboxignore` file events. |
+| `DBXIGNORE_DEBOUNCE_DIRS_MS` | `0` | Debounce for directory-creation events (`0` = react immediately, no coalescing). |
+| `DBXIGNORE_DEBOUNCE_OTHER_MS` | `500` | Debounce for other file events. |
+| `DBXIGNORE_LOG_LEVEL` | `INFO` | Daemon log level. |
+| `DBXIGNORE_ROOT` | *(unset)* | Escape hatch for non-stock Dropbox installs: overrides `info.json` discovery and treats the given absolute path as the sole Dropbox root. If the path doesn't exist, a WARNING is logged and no roots are returned (so `dbxignore apply` exits with "No Dropbox roots found"). |
 
 Logs (rotated, 25 MB total):
-- Windows — `%LOCALAPPDATA%\dropboxignore\daemon.log`.
-- Linux — two sinks, same records. The rotating file at `$XDG_STATE_HOME/dropboxignore/daemon.log` (fallback `~/.local/state/dropboxignore/daemon.log`) is authoritative for offline debugging and bug-report bundling; `journalctl --user -u dropboxignore.service` surfaces the same records via systemd-journald for live tailing and cross-service filtering.
+- Windows — `%LOCALAPPDATA%\dbxignore\daemon.log`.
+- Linux — two sinks, same records. The rotating file at `$XDG_STATE_HOME/dbxignore/daemon.log` (fallback `~/.local/state/dbxignore/daemon.log`) is authoritative for offline debugging and bug-report bundling; `journalctl --user -u dbxignore.service` surfaces the same records via systemd-journald for live tailing and cross-service filtering.
 
 State:
-- Windows — `%LOCALAPPDATA%\dropboxignore\state.json`.
-- Linux — `$XDG_STATE_HOME/dropboxignore/state.json` (fallback `~/.local/state/dropboxignore/state.json`). Installs that pre-date the XDG move are read transparently from the legacy `~/AppData/Local/dropboxignore/state.json` for one release, with a WARNING; the next daemon write persists to the XDG path.
+- Windows — `%LOCALAPPDATA%\dbxignore\state.json`.
+- Linux — `$XDG_STATE_HOME/dbxignore/state.json` (fallback `~/.local/state/dbxignore/state.json`). Installs that pre-date the XDG move are read transparently from the legacy `~/AppData/Local/dbxignore/state.json` for one release, with a WARNING; the next daemon write persists to the XDG path.
 
 ## License
 

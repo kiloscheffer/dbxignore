@@ -1,7 +1,7 @@
 """Persist daemon state under the platform's per-user state directory.
 
-Windows: ``%LOCALAPPDATA%\\dropboxignore\\state.json``.
-Linux: ``$XDG_STATE_HOME/dropboxignore/state.json`` (fallback ``~/.local/state/...``).
+Windows: ``%LOCALAPPDATA%\\dbxignore\\state.json``.
+Linux: ``$XDG_STATE_HOME/dbxignore/state.json`` (fallback ``~/.local/state/...``).
 """
 
 from __future__ import annotations
@@ -40,14 +40,14 @@ class State:
 
 
 def user_state_dir() -> Path:
-    """Per-user directory where dropboxignore persists state and log files."""
+    """Per-user directory where dbxignore persists state and log files."""
     if sys.platform == "win32":
         localappdata = os.environ.get("LOCALAPPDATA")
         base = Path(localappdata) if localappdata else Path.home() / "AppData" / "Local"
-        return base / "dropboxignore"
+        return base / "dbxignore"
     xdg = os.environ.get("XDG_STATE_HOME")
     base = Path(xdg) if xdg else Path.home() / ".local" / "state"
-    return base / "dropboxignore"
+    return base / "dbxignore"
 
 
 def default_path() -> Path:

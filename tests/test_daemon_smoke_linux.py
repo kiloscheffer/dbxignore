@@ -80,12 +80,12 @@ def test_daemon_reacts_to_dropboxignore_add_and_remove(tmp_path, monkeypatch):
     a product-behavior question tracked separately in the v0.2 follow-ups
     plan — out of scope for a pipeline smoke test.
     """
-    from dropboxignore import daemon, markers
+    from dbxignore import daemon, markers
 
     monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])
     # Route state.json + daemon.log off the real per-user XDG dir.
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    log_path = tmp_path / "state" / "dropboxignore" / "daemon.log"
+    log_path = tmp_path / "state" / "dbxignore" / "daemon.log"
 
     stop = threading.Event()
     t = threading.Thread(target=daemon.run, args=(stop,), daemon=True)
@@ -121,11 +121,11 @@ def test_daemon_drops_conflicted_negation(tmp_path, monkeypatch):
 
     This is the Linux counterpart to the Windows smoke's negation phase.
     """
-    from dropboxignore import daemon, markers
+    from dbxignore import daemon, markers
 
     monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    log_path = tmp_path / "state" / "dropboxignore" / "daemon.log"
+    log_path = tmp_path / "state" / "dbxignore" / "daemon.log"
 
     stop = threading.Event()
     t = threading.Thread(target=daemon.run, args=(stop,), daemon=True)

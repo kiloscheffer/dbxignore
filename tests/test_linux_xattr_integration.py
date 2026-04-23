@@ -12,7 +12,7 @@ pytestmark = pytest.mark.linux_only
 if not sys.platform.startswith("linux"):
     pytest.skip("user.* xattrs are Linux-only in v0.2", allow_module_level=True)
 
-from dropboxignore._backends import linux_xattr  # noqa: E402, I001  # must come after sys.platform skip guard
+from dbxignore._backends import linux_xattr  # noqa: E402, I001  # must come after sys.platform skip guard
 
 
 def _xattr_supported(path) -> bool:

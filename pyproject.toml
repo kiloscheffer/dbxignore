@@ -3,7 +3,7 @@ requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
-name = "dropboxignore"
+name = "dbxignore"
 description = "Hierarchical .dropboxignore for Dropbox on Windows (NTFS ADS) and Linux (xattrs)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -25,17 +25,17 @@ dev = [
 ]
 
 [project.scripts]
-dropboxignore = "dropboxignore.cli:main"
-dropboxignored = "dropboxignore.cli:daemon_main"
+dbxignore = "dbxignore.cli:main"
+dbxignored = "dbxignore.cli:daemon_main"
 
 [tool.hatch.version]
 source = "vcs"
 
 [tool.hatch.build.hooks.vcs]
-version-file = "src/dropboxignore/_version.py"
+version-file = "src/dbxignore/_version.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/dropboxignore"]
+packages = ["src/dbxignore"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

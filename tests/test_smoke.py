@@ -1,4 +1,4 @@
 def test_package_importable():
-    import dropboxignore
+    import dbxignore
 
-    assert dropboxignore.__version__
+    assert dbxignore.__version__

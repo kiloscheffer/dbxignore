@@ -32,9 +32,9 @@ def _require_xattr_fs(tmp_path):
 
 
 def test_apply_marks_and_clears_via_real_xattrs(tmp_path, write_file):
-    from dropboxignore import markers
-    from dropboxignore.reconcile import reconcile_subtree
-    from dropboxignore.rules import RuleCache
+    from dbxignore import markers
+    from dbxignore.reconcile import reconcile_subtree
+    from dbxignore.rules import RuleCache
 
     root = tmp_path
     write_file(root / ".dropboxignore", "build/\nsecrets.env\n")
@@ -69,9 +69,9 @@ def test_apply_marks_and_clears_via_real_xattrs(tmp_path, write_file):
 
 
 def test_dropboxignore_itself_never_marked(tmp_path, write_file):
-    from dropboxignore import markers
-    from dropboxignore.reconcile import reconcile_subtree
-    from dropboxignore.rules import RuleCache
+    from dbxignore import markers
+    from dbxignore.reconcile import reconcile_subtree
+    from dbxignore.rules import RuleCache
 
     root = tmp_path
     # Rule tries to ignore .dropboxignore itself; must be overridden.

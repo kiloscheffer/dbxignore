@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from dropboxignore.rules import Conflict, _detect_conflicts, literal_prefix
+from dbxignore.rules import Conflict, _detect_conflicts, literal_prefix
 
 
 @pytest.mark.parametrize(

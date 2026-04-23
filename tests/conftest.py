@@ -1,4 +1,4 @@
-"""Shared fixtures and helpers for the dropboxignore test suite."""
+"""Shared fixtures and helpers for the dbxignore test suite."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from dropboxignore import cli, reconcile
+from dbxignore import cli, reconcile
 
 
 class FakeMarkers:

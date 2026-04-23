@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from dropboxignore._backends import windows_ads
+from dbxignore._backends import windows_ads
 
 
 @pytest.mark.windows_only

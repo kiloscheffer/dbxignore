@@ -5,8 +5,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dropboxignore import reconcile
-from dropboxignore.rules import RuleCache
+from dbxignore import reconcile
+from dbxignore.rules import RuleCache
 
 
 def test_reconcile_path_returns_true_after_newly_marking(

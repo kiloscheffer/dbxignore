@@ -9,13 +9,13 @@ from __future__ import annotations
 import sys
 
 if sys.platform == "win32":
-    from dropboxignore._backends.windows_ads import (
+    from dbxignore._backends.windows_ads import (
         clear_ignored,
         is_ignored,
         set_ignored,
     )
 elif sys.platform.startswith("linux"):
-    from dropboxignore._backends.linux_xattr import (
+    from dbxignore._backends.linux_xattr import (
         clear_ignored,
         is_ignored,
         set_ignored,
@@ -23,7 +23,7 @@ elif sys.platform.startswith("linux"):
 else:
     def _unsupported(*_args, **_kwargs):
         raise NotImplementedError(
-            f"dropboxignore has no ignore-marker backend for platform "
+            f"dbxignore has no ignore-marker backend for platform "
             f"{sys.platform!r}; supported: 'win32', 'linux'. "
             "macOS support is planned for v0.3."
         )

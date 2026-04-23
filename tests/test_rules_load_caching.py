@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 
-from dropboxignore.rules import RuleCache
+from dbxignore.rules import RuleCache
 
 
 def _cached(cache: RuleCache, ignore_file_path):

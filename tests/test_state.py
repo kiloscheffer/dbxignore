@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from dropboxignore import state
+from dbxignore import state
 
 
 def test_roundtrip(tmp_path):
@@ -40,13 +40,13 @@ def test_read_corrupt_returns_none(tmp_path):
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows path layout")
 def test_default_path_windows_under_localappdata(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    assert state.default_path() == tmp_path / "dropboxignore" / "state.json"
+    assert state.default_path() == tmp_path / "dbxignore" / "state.json"
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux path layout")
 def test_default_path_linux_uses_xdg_state_home(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    assert state.default_path() == tmp_path / "state" / "dropboxignore" / "state.json"
+    assert state.default_path() == tmp_path / "state" / "dbxignore" / "state.json"
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux path layout")
@@ -55,7 +55,7 @@ def test_default_path_linux_falls_back_to_local_state(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     assert (
         state.default_path()
-        == tmp_path / ".local" / "state" / "dropboxignore" / "state.json"
+        == tmp_path / ".local" / "state" / "dbxignore" / "state.json"
     )
 
 
@@ -72,10 +72,10 @@ def test_read_falls_back_to_legacy_linux_path_with_warning(
     legacy.parent.mkdir(parents=True)
     state.write(state.State(daemon_pid=999), legacy)
 
-    xdg = tmp_path / ".local" / "state" / "dropboxignore" / "state.json"
+    xdg = tmp_path / ".local" / "state" / "dbxignore" / "state.json"
     assert not xdg.exists()
 
-    with caplog.at_level(logging.WARNING, logger="dropboxignore.state"):
+    with caplog.at_level(logging.WARNING, logger="dbxignore.state"):
         loaded = state.read()
 
     assert loaded is not None
@@ -97,7 +97,7 @@ def test_read_prefers_xdg_when_both_exist(monkeypatch, tmp_path):
     legacy.parent.mkdir(parents=True)
     state.write(state.State(daemon_pid=111), legacy)
 
-    xdg = tmp_path / ".local" / "state" / "dropboxignore" / "state.json"
+    xdg = tmp_path / ".local" / "state" / "dbxignore" / "state.json"
     xdg.parent.mkdir(parents=True)
     state.write(state.State(daemon_pid=222), xdg)
 

@@ -1,6 +1,6 @@
 from click.testing import CliRunner
 
-from dropboxignore import cli
+from dbxignore import cli
 
 
 def test_apply_marks_matching_paths(tmp_path, fake_markers, monkeypatch):

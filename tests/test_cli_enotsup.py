@@ -6,7 +6,7 @@ import errno
 
 from click.testing import CliRunner
 
-from dropboxignore import cli
+from dbxignore import cli
 
 
 def test_list_survives_enotsup(tmp_path, fake_markers, monkeypatch, write_file):

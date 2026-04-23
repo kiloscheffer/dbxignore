@@ -7,15 +7,15 @@ from pathlib import Path
 import psutil
 import pytest
 
-from dropboxignore import daemon, state
+from dbxignore import daemon, state
 
 
 @pytest.mark.parametrize("name,expected", [
     ("python.exe", True),
     ("python3", True),
     ("pythonw.exe", True),
-    ("dropboxignored.exe", True),
-    ("dropboxignored", True),
+    ("dbxignored.exe", True),
+    ("dbxignored", True),
     ("notepad.exe", False),
     ("svchost.exe", False),
 ])
@@ -49,7 +49,7 @@ def test_run_refuses_when_another_pid_is_alive(monkeypatch, tmp_path, caplog):
         monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])
         monkeypatch.setattr(daemon, "_configured_logging", contextlib.nullcontext)
 
-        caplog.set_level("ERROR", logger="dropboxignore.daemon")
+        caplog.set_level("ERROR", logger="dbxignore.daemon")
         daemon.run()
         assert any("already running" in rec.message.lower() for rec in caplog.records)
     finally:

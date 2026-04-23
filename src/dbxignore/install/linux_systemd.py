@@ -11,19 +11,19 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-UNIT_NAME = "dropboxignore.service"
+UNIT_NAME = "dbxignore.service"
 
 # Env vars that `install_unit()` forwards from the caller's shell into the
-# generated unit's `[Service]` block. Scoped to DROPBOXIGNORE_ROOT because
+# generated unit's `[Service]` block. Scoped to DBXIGNORE_ROOT because
 # without it the daemon silently falls back to `~/.dropbox/info.json`
-# discovery, leaving non-stock-Dropbox users confused. Other DROPBOXIGNORE_*
+# discovery, leaving non-stock-Dropbox users confused. Other DBXIGNORE_*
 # vars are optional tuning with sensible defaults — users who want to adjust
-# them can drop in their own override under `dropboxignore.service.d/`.
-_FORWARDED_ENV_VARS = ("DROPBOXIGNORE_ROOT",)
+# them can drop in their own override under `dbxignore.service.d/`.
+_FORWARDED_ENV_VARS = ("DBXIGNORE_ROOT",)
 
 
 def _unit_path() -> Path:
-    """Return ``~/.config/systemd/user/dropboxignore.service``."""
+    """Return ``~/.config/systemd/user/dbxignore.service``."""
     home = os.environ.get("HOME")
     if not home:
         raise RuntimeError("HOME not set; cannot locate systemd user unit directory")
@@ -46,18 +46,18 @@ def _detect_invocation() -> tuple[Path, str]:
     """Return (executable, arguments) to run the daemon in the current install."""
     if getattr(sys, "frozen", False):
         return Path(sys.executable), ""
-    # uv tool install places a `dropboxignored` shim on PATH.
-    exe = shutil.which("dropboxignored")
+    # uv tool install places a `dbxignored` shim on PATH.
+    exe = shutil.which("dbxignored")
     if exe:
         return Path(exe), ""
-    # Fallback: the current Python + `-m dropboxignore daemon`.
+    # Fallback: the current Python + `-m dbxignore daemon`.
     python = shutil.which("python3") or sys.executable
     if not python:
         raise RuntimeError(
-            "dropboxignored not on PATH and no python3 found; "
-            "run `uv tool install .` from the dropboxignore checkout first"
+            "dbxignored not on PATH and no python3 found; "
+            "run `uv tool install .` from the dbxignore checkout first"
         )
-    return Path(python), "-m dropboxignore daemon"
+    return Path(python), "-m dbxignore daemon"
 
 
 def _run_systemctl(cmd: list[str]) -> None:
@@ -95,8 +95,8 @@ def build_unit_content(
             for key, value in environment.items()
         ) + "\n"
     return f"""[Unit]
-Description=dropboxignore daemon
-Documentation=https://github.com/kiloscheffer/dropboxignore
+Description=dbxignore daemon
+Documentation=https://github.com/kiloscheffer/dbxignore
 After=default.target
 
 [Service]
@@ -152,7 +152,7 @@ def remove_dropin_directory() -> Path | None:
     Drop-in directories live at ``~/.config/systemd/user/<unit-name>.d/``
     and are where users put ``Environment=`` overrides (see the
     "Install (Linux)" section of the README). On a full `--purge`
-    uninstall, we clean this up too so no dropboxignore-related artifacts
+    uninstall, we clean this up too so no dbxignore-related artifacts
     linger.
 
     Returns the path that was removed, or ``None`` if HOME is unset or

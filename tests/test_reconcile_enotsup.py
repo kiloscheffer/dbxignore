@@ -5,8 +5,8 @@ from __future__ import annotations
 import errno
 import logging
 
-from dropboxignore import reconcile
-from dropboxignore.rules import RuleCache
+from dbxignore import reconcile
+from dbxignore.rules import RuleCache
 
 
 def _raise_enotsup(*_args, **_kwargs):
@@ -26,7 +26,7 @@ def test_enotsup_on_set_is_reported_not_raised(
     cache = RuleCache()
     cache.load_root(root)
 
-    with caplog.at_level(logging.WARNING, logger="dropboxignore.reconcile"):
+    with caplog.at_level(logging.WARNING, logger="dbxignore.reconcile"):
         report = reconcile.reconcile_subtree(root, root, cache)
 
     assert report.marked == 0
@@ -52,7 +52,7 @@ def test_enotsup_on_clear_is_reported_not_raised(
     cache = RuleCache()
     cache.load_root(root)
 
-    with caplog.at_level(logging.WARNING, logger="dropboxignore.reconcile"):
+    with caplog.at_level(logging.WARNING, logger="dbxignore.reconcile"):
         report = reconcile.reconcile_subtree(root, root, cache)
 
     assert report.cleared == 0

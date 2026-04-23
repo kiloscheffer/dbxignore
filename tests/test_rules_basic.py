@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from dropboxignore.rules import RuleCache
+from dbxignore.rules import RuleCache
 
 
 def test_match_rejects_relative_path(tmp_path, write_file):

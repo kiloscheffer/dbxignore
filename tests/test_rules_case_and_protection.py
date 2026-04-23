@@ -1,4 +1,4 @@
-from dropboxignore.rules import RuleCache
+from dbxignore.rules import RuleCache
 
 
 def test_case_insensitive_match(tmp_path, write_file):

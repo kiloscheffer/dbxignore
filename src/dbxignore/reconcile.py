@@ -9,8 +9,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from dropboxignore import markers
-from dropboxignore.rules import IGNORE_FILENAME, RuleCache
+from dbxignore import markers
+from dbxignore.rules import IGNORE_FILENAME, RuleCache
 
 logger = logging.getLogger(__name__)
 

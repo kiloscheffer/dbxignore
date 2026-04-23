@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import datetime as dt
 
-from dropboxignore import daemon, state
-from dropboxignore.rules import RuleCache
+from dbxignore import daemon, state
+from dbxignore.rules import RuleCache
 
 
 def _utc_now():
@@ -68,7 +68,7 @@ def test_sweep_populates_last_error_when_reconcile_fails(
     tmp_path, monkeypatch, write_file
 ):
     """Sweep errors must populate state.last_error so `status` can surface them."""
-    from dropboxignore import reconcile
+    from dbxignore import reconcile
 
     write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()

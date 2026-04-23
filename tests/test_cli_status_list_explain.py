@@ -4,7 +4,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from dropboxignore import cli, state
+from dbxignore import cli, state
 
 
 def test_status_reports_no_state_when_file_missing(tmp_path, monkeypatch):
@@ -96,7 +96,7 @@ def test_status_lists_rule_conflicts(tmp_path, monkeypatch):
     """`status` surfaces RuleCache conflicts alongside daemon pid / sweep info."""
     import click.testing
 
-    from dropboxignore import cli, state
+    from dbxignore import cli, state
 
     root = tmp_path
     (root / ".dropboxignore").write_text(
@@ -117,7 +117,7 @@ def test_status_lists_rule_conflicts(tmp_path, monkeypatch):
 def test_status_omits_conflicts_section_when_empty(tmp_path, monkeypatch):
     import click.testing
 
-    from dropboxignore import cli, state
+    from dbxignore import cli, state
 
     root = tmp_path
     (root / ".dropboxignore").write_text("build/\n", encoding="utf-8")
@@ -132,7 +132,7 @@ def test_status_omits_conflicts_section_when_empty(tmp_path, monkeypatch):
 def test_explain_annotates_dropped_negations(tmp_path, monkeypatch):
     import click.testing
 
-    from dropboxignore import cli
+    from dbxignore import cli
 
     root = tmp_path
     (root / ".dropboxignore").write_text(
@@ -159,7 +159,7 @@ def test_status_does_not_log_conflict_warning_to_stderr(tmp_path, monkeypatch, c
 
     import click.testing
 
-    from dropboxignore import cli, state
+    from dbxignore import cli, state
 
     root = tmp_path
     (root / ".dropboxignore").write_text(
@@ -168,14 +168,14 @@ def test_status_does_not_log_conflict_warning_to_stderr(tmp_path, monkeypatch, c
     monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")
     monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
 
-    with caplog.at_level(logging.WARNING, logger="dropboxignore.rules"):
+    with caplog.at_level(logging.WARNING, logger="dbxignore.rules"):
         result = click.testing.CliRunner().invoke(cli.main, ["status"])
 
     assert result.exit_code == 0
     assert "rule conflicts (1):" in result.output
     conflict_warnings = [
         r for r in caplog.records
-        if r.name == "dropboxignore.rules" and "negation" in r.message
+        if r.name == "dbxignore.rules" and "negation" in r.message
     ]
     assert conflict_warnings == [], (
         f"status should not emit conflict WARNINGs; got: "

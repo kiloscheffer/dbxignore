@@ -19,12 +19,12 @@ from typing import Any
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from dropboxignore import roots as roots_module
-from dropboxignore import state as state_module
-from dropboxignore.debounce import Debouncer, EventKind
-from dropboxignore.reconcile import reconcile_subtree
-from dropboxignore.roots import find_containing
-from dropboxignore.rules import IGNORE_FILENAME, RuleCache
+from dbxignore import roots as roots_module
+from dbxignore import state as state_module
+from dbxignore.debounce import Debouncer, EventKind
+from dbxignore.reconcile import reconcile_subtree
+from dbxignore.roots import find_containing
+from dbxignore.rules import IGNORE_FILENAME, RuleCache
 
 logger = logging.getLogger(__name__)
 
@@ -94,9 +94,9 @@ DEFAULT_TIMEOUTS_MS = {
 }
 
 _TIMEOUT_ENV_VARS = {
-    EventKind.RULES: "DROPBOXIGNORE_DEBOUNCE_RULES_MS",
-    EventKind.DIR_CREATE: "DROPBOXIGNORE_DEBOUNCE_DIRS_MS",
-    EventKind.OTHER: "DROPBOXIGNORE_DEBOUNCE_OTHER_MS",
+    EventKind.RULES: "DBXIGNORE_DEBOUNCE_RULES_MS",
+    EventKind.DIR_CREATE: "DBXIGNORE_DEBOUNCE_DIRS_MS",
+    EventKind.OTHER: "DBXIGNORE_DEBOUNCE_OTHER_MS",
 }
 
 
@@ -118,12 +118,12 @@ def _configured_logging() -> Iterator[None]:
     Always installs a RotatingFileHandler at ``_log_dir()/daemon.log``. On
     Linux, additionally attaches a ``StreamHandler(sys.stderr)`` so that
     records flow to systemd-journald when the daemon runs as a user unit
-    (``journalctl --user -u dropboxignore.service`` surfaces them). The
+    (``journalctl --user -u dbxignore.service`` surfaces them). The
     rotating file remains authoritative — identical records land in both
     sinks, so grabbing ``daemon.log`` still yields a complete debug record
     on Linux, matching the Windows workflow.
     """
-    level_name = os.environ.get("DROPBOXIGNORE_LOG_LEVEL", "INFO").upper()
+    level_name = os.environ.get("DBXIGNORE_LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
 
     formatter = logging.Formatter(
@@ -146,7 +146,7 @@ def _configured_logging() -> Iterator[None]:
         stderr_handler.setFormatter(formatter)
         new_handlers.append(stderr_handler)
 
-    pkg_logger = logging.getLogger("dropboxignore")
+    pkg_logger = logging.getLogger("dbxignore")
     saved_handlers = list(pkg_logger.handlers)
     saved_propagate = pkg_logger.propagate
     saved_level = pkg_logger.level
@@ -185,8 +185,8 @@ def _is_other_live_daemon(pid: int | None) -> bool:
     try:
         proc = psutil.Process(pid)
         name = proc.name().lower()
-        # Frozen PyInstaller build runs as dropboxignored.exe; source run as python.
-        return "python" in name or "dropboxignored" in name
+        # Frozen PyInstaller build runs as dbxignored.exe; source run as python.
+        return "python" in name or "dbxignored" in name
     except psutil.Error:
         return False
 

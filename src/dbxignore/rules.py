@@ -12,7 +12,7 @@ from pathlib import Path
 import pathspec
 from pathspec.patterns.gitwildmatch import GitIgnoreSpecPattern
 
-from dropboxignore.roots import find_containing
+from dbxignore.roots import find_containing
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,7 @@ class Conflict:
     Emitted by ``RuleCache._recompute_conflicts`` when a negation's literal
     prefix lives under a directory matched by an earlier include rule —
     Dropbox's ignored-folder inheritance makes such negations inert. Used
-    for the WARNING log, ``dropboxignore status`` reporting, and the
+    for the WARNING log, ``dbxignore status`` reporting, and the
     ``[dropped]`` annotation in ``explain()`` output.
     """
 
@@ -319,7 +319,7 @@ class RuleCache:
 
         Each entry identifies which .dropboxignore file and which source line
         matched, plus whether the match was a negation. Useful for the
-        ``dropboxignore explain`` CLI command.
+        ``dbxignore explain`` CLI command.
 
         Unlike ``match()``, ``explain()`` includes rules that were dropped
         from the active rule set by conflict detection — each such entry

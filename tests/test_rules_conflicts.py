@@ -48,7 +48,7 @@ def test_conflict_dataclass_shape() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 3: _detect_conflicts tests
+# _detect_conflicts tests
 # ---------------------------------------------------------------------------
 
 
@@ -183,3 +183,20 @@ def test_detect_multiple_independent_conflicts(tmp_path: Path) -> None:
     conflicts = _detect_conflicts(sequence, root=root)
     patterns = {c.dropped_pattern for c in conflicts}
     assert patterns == {"!build/keep/", "!node_modules/patched/"}
+
+
+def test_detect_later_include_does_not_affect_earlier_negation(tmp_path: Path) -> None:
+    """Sandwich (include → negation → include): the trailing include is invisible
+    to the detector because it iterates ``sequence[:i]``. Pins the slice
+    invariant so a refactor widening it to the full sequence would fail."""
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "build/", str(root)),
+        _entry(str(root / ".dropboxignore"), 2, "!build/keep/", str(root)),
+        _entry(str(root / ".dropboxignore"), 3, "src/", str(root)),
+    ]
+    conflicts = _detect_conflicts(sequence, root=root)
+
+    assert len(conflicts) == 1
+    assert conflicts[0].dropped_pattern == "!build/keep/"
+    assert conflicts[0].masking_pattern == "build/"

@@ -107,8 +107,6 @@ def test_load_file_survives_malformed_pattern(tmp_path, write_file, caplog):
 
 
 def test_rulecache_populates_conflicts_on_load(tmp_path):
-    from dbxignore.rules import RuleCache
-
     root = tmp_path
     (root / ".dropboxignore").write_text(
         "build/\n!build/keep/\n", encoding="utf-8"
@@ -124,8 +122,6 @@ def test_rulecache_populates_conflicts_on_load(tmp_path):
 
 
 def test_rulecache_clears_conflicts_on_reload_without_conflict(tmp_path):
-    from dbxignore.rules import RuleCache
-
     root = tmp_path
     ignore_file = root / ".dropboxignore"
     ignore_file.write_text("build/\n!build/keep/\n", encoding="utf-8")
@@ -141,8 +137,6 @@ def test_rulecache_clears_conflicts_on_reload_without_conflict(tmp_path):
 
 
 def test_rulecache_conflicts_removed_when_file_removed(tmp_path):
-    from dbxignore.rules import RuleCache
-
     root = tmp_path
     ignore_file = root / ".dropboxignore"
     ignore_file.write_text("build/\n!build/keep/\n", encoding="utf-8")
@@ -158,8 +152,6 @@ def test_rulecache_conflicts_do_not_leak_across_roots(tmp_path):
     """A conflict in root A must not appear in root B's conflicts list.
     The is_relative_to(root) filter in _build_sequence is what prevents
     this leakage; this test guards that filter."""
-    from dbxignore.rules import RuleCache
-
     root_a = tmp_path / "a"
     root_b = tmp_path / "b"
     root_a.mkdir()
@@ -183,8 +175,6 @@ def test_rulecache_detects_cross_file_conflict(tmp_path):
     build/ tries to re-include keep/. The conflict spans two files —
     _build_sequence must order the root file before the nested one so
     the negation in the nested file sees `build/` as an earlier include."""
-    from dbxignore.rules import RuleCache
-
     root = tmp_path
     (root / "build").mkdir()
     (root / ".dropboxignore").write_text("build/\n", encoding="utf-8")
@@ -208,8 +198,6 @@ def test_match_treats_dropped_negation_as_absent(tmp_path):
     """With `build/` + `!build/keep/`, the negation is dropped, so
     build/keep/ is matched via the include (gitignore semantics with the
     negation absent)."""
-    from dbxignore.rules import RuleCache
-
     root = tmp_path
     (root / ".dropboxignore").write_text(
         "build/\n!build/keep/\n", encoding="utf-8"
@@ -227,8 +215,6 @@ def test_match_treats_dropped_negation_as_absent(tmp_path):
 def test_match_honors_non_conflicted_negation(tmp_path):
     """*.log + !important.log: the negation is NOT dropped (no ignored
     ancestor), so important.log is excluded and others are included."""
-    from dbxignore.rules import RuleCache
-
     root = tmp_path
     (root / ".dropboxignore").write_text(
         "*.log\n!important.log\n", encoding="utf-8"
@@ -245,8 +231,6 @@ def test_match_honors_non_conflicted_negation(tmp_path):
 
 def test_recompute_logs_warning_per_conflict(tmp_path, caplog):
     import logging
-
-    from dbxignore.rules import RuleCache
 
     root = tmp_path
     (root / ".dropboxignore").write_text(
@@ -271,8 +255,6 @@ def test_recompute_logs_warning_per_conflict(tmp_path, caplog):
 
 
 def test_explain_includes_dropped_negation_with_flag(tmp_path):
-    from dbxignore.rules import RuleCache
-
     root = tmp_path
     (root / ".dropboxignore").write_text(
         "build/\n!build/keep/\n", encoding="utf-8"
@@ -298,8 +280,6 @@ def test_explain_includes_dropped_negation_with_flag(tmp_path):
 def test_explain_is_dropped_false_for_non_conflicted_negation(tmp_path):
     """*.log + !important.log has no conflict — the negation should appear
     in explain() with is_dropped=False."""
-    from dbxignore.rules import RuleCache
-
     root = tmp_path
     (root / ".dropboxignore").write_text(
         "*.log\n!important.log\n", encoding="utf-8"

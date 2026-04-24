@@ -5,6 +5,32 @@ All notable changes to dropboxignore are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Renames the project's owned surfaces from `dropboxignore` to `dbxignore`. The `.dropboxignore` rule-file name and the `com.dropbox.ignored` marker key are Dropbox's contracts and are **not** changed.
+
+**Upgrade path (clean break):** on an existing v0.2.x install, run `dropboxignore uninstall --purge` to clear all ignore markers and remove v0.2.x local state, then `pip install dbxignore` (or download the new binaries), then `dbxignore install`. Your `.dropboxignore` rule files carry over untouched — they are not renamed and require no edits.
+
+**GitHub repo rename:** `kiloscheffer/dropboxignore` → `kiloscheffer/dbxignore`, performed out-of-tree. GitHub auto-redirects handle all existing URLs.
+
+### Changed
+
+- **PyPI distribution name: `dropboxignore` → `dbxignore`.** **Breaking** — `pip install dropboxignore` will no longer receive updates; switch to `pip install dbxignore`.
+- **Python package directory: `src/dropboxignore/` → `src/dbxignore/`.** **Breaking** — any code that imports `dropboxignore.*` must be updated to `dbxignore.*`.
+- **CLI entry points: `dropboxignore` / `dropboxignored` → `dbxignore` / `dbxignored`.** **Breaking** — shell scripts, aliases, and Task Scheduler / systemd registrations using the old names must be recreated. Run `dropboxignore uninstall` before upgrading, then `dbxignore install` after.
+- **Logger hierarchy root: `dropboxignore` → `dbxignore`.** Affects any external log filter or handler referencing the old name (e.g. `logging.getLogger("dropboxignore")`).
+- **Environment variables: `DROPBOXIGNORE_*` → `DBXIGNORE_*`.** All public env vars (`DBXIGNORE_ROOT`, `DBXIGNORE_DEBOUNCE_RULES_MS`, `DBXIGNORE_DEBOUNCE_DIRS_MS`, `DBXIGNORE_DEBOUNCE_OTHER_MS`) are renamed. **Breaking** — old names are not read.
+- **Per-user state and log directory:**
+  - Windows: `%LOCALAPPDATA%\dropboxignore\` → `%LOCALAPPDATA%\dbxignore\`
+  - Linux: `$XDG_STATE_HOME/dropboxignore/` → `$XDG_STATE_HOME/dbxignore/` (fallback `~/.local/state/dbxignore/`)
+  - **Breaking** — existing `state.json` and `daemon.log` are not migrated automatically. `dropboxignore uninstall --purge` removes v0.2.x state as part of the recommended upgrade path.
+- **systemd user unit: `dropboxignore.service` → `dbxignore.service`.** **Breaking** — the old unit name is not recognized; `dropboxignore uninstall` must be run on v0.2.x before upgrading.
+- **Windows Task Scheduler task name: `dropboxignore` → `dbxignore`.** Same clean-break requirement.
+- **PyInstaller binaries: `dropboxignore.exe` / `dropboxignored.exe` → `dbxignore.exe` / `dbxignored.exe`.** GitHub Release assets are renamed accordingly; the PyInstaller spec is now `pyinstaller/dbxignore.spec`.
+- **GitHub Release asset names** changed to `dbxignore.exe` / `dbxignored.exe` to match the renamed entry points.
+- **README** updated throughout: install examples, CLI examples, env-var reference table, state/log paths, systemd unit name, and GitHub repo links all reflect the new `dbxignore` name. An "Upgrading from v0.2.x" section with step-by-step instructions was added.
+- **v0.2.0-era Linux legacy state-path fallback removed.** `state._legacy_linux_path()` and its transparent read fallback from `~/AppData/Local/dropboxignore/` are gone. The v0.2.0 CHANGELOG had scheduled this for v0.4; it is brought forward to v0.3 because the clean-break upgrade path (`dropboxignore uninstall --purge` before `dbxignore install`) eliminates any remaining callers. **Breaking** — anyone who skipped `uninstall --purge` on v0.2.x and had a legacy path will not have their old state read; run `dbxignore install` and let the daemon rebuild state from scratch.
+
 ## [0.2.1] — 2026-04-22
 
 Maintenance release. Release-workflow hardening and project-documentation scaffolding. **No user-facing behavior changes.** Existing `.dropboxignore` rules, CLI commands, and daemon behavior are identical to v0.2.0; upgrade is a no-op for anyone running v0.2.0 today.

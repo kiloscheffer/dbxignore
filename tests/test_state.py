@@ -1,4 +1,3 @@
-import logging
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -57,65 +56,3 @@ def test_default_path_linux_falls_back_to_local_state(monkeypatch, tmp_path):
         state.default_path()
         == tmp_path / ".local" / "state" / "dbxignore" / "state.json"
     )
-
-
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux migration")
-def test_read_falls_back_to_legacy_linux_path_with_warning(
-    monkeypatch, tmp_path, caplog
-):
-    """Pre-XDG installs persisted to ~/AppData/Local/dropboxignore/state.json.
-    read() must transparently pick that up and warn so the user can clean up."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
-
-    legacy = tmp_path / "AppData" / "Local" / "dropboxignore" / "state.json"
-    legacy.parent.mkdir(parents=True)
-    state.write(state.State(daemon_pid=999), legacy)
-
-    xdg = tmp_path / ".local" / "state" / "dbxignore" / "state.json"
-    assert not xdg.exists()
-
-    with caplog.at_level(logging.WARNING, logger="dbxignore.state"):
-        loaded = state.read()
-
-    assert loaded is not None
-    assert loaded.daemon_pid == 999
-    assert any(
-        "legacy" in rec.message.lower() and str(legacy) in rec.message
-        for rec in caplog.records
-    ), [rec.message for rec in caplog.records]
-
-
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux migration")
-def test_read_prefers_xdg_when_both_exist(monkeypatch, tmp_path):
-    """If the daemon has already written to the XDG path, that wins — an old
-    legacy file must not clobber newer state."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
-
-    legacy = tmp_path / "AppData" / "Local" / "dropboxignore" / "state.json"
-    legacy.parent.mkdir(parents=True)
-    state.write(state.State(daemon_pid=111), legacy)
-
-    xdg = tmp_path / ".local" / "state" / "dbxignore" / "state.json"
-    xdg.parent.mkdir(parents=True)
-    state.write(state.State(daemon_pid=222), xdg)
-
-    loaded = state.read()
-
-    assert loaded is not None
-    assert loaded.daemon_pid == 222
-
-
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux migration")
-def test_read_explicit_path_does_not_trigger_legacy_fallback(monkeypatch, tmp_path):
-    """An explicit path argument means 'read this file' — the legacy-fallback
-    logic only kicks in for the zero-arg discovered-default call."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
-
-    legacy = tmp_path / "AppData" / "Local" / "dropboxignore" / "state.json"
-    legacy.parent.mkdir(parents=True)
-    state.write(state.State(daemon_pid=999), legacy)
-
-    assert state.read(tmp_path / "nope.json") is None

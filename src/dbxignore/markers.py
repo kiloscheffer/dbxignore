@@ -25,7 +25,7 @@ else:
         raise NotImplementedError(
             f"dbxignore has no ignore-marker backend for platform "
             f"{sys.platform!r}; supported: 'win32', 'linux'. "
-            "macOS support is planned for v0.3."
+            "macOS support is planned for a future release."
         )
     is_ignored = set_ignored = clear_ignored = _unsupported
 

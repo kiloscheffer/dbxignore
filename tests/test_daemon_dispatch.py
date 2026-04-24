@@ -1,8 +1,8 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from dropboxignore import daemon
-from dropboxignore.debounce import EventKind
+from dbxignore import daemon
+from dbxignore.debounce import EventKind
 
 
 def _stub_event(kind: str, src_path: str, is_directory: bool = False, dest_path: str | None = None):

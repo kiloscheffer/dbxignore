@@ -1,7 +1,7 @@
 """Persist daemon state under the platform's per-user state directory.
 
-Windows: ``%LOCALAPPDATA%\\dropboxignore\\state.json``.
-Linux: ``$XDG_STATE_HOME/dropboxignore/state.json`` (fallback ``~/.local/state/...``).
+Windows: ``%LOCALAPPDATA%\\dbxignore\\state.json``.
+Linux: ``$XDG_STATE_HOME/dbxignore/state.json`` (fallback ``~/.local/state/...``).
 """
 
 from __future__ import annotations
@@ -40,25 +40,18 @@ class State:
 
 
 def user_state_dir() -> Path:
-    """Per-user directory where dropboxignore persists state and log files."""
+    """Per-user directory where dbxignore persists state and log files."""
     if sys.platform == "win32":
         localappdata = os.environ.get("LOCALAPPDATA")
         base = Path(localappdata) if localappdata else Path.home() / "AppData" / "Local"
-        return base / "dropboxignore"
+        return base / "dbxignore"
     xdg = os.environ.get("XDG_STATE_HOME")
     base = Path(xdg) if xdg else Path.home() / ".local" / "state"
-    return base / "dropboxignore"
+    return base / "dbxignore"
 
 
 def default_path() -> Path:
     return user_state_dir() / "state.json"
-
-
-def _legacy_linux_path() -> Path:
-    # Pre-XDG builds wrote to a Windows-shaped tree even on Linux. Keep one
-    # release of read-time fallback so existing installs keep their sweep
-    # stats after upgrade; the next write() persists to the XDG path.
-    return Path.home() / "AppData" / "Local" / "dropboxignore" / "state.json"
 
 
 def write(state: State, path: Path | None = None) -> None:
@@ -68,21 +61,7 @@ def write(state: State, path: Path | None = None) -> None:
 
 
 def read(path: Path | None = None) -> State | None:
-    if path is not None:
-        return _read_at(path)
-    default = default_path()
-    if default.exists():
-        return _read_at(default)
-    if sys.platform.startswith("linux"):
-        legacy = _legacy_linux_path()
-        if legacy.exists():
-            logger.warning(
-                "Reading state from legacy path %s; next write will persist to %s. "
-                "Delete the legacy file after verifying the migration.",
-                legacy, default,
-            )
-            return _read_at(legacy)
-    return None
+    return _read_at(path or default_path())
 
 
 def _read_at(path: Path) -> State | None:

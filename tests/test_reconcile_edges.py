@@ -1,7 +1,7 @@
 import pytest
 
-from dropboxignore import reconcile
-from dropboxignore.rules import RuleCache
+from dbxignore import reconcile
+from dbxignore.rules import RuleCache
 
 
 def test_skips_descendants_of_already_ignored_directory(tmp_path, fake_markers, write_file):
@@ -48,7 +48,7 @@ def test_permission_error_is_logged_and_counted_not_raised(
     cache = RuleCache()
     cache.load_root(tmp_path)
 
-    with caplog.at_level(logging.WARNING, logger="dropboxignore.reconcile"):
+    with caplog.at_level(logging.WARNING, logger="dbxignore.reconcile"):
         report = reconcile.reconcile_subtree(tmp_path, tmp_path, cache)
 
     assert len(report.errors) == 1
@@ -117,7 +117,7 @@ def test_overridden_dropboxignore_logs_warning(tmp_path, fake_markers, caplog, w
     cache = RuleCache()
     cache.load_root(tmp_path)
 
-    with caplog.at_level(logging.WARNING, logger="dropboxignore.reconcile"):
+    with caplog.at_level(logging.WARNING, logger="dbxignore.reconcile"):
         report = reconcile.reconcile_subtree(tmp_path, tmp_path, cache)
 
     assert not fake_markers.is_ignored(tmp_path / ".dropboxignore")

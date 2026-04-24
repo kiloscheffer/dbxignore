@@ -5,40 +5,40 @@ from pathlib import Path
 
 import pytest
 
-from dropboxignore.install import windows_task as install
+from dbxignore.install import windows_task as install
 
 
 def test_build_xml_contains_logon_trigger_and_action():
-    xml = install.build_task_xml(exe_path=Path(r"C:\bin\dropboxignored.exe"))
+    xml = install.build_task_xml(exe_path=Path(r"C:\bin\dbxignored.exe"))
     assert "<LogonTrigger>" in xml
     assert f"<UserId>{getpass.getuser()}</UserId>" in xml
-    assert r"C:\bin\dropboxignored.exe" in xml
+    assert r"C:\bin\dbxignored.exe" in xml
     assert "<RestartOnFailure>" in xml
 
 
 def test_build_xml_uses_pythonw_when_source_install(tmp_path):
     pythonw = tmp_path / "pythonw.exe"
     xml = install.build_task_xml(
-        exe_path=pythonw, arguments="-m dropboxignore daemon"
+        exe_path=pythonw, arguments="-m dbxignore daemon"
     )
     assert "pythonw.exe" in xml
-    assert "-m dropboxignore daemon" in xml
+    assert "-m dbxignore daemon" in xml
 
 
 def test_detect_invocation_returns_frozen_mode(monkeypatch):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", r"C:\bin\dropboxignored.exe")
+    monkeypatch.setattr(sys, "executable", r"C:\bin\dbxignored.exe")
     exe, args = install.detect_invocation()
-    assert exe == Path(r"C:\bin\dropboxignored.exe")
+    assert exe == Path(r"C:\bin\dbxignored.exe")
     assert args == ""
 
 
 def test_detect_invocation_returns_source_mode(monkeypatch):
     monkeypatch.delattr(sys, "frozen", raising=False)
-    monkeypatch.setattr(sys, "executable", r"C:\uv\tools\dropboxignore\Scripts\python.exe")
+    monkeypatch.setattr(sys, "executable", r"C:\uv\tools\dbxignore\Scripts\python.exe")
     exe, args = install.detect_invocation()
     assert exe.name == "pythonw.exe"
-    assert args == "-m dropboxignore daemon"
+    assert args == "-m dbxignore daemon"
 
 
 def test_uninstall_task_raises_on_schtasks_failure(monkeypatch):
@@ -68,8 +68,8 @@ def test_cli_uninstall_reports_schtasks_failure(monkeypatch):
     uninstall_service raises — not print "Uninstalled" anyway."""
     from click.testing import CliRunner
 
-    import dropboxignore.install as install_pkg
-    from dropboxignore import cli
+    import dbxignore.install as install_pkg
+    from dbxignore import cli
 
     def raising_uninstall():
         raise RuntimeError("schtasks /Delete returned 1: ERROR: Access is denied.")
@@ -82,7 +82,7 @@ def test_cli_uninstall_reports_schtasks_failure(monkeypatch):
     assert result.exit_code != 0, result.output
     assert "Failed to uninstall daemon service" in result.output
     assert "Access is denied" in result.output
-    assert "Uninstalled dropboxignore daemon service" not in result.output
+    assert "Uninstalled dbxignore daemon service" not in result.output
 
 
 def test_cli_install_reports_backend_failure(monkeypatch):
@@ -91,8 +91,8 @@ def test_cli_install_reports_backend_failure(monkeypatch):
     "Installed" anyway. Mirrors the uninstall contract."""
     from click.testing import CliRunner
 
-    import dropboxignore.install as install_pkg
-    from dropboxignore import cli
+    import dbxignore.install as install_pkg
+    from dbxignore import cli
 
     def raising_install():
         raise RuntimeError("schtasks /Create returned 1: ERROR: Access is denied.")
@@ -108,14 +108,14 @@ def test_cli_install_reports_backend_failure(monkeypatch):
     )
     assert "Failed to install daemon service" in result.output
     assert "Access is denied" in result.output
-    assert "Installed dropboxignore daemon service" not in result.output
+    assert "Installed dbxignore daemon service" not in result.output
 
 
 def test_purge_removes_state_json(tmp_path, monkeypatch, fake_markers):
     """--purge deletes state.default_path()."""
     import click.testing
 
-    from dropboxignore import cli, state
+    from dbxignore import cli, state
 
     state_dir = tmp_path / "state_dir"
     state_dir.mkdir()
@@ -125,7 +125,7 @@ def test_purge_removes_state_json(tmp_path, monkeypatch, fake_markers):
     monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
     monkeypatch.setattr(cli, "_discover_roots", lambda: [])
     monkeypatch.setattr(
-        "dropboxignore.install.uninstall_service", lambda: None
+        "dbxignore.install.uninstall_service", lambda: None
     )
 
     result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
@@ -137,7 +137,7 @@ def test_purge_removes_daemon_log_and_rotations(tmp_path, monkeypatch, fake_mark
     """--purge deletes daemon.log plus rotated daemon.log.1..4."""
     import click.testing
 
-    from dropboxignore import cli, state
+    from dbxignore import cli, state
 
     state_dir = tmp_path / "state_dir"
     state_dir.mkdir()
@@ -147,7 +147,7 @@ def test_purge_removes_daemon_log_and_rotations(tmp_path, monkeypatch, fake_mark
     monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
     monkeypatch.setattr(cli, "_discover_roots", lambda: [])
     monkeypatch.setattr(
-        "dropboxignore.install.uninstall_service", lambda: None
+        "dbxignore.install.uninstall_service", lambda: None
     )
 
     result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
@@ -160,7 +160,7 @@ def test_purge_rmdirs_empty_state_dir(tmp_path, monkeypatch, fake_markers):
     """After files are deleted, if the state dir is empty, rmdir removes it."""
     import click.testing
 
-    from dropboxignore import cli, state
+    from dbxignore import cli, state
 
     state_dir = tmp_path / "state_dir"
     state_dir.mkdir()
@@ -169,7 +169,7 @@ def test_purge_rmdirs_empty_state_dir(tmp_path, monkeypatch, fake_markers):
     monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
     monkeypatch.setattr(cli, "_discover_roots", lambda: [])
     monkeypatch.setattr(
-        "dropboxignore.install.uninstall_service", lambda: None
+        "dbxignore.install.uninstall_service", lambda: None
     )
 
     click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
@@ -181,7 +181,7 @@ def test_purge_preserves_state_dir_with_foreign_content(tmp_path, monkeypatch, f
     silently and we preserve their content."""
     import click.testing
 
-    from dropboxignore import cli, state
+    from dbxignore import cli, state
 
     state_dir = tmp_path / "state_dir"
     state_dir.mkdir()
@@ -193,7 +193,7 @@ def test_purge_preserves_state_dir_with_foreign_content(tmp_path, monkeypatch, f
     monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
     monkeypatch.setattr(cli, "_discover_roots", lambda: [])
     monkeypatch.setattr(
-        "dropboxignore.install.uninstall_service", lambda: None
+        "dbxignore.install.uninstall_service", lambda: None
     )
 
     click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
@@ -209,14 +209,14 @@ def test_purge_handles_missing_state_dir(tmp_path, monkeypatch, fake_markers):
     """--purge on a fresh install (no state dir yet) succeeds cleanly."""
     import click.testing
 
-    from dropboxignore import cli, state
+    from dbxignore import cli, state
 
     state_dir = tmp_path / "never_created"
 
     monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
     monkeypatch.setattr(cli, "_discover_roots", lambda: [])
     monkeypatch.setattr(
-        "dropboxignore.install.uninstall_service", lambda: None
+        "dbxignore.install.uninstall_service", lambda: None
     )
 
     result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
@@ -228,15 +228,15 @@ def test_purge_removes_systemd_dropin_dir(tmp_path, monkeypatch, fake_markers):
     """On Linux, --purge also removes ~/.config/systemd/user/<unit>.d/."""
     import click.testing
 
-    from dropboxignore import cli, state
+    from dbxignore import cli, state
 
     state_dir = tmp_path / "state_dir"
     state_dir.mkdir()
 
-    dropin_dir = tmp_path / ".config" / "systemd" / "user" / "dropboxignore.service.d"
+    dropin_dir = tmp_path / ".config" / "systemd" / "user" / "dbxignore.service.d"
     dropin_dir.mkdir(parents=True)
     (dropin_dir / "scratch-root.conf").write_text(
-        "[Service]\nEnvironment=DROPBOXIGNORE_ROOT=/home/u/dbx\n",
+        "[Service]\nEnvironment=DBXIGNORE_ROOT=/home/u/dbx\n",
         encoding="utf-8",
     )
 
@@ -244,7 +244,7 @@ def test_purge_removes_systemd_dropin_dir(tmp_path, monkeypatch, fake_markers):
     monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
     monkeypatch.setattr(cli, "_discover_roots", lambda: [])
     monkeypatch.setattr(
-        "dropboxignore.install.uninstall_service", lambda: None
+        "dbxignore.install.uninstall_service", lambda: None
     )
 
     click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
@@ -259,7 +259,7 @@ def test_purge_preserves_files_not_matching_daemon_log_rotation(
     even if they start with `daemon.log`. --purge must not touch them."""
     import click.testing
 
-    from dropboxignore import cli, state
+    from dbxignore import cli, state
 
     state_dir = tmp_path / "state_dir"
     state_dir.mkdir()
@@ -272,7 +272,7 @@ def test_purge_preserves_files_not_matching_daemon_log_rotation(
     monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
     monkeypatch.setattr(cli, "_discover_roots", lambda: [])
     monkeypatch.setattr(
-        "dropboxignore.install.uninstall_service", lambda: None
+        "dbxignore.install.uninstall_service", lambda: None
     )
 
     click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])

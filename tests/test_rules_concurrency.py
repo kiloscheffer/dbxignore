@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 
-from dropboxignore.rules import RuleCache
+from dbxignore.rules import RuleCache
 
 
 def test_load_root_concurrent_with_reload_and_remove(tmp_path, write_file):

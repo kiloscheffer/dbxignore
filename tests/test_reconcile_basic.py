@@ -1,5 +1,5 @@
-from dropboxignore import reconcile
-from dropboxignore.rules import RuleCache
+from dbxignore import reconcile
+from dbxignore.rules import RuleCache
 
 
 def test_sets_ads_on_matching_directory(tmp_path, fake_markers, write_file):

@@ -1,4 +1,4 @@
-"""Command-line interface for dropboxignore."""
+"""Command-line interface for dbxignore."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from pathlib import Path
 
 import click
 
-from dropboxignore import markers, reconcile, roots, state
-from dropboxignore.roots import find_containing
-from dropboxignore.rules import IGNORE_FILENAME, RuleCache
+from dbxignore import markers, reconcile, roots, state
+from dbxignore.roots import find_containing
+from dbxignore.rules import IGNORE_FILENAME, RuleCache
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +152,7 @@ def status() -> None:
     """Show daemon status and last sweep summary."""
     s = state.read()
     if s is None:
-        click.echo("dropboxignore: no state file found (daemon never ran).")
+        click.echo("dbxignore: no state file found (daemon never ran).")
     else:
         alive = _process_is_alive(s.daemon_pid)
         click.echo(f"daemon: {'running' if alive else 'not running'} (pid={s.daemon_pid})")
@@ -276,20 +276,20 @@ def explain(path: Path) -> None:
 @main.command()
 def daemon() -> None:
     """Run the watcher + hourly sweep daemon (foreground)."""
-    from dropboxignore import daemon as daemon_mod
+    from dbxignore import daemon as daemon_mod
     daemon_mod.run()
 
 
 @main.command()
 def install() -> None:
     """Register the daemon with the platform's user-scoped service manager."""
-    from dropboxignore.install import install_service
+    from dbxignore.install import install_service
     try:
         install_service()
     except RuntimeError as exc:
         click.echo(f"Failed to install daemon service: {exc}", err=True)
         sys.exit(2)
-    click.echo("Installed dropboxignore daemon service.")
+    click.echo("Installed dbxignore daemon service.")
 
 
 @main.command()
@@ -297,7 +297,7 @@ def install() -> None:
     "--purge",
     is_flag=True,
     help=(
-        "Also clear every ignore marker and remove local dropboxignore state "
+        "Also clear every ignore marker and remove local dbxignore state "
         "(state.json, daemon.log*, the state directory, and any systemd "
         "drop-in directory on Linux)."
     ),
@@ -309,15 +309,15 @@ def uninstall(purge: bool) -> None:
     Dropbox root, delete ``state.json`` and ``daemon.log*`` from the
     per-user state directory, remove that directory if it's empty, and
     on Linux remove the systemd drop-in directory if it exists. The goal
-    is to leave no dropboxignore-authored artifacts on disk.
+    is to leave no dbxignore-authored artifacts on disk.
     """
-    from dropboxignore.install import uninstall_service
+    from dbxignore.install import uninstall_service
     try:
         uninstall_service()
     except RuntimeError as exc:
         click.echo(f"Failed to uninstall daemon service: {exc}", err=True)
         sys.exit(2)
-    click.echo("Uninstalled dropboxignore daemon service.")
+    click.echo("Uninstalled dbxignore daemon service.")
 
     if purge:
         # (1) Clear xattr markers.
@@ -347,13 +347,13 @@ def uninstall(purge: bool) -> None:
 
         # (3) Remove the systemd drop-in directory (Linux only).
         if sys.platform.startswith("linux"):
-            from dropboxignore.install import linux_systemd
+            from dbxignore.install import linux_systemd
             removed_dropin = linux_systemd.remove_dropin_directory()
             if removed_dropin is not None:
                 click.echo(f"Removed systemd drop-in directory {removed_dropin}.")
 
 
 def daemon_main() -> None:
-    """Entry point for the dropboxignored script shim."""
+    """Entry point for the dbxignored script shim."""
     sys.argv.insert(1, "daemon")
     main()

@@ -9,15 +9,15 @@ from pathlib import Path
 
 import pytest
 
-from dropboxignore import daemon
+from dbxignore import daemon
 
 
 @pytest.fixture
 def isolated_pkg_logger():
-    """Install a known sentinel handler/propagate/level on the dropboxignore
+    """Install a known sentinel handler/propagate/level on the dbxignore
     package logger so tests can assert the context manager restored them on
     exit. Snapshots any pre-existing state and restores it after."""
-    pkg_logger = logging.getLogger("dropboxignore")
+    pkg_logger = logging.getLogger("dbxignore")
     saved_handlers = list(pkg_logger.handlers)
     saved_propagate = pkg_logger.propagate
     saved_level = pkg_logger.level
@@ -42,16 +42,16 @@ def isolated_pkg_logger():
 def log_dir(tmp_path, monkeypatch):
     if sys.platform == "win32":
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
-        return tmp_path / "LocalAppData" / "dropboxignore"
+        return tmp_path / "LocalAppData" / "dbxignore"
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    return tmp_path / "state" / "dropboxignore"
+    return tmp_path / "state" / "dbxignore"
 
 
 def test_configured_logging_installs_rotating_handler(
     isolated_pkg_logger, log_dir, monkeypatch
 ):
-    monkeypatch.delenv("DROPBOXIGNORE_LOG_LEVEL", raising=False)
-    pkg_logger = logging.getLogger("dropboxignore")
+    monkeypatch.delenv("DBXIGNORE_LOG_LEVEL", raising=False)
+    pkg_logger = logging.getLogger("dbxignore")
 
     with daemon._configured_logging():
         handlers = pkg_logger.handlers
@@ -100,8 +100,8 @@ def test_configured_logging_does_not_close_stderr_on_exit(
 def test_configured_logging_respects_log_level_env(
     isolated_pkg_logger, log_dir, monkeypatch
 ):
-    monkeypatch.setenv("DROPBOXIGNORE_LOG_LEVEL", "DEBUG")
-    pkg_logger = logging.getLogger("dropboxignore")
+    monkeypatch.setenv("DBXIGNORE_LOG_LEVEL", "DEBUG")
+    pkg_logger = logging.getLogger("dbxignore")
 
     with daemon._configured_logging():
         assert pkg_logger.level == logging.DEBUG
@@ -111,7 +111,7 @@ def test_configured_logging_restores_logger_state_on_exit(
     isolated_pkg_logger, log_dir
 ):
     sentinel = isolated_pkg_logger
-    pkg_logger = logging.getLogger("dropboxignore")
+    pkg_logger = logging.getLogger("dbxignore")
 
     with daemon._configured_logging():
         pass
@@ -123,7 +123,7 @@ def test_configured_logging_restores_logger_state_on_exit(
 
 def test_configured_logging_restores_on_exception(isolated_pkg_logger, log_dir):
     sentinel = isolated_pkg_logger
-    pkg_logger = logging.getLogger("dropboxignore")
+    pkg_logger = logging.getLogger("dbxignore")
 
     with pytest.raises(RuntimeError, match="boom"), daemon._configured_logging():
         raise RuntimeError("boom")
@@ -138,7 +138,7 @@ def test_configured_logging_closes_installed_handler_on_exit(
 ):
     """Rotating file handler must be closed on exit so Windows releases the log file."""
     installed: list[logging.Handler] = []
-    pkg_logger = logging.getLogger("dropboxignore")
+    pkg_logger = logging.getLogger("dbxignore")
 
     with daemon._configured_logging():
         installed.extend(

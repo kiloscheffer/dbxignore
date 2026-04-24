@@ -1,4 +1,4 @@
-"""Platform-dispatched install/uninstall for the dropboxignore daemon."""
+"""Platform-dispatched install/uninstall for the dbxignore daemon."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ import sys
 
 def install_service() -> None:
     if sys.platform == "win32":
-        from dropboxignore.install.windows_task import install_task
+        from dbxignore.install.windows_task import install_task
         install_task()
     elif sys.platform.startswith("linux"):
-        from dropboxignore.install.linux_systemd import install_unit
+        from dbxignore.install.linux_systemd import install_unit
         install_unit()
     else:
         raise NotImplementedError(
@@ -21,10 +21,10 @@ def install_service() -> None:
 
 def uninstall_service() -> None:
     if sys.platform == "win32":
-        from dropboxignore.install.windows_task import uninstall_task
+        from dbxignore.install.windows_task import uninstall_task
         uninstall_task()
     elif sys.platform.startswith("linux"):
-        from dropboxignore.install.linux_systemd import uninstall_unit
+        from dbxignore.install.linux_systemd import uninstall_unit
         uninstall_unit()
     else:
         raise NotImplementedError(

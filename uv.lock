@@ -24,7 +24,7 @@ wheels = [
 ]
 
 [[package]]
-name = "dropboxignore"
+name = "dbxignore"
 source = { editable = "." }
 dependencies = [
     { name = "click" },

@@ -1,7 +1,7 @@
 import sys
 from pathlib import Path
 
-from dropboxignore import roots
+from dbxignore import roots
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -67,11 +67,11 @@ def test_discover_json_not_object(monkeypatch, tmp_path):
 
 
 def test_discover_env_override_returns_env_path(monkeypatch, tmp_path):
-    """DROPBOXIGNORE_ROOT set to an existing dir returns [Path(env)],
+    """DBXIGNORE_ROOT set to an existing dir returns [Path(env)],
     bypassing info.json entirely."""
     fake_root = tmp_path / "custom-dropbox"
     fake_root.mkdir()
-    monkeypatch.setenv("DROPBOXIGNORE_ROOT", str(fake_root))
+    monkeypatch.setenv("DBXIGNORE_ROOT", str(fake_root))
     # Deliberately do NOT stage info.json — override must not need it.
     _clear_platform_env(monkeypatch)
 
@@ -79,12 +79,12 @@ def test_discover_env_override_returns_env_path(monkeypatch, tmp_path):
 
 
 def test_discover_env_override_wins_over_info_json(monkeypatch, tmp_path):
-    """When both DROPBOXIGNORE_ROOT and a valid info.json are present, the
+    """When both DBXIGNORE_ROOT and a valid info.json are present, the
     env var wins — the whole point of the escape hatch."""
     fake_root = tmp_path / "custom-dropbox"
     fake_root.mkdir()
     _stage_info(monkeypatch, tmp_path, "info_personal.json")
-    monkeypatch.setenv("DROPBOXIGNORE_ROOT", str(fake_root))
+    monkeypatch.setenv("DBXIGNORE_ROOT", str(fake_root))
 
     result = roots.discover()
 
@@ -93,10 +93,10 @@ def test_discover_env_override_wins_over_info_json(monkeypatch, tmp_path):
 
 
 def test_discover_env_override_empty_string_falls_back_to_info_json(monkeypatch, tmp_path):
-    """DROPBOXIGNORE_ROOT="" is indistinguishable from unset in practice
+    """DBXIGNORE_ROOT="" is indistinguishable from unset in practice
     (shell quirks), so treat it as unset and fall back to info.json."""
     _stage_info(monkeypatch, tmp_path, "info_personal.json")
-    monkeypatch.setenv("DROPBOXIGNORE_ROOT", "")
+    monkeypatch.setenv("DBXIGNORE_ROOT", "")
 
     assert roots.discover() == [Path(r"C:\Dropbox")]
 
@@ -104,21 +104,21 @@ def test_discover_env_override_empty_string_falls_back_to_info_json(monkeypatch,
 def test_discover_env_override_missing_path_warns_and_returns_empty(
     monkeypatch, tmp_path, caplog
 ):
-    """If DROPBOXIGNORE_ROOT points at a nonexistent path, return [] with a
+    """If DBXIGNORE_ROOT points at a nonexistent path, return [] with a
     WARNING — so the CLI's "No Dropbox roots found" surfaces rather than a
     silent no-op sweep that leaves the user puzzled."""
     import logging
 
     missing = tmp_path / "does-not-exist"
-    monkeypatch.setenv("DROPBOXIGNORE_ROOT", str(missing))
+    monkeypatch.setenv("DBXIGNORE_ROOT", str(missing))
     _clear_platform_env(monkeypatch)
 
-    with caplog.at_level(logging.WARNING, logger="dropboxignore.roots"):
+    with caplog.at_level(logging.WARNING, logger="dbxignore.roots"):
         result = roots.discover()
 
     assert result == []
     assert any(
-        "DROPBOXIGNORE_ROOT" in rec.message and str(missing) in rec.message
+        "DBXIGNORE_ROOT" in rec.message and str(missing) in rec.message
         for rec in caplog.records
     ), [rec.message for rec in caplog.records]
 

@@ -7,7 +7,7 @@ venv/
 build/
 dist/
 *.egg-info/
-src/dropboxignore/_version.py
+src/dbxignore/_version.py
 .uv/
 *.dist-info/
 __editable__*.pth

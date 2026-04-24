@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from dropboxignore import daemon, markers
+from dbxignore import daemon, markers
 
 pytestmark = pytest.mark.windows_only
 
@@ -58,7 +58,7 @@ def test_daemon_reacts_to_dropboxignore_and_directory_creation(tmp_path, monkeyp
 
         # Verify the WARNING made it into daemon.log. The log lives under
         # the test's LOCALAPPDATA redirect.
-        log_path = tmp_path / "LocalAppData" / "dropboxignore" / "daemon.log"
+        log_path = tmp_path / "LocalAppData" / "dbxignore" / "daemon.log"
         assert _poll_until(
             lambda: log_path.exists()
             and "!build/keep/" in log_path.read_text()

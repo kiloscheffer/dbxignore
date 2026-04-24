@@ -1,4 +1,4 @@
-from dropboxignore.rules import RuleCache
+from dbxignore.rules import RuleCache
 
 
 def test_nested_dropboxignore_adds_rules(tmp_path, write_file):

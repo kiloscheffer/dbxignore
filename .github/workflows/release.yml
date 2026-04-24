@@ -32,7 +32,7 @@ jobs:
       - name: Build Windows binaries
         # pyinstaller is a build-only tool, not a runtime or dev dep — install
         # ephemerally for this run rather than declaring it in pyproject.toml.
-        run: uv run --with pyinstaller pyinstaller pyinstaller/dropboxignore.spec
+        run: uv run --with pyinstaller pyinstaller pyinstaller/dbxignore.spec
 
       - name: Publish GitHub Release
         # Only publish on real tag pushes; dispatch runs skip this step.
@@ -42,8 +42,8 @@ jobs:
           files: |
             dist/*.whl
             dist/*.tar.gz
-            dist/dropboxignore.exe
-            dist/dropboxignored.exe
+            dist/dbxignore.exe
+            dist/dbxignored.exe
           generate_release_notes: true
           # When `GH_RELEASE_TOKEN` is configured as a repo secret (a PAT with
           # `contents: write` scope belonging to the repo owner), releases are

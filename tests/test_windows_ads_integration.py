@@ -7,7 +7,7 @@ pytestmark = pytest.mark.windows_only
 if sys.platform != "win32":
     pytest.skip("NTFS alternate data streams are Windows-only", allow_module_level=True)
 
-from dropboxignore import markers  # noqa: E402  # must come after sys.platform skip guard
+from dbxignore import markers  # noqa: E402  # must come after sys.platform skip guard
 
 
 def test_roundtrip_on_file(tmp_path):

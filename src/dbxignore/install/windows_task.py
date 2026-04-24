@@ -11,7 +11,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-TASK_NAME = "dropboxignore"
+TASK_NAME = "dbxignore"
 
 
 def detect_invocation() -> tuple[Path, str]:
@@ -20,7 +20,7 @@ def detect_invocation() -> tuple[Path, str]:
         return Path(sys.executable), ""
     exe = Path(sys.executable)
     pythonw = exe.with_name("pythonw.exe")
-    return pythonw, "-m dropboxignore daemon"
+    return pythonw, "-m dbxignore daemon"
 
 
 def build_task_xml(exe_path: Path, arguments: str = "") -> str:
@@ -30,7 +30,7 @@ def build_task_xml(exe_path: Path, arguments: str = "") -> str:
     return f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>dropboxignore daemon: sync com.dropbox.ignored with .dropboxignore</Description>
+    <Description>dbxignore daemon: sync com.dropbox.ignored with .dropboxignore</Description>
   </RegistrationInfo>
   <Triggers>
     <LogonTrigger>

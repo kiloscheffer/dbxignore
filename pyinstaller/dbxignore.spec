@@ -1,14 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec building two Windows binaries from the same codebase.
 
-- dropboxignore.exe   : console mode, used for interactive CLI.
-- dropboxignored.exe  : no console, launched by Task Scheduler.
+- dbxignore.exe   : console mode, used for interactive CLI.
+- dbxignored.exe  : no console, launched by Task Scheduler.
 """
 
 from pathlib import Path
 
 SRC = Path("src").resolve()
-ENTRY = SRC / "dropboxignore" / "__main__.py"
+ENTRY = SRC / "dbxignore" / "__main__.py"
 
 
 def _analysis(name: str):
@@ -30,7 +30,7 @@ def _analysis(name: str):
 
 
 # ---- Console variant ------------------------------------------------------
-a_console = _analysis("dropboxignore")
+a_console = _analysis("dbxignore")
 pyz_console = PYZ(a_console.pure, a_console.zipped_data, cipher=None)
 exe_console = EXE(
     pyz_console,
@@ -39,7 +39,7 @@ exe_console = EXE(
     a_console.zipfiles,
     a_console.datas,
     [],
-    name="dropboxignore",
+    name="dbxignore",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -55,7 +55,7 @@ exe_console = EXE(
 )
 
 # ---- Windowless daemon variant -------------------------------------------
-a_daemon = _analysis("dropboxignored")
+a_daemon = _analysis("dbxignored")
 pyz_daemon = PYZ(a_daemon.pure, a_daemon.zipped_data, cipher=None)
 exe_daemon = EXE(
     pyz_daemon,
@@ -64,7 +64,7 @@ exe_daemon = EXE(
     a_daemon.zipfiles,
     a_daemon.datas,
     [],
-    name="dropboxignored",
+    name="dbxignored",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

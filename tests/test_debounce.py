@@ -1,7 +1,7 @@
 import threading
 import time
 
-from dropboxignore.debounce import Debouncer, EventKind
+from dbxignore.debounce import Debouncer, EventKind
 
 _DEFAULT_TIMEOUTS = {
     EventKind.DIR_CREATE: 0,

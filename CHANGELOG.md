@@ -5,13 +5,18 @@ All notable changes to dropboxignore are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] — 2026-04-24
 
 Renames the project's owned surfaces from `dropboxignore` to `dbxignore`. The `.dropboxignore` rule-file name and the `com.dropbox.ignored` marker key are Dropbox's contracts and are **not** changed.
 
 **Upgrade path (clean break):** on an existing v0.2.x install, run `dropboxignore uninstall --purge` to clear all ignore markers and remove v0.2.x local state, then `pip install dbxignore` (or download the new binaries), then `dbxignore install`. Your `.dropboxignore` rule files carry over untouched — they are not renamed and require no edits.
 
 **GitHub repo rename:** `kiloscheffer/dropboxignore` → `kiloscheffer/dbxignore`, performed out-of-tree. GitHub auto-redirects handle all existing URLs.
+
+### Added
+
+- **Published to PyPI as `dbxignore`.** First PyPI release — install with `pip install dbxignore` or `uv pip install dbxignore`.
+- **PyPI publishing via Trusted Publishing (OIDC), gated on the `pypi` GitHub environment.** Release workflow (`.github/workflows/release.yml`) split into `build`, `publish-github`, and `publish-pypi` jobs. The PyPI upload step runs only after a required maintainer approval — single human checkpoint at the one irreversible step in the pipeline. No long-lived PyPI API token is stored as a repo secret; OIDC issues a short-lived credential scoped to this workflow and job.
 
 ### Changed
 
@@ -120,6 +125,7 @@ Initial release. Windows-only.
 - **PyInstaller-built standalone binaries** — `dropboxignore.exe` + `dropboxignored.exe`, published via GitHub Releases.
 - **Windows test leg** with `pytest -m windows_only` NTFS-ADS integration tests.
 
+[0.3.0]: https://github.com/kiloscheffer/dbxignore/releases/tag/v0.3.0
 [0.2.1]: https://github.com/kiloscheffer/dropboxignore/releases/tag/v0.2.1
 [0.2.0]: https://github.com/kiloscheffer/dropboxignore/releases/tag/v0.2.0
 [0.1.0]: https://github.com/kiloscheffer/dropboxignore/pull/1

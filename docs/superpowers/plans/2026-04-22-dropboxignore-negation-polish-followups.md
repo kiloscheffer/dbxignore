@@ -226,6 +226,8 @@ Two approaches:
 
 Touches: `CHANGELOG.md` (three bottom-link URLs).
 
+**Status: RESOLVED 2026-04-24.** All three bottom-link URLs switched from `kiloscheffer/dropboxignore` to `kiloscheffer/dbxignore`, matching the existing `[0.3.0]` link. Bundled with item 17 in the same `docs(changelog)` PR.
+
 ## 16. `markers.py` NotImplementedError message references v0.3 as unreleased
 
 `src/dbxignore/markers.py:28` reads:
@@ -254,8 +256,10 @@ Same flavor as item 15 (CHANGELOG bottom links): a one-line `dropboxignore` → 
 
 Touches: `CHANGELOG.md` (one line).
 
+**Status: RESOLVED 2026-04-24.** Header line 3 updated to read "All notable changes to dbxignore are documented here." Bundled with item 15 (per its own recommendation) in the same `docs(changelog)` PR.
+
 ---
 
 ## Status
 
-Items 8–12 resolved (8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23). Items 1–7 and 13–17 still open. Item 13 (Node.js 20 → 24 action bump) has a hard stop September 2026 when the runner removes Node 20. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit.
+Items 8–12, 15, 17 resolved (8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in 2026-04-24 CHANGELOG cleanup PR). Items 1–7, 13, 14, 16 still open. Item 13 (Node.js 20 → 24 action bump) has a hard stop September 2026 when the runner removes Node 20. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit.

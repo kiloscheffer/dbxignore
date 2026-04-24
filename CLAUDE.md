@@ -14,7 +14,7 @@ Cross-platform Python utility: keeps Dropbox ignore markers (NTFS alternate data
 
 ## Architecture
 
-`reconcile.reconcile_subtree(root, subdir, cache)` is the single source of truth for rule-driven marker mutations. `cli.apply`, `daemon._dispatch`, and `daemon._sweep_once` all call it — never bypass. The lone exception is `cli.uninstall --purge`, which issues an unconditional marker clear (no rule evaluation) while still honoring the `.dropboxignore`-found-marked `WARNING` contract inline.
+`reconcile.reconcile_subtree(root, subdir, cache)` is the single source of truth for rule-driven marker mutations. `cli.apply`, `daemon._dispatch`, and `daemon._sweep_once` all call it — never bypass. The lone exception is `cli.uninstall --purge`, which issues an unconditional marker clear (no rule evaluation) while still honoring the `.dropboxignore`-found-marked `WARNING` contract inline. After the marker clear, `--purge` also calls `_purge_local_state()` (removes `state.json`, `daemon.log*`, the per-user state dir if empty) and on Linux additionally calls `linux_systemd.remove_dropin_directory()` to drop any user customization unit drop-ins. Goal: leave no dbxignore-authored artifacts on disk.
 
 Marker I/O is platform-dispatched via `dbxignore.markers`, which at import time re-exports `is_ignored`/`set_ignored`/`clear_ignored` from `_backends/windows_ads.py` (Windows NTFS ADS) or `_backends/linux_xattr.py` (Linux `user.com.dropbox.ignored`). No other module branches on `sys.platform` for markers. `reconcile._reconcile_path` catches `OSError(errno.ENOTSUP|EOPNOTSUPP)` from the Linux backend and treats it the same way as `PermissionError` — log WARNING, append to `Report.errors`, continue the sweep.
 
@@ -83,6 +83,10 @@ The daemon's watchdog events are classified (`_classify` → `EventKind.{RULES,D
 
 ## Docs
 
-- Design: `docs/superpowers/specs/2026-04-20-dropboxignore-design.md`
-- Plan: `docs/superpowers/plans/2026-04-20-dropboxignore-implementation.md`
-- v0.2 product/risk follow-ups: design doc § Open questions.
+Specs and plans are kept side-by-side under `docs/superpowers/{specs,plans}/`, named `<YYYY-MM-DD>-<slug>.md`. Per-version release bodies live under `docs/release-notes/v<X.Y.Z>.md`.
+
+- v0.1 (initial): `specs/2026-04-20-dropboxignore-design.md` + `plans/2026-04-20-dropboxignore-implementation.md`
+- v0.2 Linux port: `specs/2026-04-21-dropboxignore-v0.2-linux.md` + `plans/2026-04-21-dropboxignore-v0.2-linux.md`; followups in `plans/2026-04-21-dropboxignore-v0.2-linux-followups.md`
+- v0.2.1 negation semantics: `specs/2026-04-21-dropboxignore-negation-semantics.md` + `plans/2026-04-22-dropboxignore-negation-semantics.md`; followups in `plans/2026-04-22-dropboxignore-negation-polish-followups.md`
+- v0.3 rename + PyPI: `specs/2026-04-23-v0.3-dbxignore-rename.md` + `plans/2026-04-23-v0.3-dbxignore-rename.md`
+- Open follow-ups for any active line of work live in that line's `*-followups.md`; check there before adding new tracking docs.

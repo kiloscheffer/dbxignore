@@ -197,8 +197,53 @@ The current action versions we use were contemporary when the workflows were wri
 
 Touches: `.github/workflows/test.yml`, `.github/workflows/release.yml`, `.github/workflows/commit-check.yml`.
 
+## 14. Flaky `test_run_refuses_when_another_pid_is_alive`
+
+`tests/test_daemon_singleton.py::test_run_refuses_when_another_pid_is_alive` failed once during the PR #22 pre-flight full-suite run on Linux (Python 3.14.2), then passed on rerun and passed in isolation. Classic flaky-test signal — likely a psutil race between the test's PID-alive check and concurrent pytest worker processes (no `-p no:xdist` in our config, but other subprocess-launching tests could also perturb the system-wide process table).
+
+Because the test uses real OS primitives (psutil PID enumeration via `os.kill(pid, 0)` or similar), it's sensitive to which processes the runner happens to have at that moment. Single observation so far — worth logging rather than pre-emptively fixing.
+
+**Fix candidates if it recurs:**
+- Mock `psutil.pid_exists` in the test rather than relying on a real alive PID (simpler, loses integration coverage).
+- Acquire a sentinel process under the test's control (e.g., spawn a short-lived subprocess with `subprocess.Popen(['sleep', '5'])`, use its PID, `terminate()` at teardown) — avoids the "borrow someone else's PID" pattern.
+- Retry the test once on failure via `pytest-rerunfailures` — papers over the root cause; last resort.
+
+**Urgency:** low until second observation. Note in CHANGELOG if it recurs on a user-visible CI run.
+
+Touches: `tests/test_daemon_singleton.py` (scope depends on chosen fix).
+
+## 15. CHANGELOG bottom links still reference the old repo URL
+
+`CHANGELOG.md` bottom links for `[0.2.1]`, `[0.2.0]`, `[0.1.0]` all point at `https://github.com/kiloscheffer/dropboxignore/releases/tag/...` rather than the renamed `kiloscheffer/dbxignore`. GitHub's rename-redirect covers these URLs transparently so click-through works, but the canonical path would render cleaner.
+
+Two approaches:
+- **Update all three links to `kiloscheffer/dbxignore`.** Style-consistent with the new `[0.3.0]` link. Argument: the `CHANGELOG.md` file is documentation for *the current repo*, not a historical artifact of the old one.
+- **Leave as-is.** Argument: those releases genuinely happened under `kiloscheffer/dropboxignore` — the URLs are accurate-for-the-time. Redirects cover functionality.
+
+**Recommendation:** update. Consistent canonical paths beat historical accuracy for a doc that gets read forward, and redirect chains add perceptible latency on slow connections.
+
+**Urgency:** trivial. Candidate for a single-commit `docs(changelog)` PR whenever.
+
+Touches: `CHANGELOG.md` (three bottom-link URLs).
+
+## 16. `markers.py` NotImplementedError message references v0.3 as unreleased
+
+`src/dbxignore/markers.py:28` reads:
+
+```python
+raise NotImplementedError("macOS support is planned for v0.3.")
+```
+
+This message pre-dates the rename — it was written when v0.3 was the hypothetical "macOS release." Now that v0.3.0 has shipped as the rename release (macOS still not included per the spec's non-goals), the message is misleading: a macOS user installing v0.3.0 and hitting this error is told "it's planned for v0.3" — which is the version they already have.
+
+**Fix:** replace with either `"macOS support is planned for a future release."` (version-free, can't rot) or `"macOS support is not implemented — v0.4+."` (explicit roadmap hint, still needs an update if v0.4 doesn't include it).
+
+**Urgency:** low, but user-facing. Anyone running v0.3.0 on macOS hits this message — wrong information to show them.
+
+Touches: `src/dbxignore/markers.py` (one line).
+
 ---
 
 ## Status
 
-Items 8–12 resolved (8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23). Items 1–7 and 13 still open. Item 13 (Node.js 20 → 24 action bump) has a hard stop September 2026 when the runner removes Node 20.
+Items 8–12 resolved (8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23). Items 1–7 and 13–16 still open. Item 13 (Node.js 20 → 24 action bump) has a hard stop September 2026 when the runner removes Node 20. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations.

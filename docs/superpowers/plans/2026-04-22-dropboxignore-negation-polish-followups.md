@@ -258,8 +258,27 @@ Touches: `CHANGELOG.md` (one line).
 
 **Status: RESOLVED 2026-04-24.** Header line 3 updated to read "All notable changes to dbxignore are documented here." Bundled with item 15 (per its own recommendation) in the same `docs(changelog)` PR.
 
+## 18. Flaky `test_daemon_reacts_to_dropboxignore_and_directory_creation`
+
+`tests/test_daemon_smoke.py::test_daemon_reacts_to_dropboxignore_and_directory_creation` failed once on `windows-latest` during PR #30's initial CI run, then passed on rerun and on the parallel push-triggered run of the same commit. Same-commit duration discrepancy was striking: 0.38s passing vs 3.75s failing — 10× slower on the failing leg, with the second `_poll_until` (3.0s timeout) falling off its cliff on the assertion that `build/keep/` should stay marked.
+
+The test's shape: create `.dropboxignore` with `build/` → wait for `build/` to be marked → append `!build/keep/` to the rule file → create `build/keep/` directory → assert the child stays marked (because the conflict detector drops the inert negation). The first poll passed on the failing run; it was the second one (post-rule-append + post-dir-create) that timed out.
+
+The v0.2.1 negation-semantics spec (`docs/superpowers/specs/2026-04-21-dropboxignore-negation-semantics.md`) documents this race as "masked on Windows due to `ReadDirectoryChangesW` dispatching RULES before DIR_CREATE" — this observation shows the masking isn't absolute under runner load.
+
+Distinct from item 14 (which tracks a flaky daemon *singleton* test in `test_daemon_singleton.py` — a psutil PID-enumeration race, not a watchdog event-ordering race). Same family (daemon tests flake-prone under runner load), different mechanism, different fix candidates.
+
+**Fix candidates if it recurs:**
+- Widen the `_poll_until` timeout on the second assertion from 3.0s to ~5–8s — cheapest, preserves real-daemon integration signal.
+- Replace the timing-sensitive poll with an explicit flush/drain helper if reconcile or the debouncer exposes one (e.g., synchronous `daemon._dispatch` invocation after a rule write).
+- Mock the watchdog layer and drive events deterministically — loses real-OS integration coverage.
+
+**Urgency:** low until second observation on the same test. Note in CHANGELOG if it recurs on a user-visible CI run (not a PR retry).
+
+Touches: `tests/test_daemon_smoke.py` (scope depends on chosen fix).
+
 ---
 
 ## Status
 
-Items 8–12, 15, 17 resolved (8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in 2026-04-24 CHANGELOG cleanup PR). Items 1–7, 13, 14, 16 still open. Item 13 (Node.js 20 → 24 action bump) has a hard stop September 2026 when the runner removes Node 20. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit.
+Items 8–12, 15, 17 resolved (8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30). Items 1–7, 13, 14, 16, 18 still open. Item 13 (Node.js 20 → 24 action bump) has a hard stop September 2026 when the runner removes Node 20. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun).

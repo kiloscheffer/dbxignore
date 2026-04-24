@@ -242,8 +242,20 @@ This message pre-dates the rename — it was written when v0.3 was the hypotheti
 
 Touches: `src/dbxignore/markers.py` (one line).
 
+## 17. `CHANGELOG.md` header still says "dropboxignore"
+
+`CHANGELOG.md:3` reads "All notable changes to dropboxignore are documented here." — pre-rename text that survived the v0.3.0 sweep. The per-version entries below it (including the v0.3.0 rename body itself) all use `dbxignore` correctly; only the file's introductory sentence is stale.
+
+Same flavor as item 15 (CHANGELOG bottom links): a one-line `dropboxignore` → `dbxignore` substitution that nothing functionally depends on but reads as residual rename debt to anyone landing on the file.
+
+**Fix:** one-character edit on line 3 — `dropboxignore` → `dbxignore`.
+
+**Urgency:** trivial. Bundle with item 15 in a single `docs(changelog)` PR rather than spawning a one-line PR of its own.
+
+Touches: `CHANGELOG.md` (one line).
+
 ---
 
 ## Status
 
-Items 8–12 resolved (8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23). Items 1–7 and 13–16 still open. Item 13 (Node.js 20 → 24 action bump) has a hard stop September 2026 when the runner removes Node 20. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations.
+Items 8–12 resolved (8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23). Items 1–7 and 13–17 still open. Item 13 (Node.js 20 → 24 action bump) has a hard stop September 2026 when the runner removes Node 20. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit.

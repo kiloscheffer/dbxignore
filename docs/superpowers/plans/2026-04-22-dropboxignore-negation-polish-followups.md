@@ -244,6 +244,8 @@ This message pre-dates the rename — it was written when v0.3 was the hypotheti
 
 Touches: `src/dbxignore/markers.py` (one line).
 
+**Status: RESOLVED 2026-04-24.** Replaced the rotted `"macOS support is planned for v0.3."` with the version-free `"macOS support is planned for a future release."` (Option A from the Fix section — the recommended choice because it can't rot the same way again). One-line edit in `src/dbxignore/markers.py:28`.
+
 ## 17. `CHANGELOG.md` header still says "dropboxignore"
 
 `CHANGELOG.md:3` reads "All notable changes to dropboxignore are documented here." — pre-rename text that survived the v0.3.0 sweep. The per-version entries below it (including the v0.3.0 rename body itself) all use `dbxignore` correctly; only the file's introductory sentence is stale.
@@ -281,4 +283,4 @@ Touches: `tests/test_daemon_smoke.py` (scope depends on chosen fix).
 
 ## Status
 
-Items 8–12, 15, 17 resolved (8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30). Items 1–7, 13, 14, 16, 18 still open. Item 13 (Node.js 20 → 24 action bump) has a hard stop September 2026 when the runner removes Node 20. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun).
+Items 8–12, 15–17 resolved (8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in this PR). Items 1–7, 13, 14, 18 still open. Item 13 (Node.js 20 → 24 action bump) has a hard stop September 2026 when the runner removes Node 20. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun).

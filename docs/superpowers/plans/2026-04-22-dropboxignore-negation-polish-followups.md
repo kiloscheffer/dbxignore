@@ -10,6 +10,8 @@ Left over from the task-by-task execution of the implementation plan. The other 
 
 Touches: `tests/test_rules_conflicts.py:51` (one-line removal).
 
+**Status: RESOLVED 2026-04-24.** Stripped the `Task 3:` prefix from the banner — kept the dashed visual divider since it still organizes the file (separates `Conflict`-dataclass tests from `_detect_conflicts` tests), only the rotted task-tracking label needed to go.
+
 ## 2. Redundant inline imports in new test functions
 
 `tests/test_cli_status_list_explain.py` has several new test functions with in-body imports like `from dropboxignore import cli, state` even though those modules are already imported at the top of the file. Copied verbatim from the implementation plan's self-contained snippets; works but adds visual noise.
@@ -17,6 +19,8 @@ Touches: `tests/test_rules_conflicts.py:51` (one-line removal).
 Fix: consolidate to module-level imports; remove the duplicates. Same cleanup applies to `tests/test_rules_reload_explain.py` where a handful of tests have `from dropboxignore.rules import RuleCache` inside the function body.
 
 Touches: `tests/test_cli_status_list_explain.py`, `tests/test_rules_reload_explain.py`.
+
+**Status: RESOLVED 2026-04-24.** Removed all 14 redundant in-function imports: 4 in `tests/test_cli_status_list_explain.py` (3× `from dbxignore import cli, state`, 1× `from dbxignore import cli`) and 10 in `tests/test_rules_reload_explain.py` (`from dbxignore.rules import RuleCache`). Each duplicated a top-level import already present at line 7 / line 1 respectively. Note: the followup's literal strings (`from dropboxignore...`) had been transparently updated to `dbxignore` during the v0.3 rename sweep — the symptoms persisted under the new module name.
 
 ## 3. `_SequenceEntry.pattern: object` could be a `Protocol`
 
@@ -76,6 +80,8 @@ But there's no explicit test pinning this. If a future refactor accidentally cha
 Fix: a three-entry test in `tests/test_rules_conflicts.py` with `build/` + `!build/keep/` + `src/`, asserting exactly one conflict and that the presence of `src/` didn't change detection.
 
 Touches: `tests/test_rules_conflicts.py` (one new test).
+
+**Status: RESOLVED 2026-04-24.** Added `test_detect_later_include_does_not_affect_earlier_negation` after the existing `test_detect_multiple_independent_conflicts` in `tests/test_rules_conflicts.py`. Three-entry sandwich (`build/` + `!build/keep/` + `src/`) asserts exactly one conflict and that the trailing `src/` doesn't perturb detection — pinning the `sequence[:i]` slice invariant.
 
 ## 8. Pre-flight should run commit-check against every branch commit, not just HEAD
 
@@ -283,4 +289,4 @@ Touches: `tests/test_daemon_smoke.py` (scope depends on chosen fix).
 
 ## Status
 
-Items 8–12, 15–17 resolved (8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in this PR). Items 1–7, 13, 14, 18 still open. Item 13 (Node.js 20 → 24 action bump) has a hard stop September 2026 when the runner removes Node 20. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun).
+Items 1, 2, 7–12, 15–17 resolved (1, 2, 7 in this PR; 8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). Items 3–6, 13, 14, 18 still open. Item 13 (Node.js 20 → 24 action bump) has a hard stop September 2026 when the runner removes Node 20. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun).

@@ -96,8 +96,6 @@ def test_status_lists_rule_conflicts(tmp_path, monkeypatch):
     """`status` surfaces RuleCache conflicts alongside daemon pid / sweep info."""
     import click.testing
 
-    from dbxignore import cli, state
-
     root = tmp_path
     (root / ".dropboxignore").write_text(
         "build/\n!build/keep/\n", encoding="utf-8"
@@ -117,8 +115,6 @@ def test_status_lists_rule_conflicts(tmp_path, monkeypatch):
 def test_status_omits_conflicts_section_when_empty(tmp_path, monkeypatch):
     import click.testing
 
-    from dbxignore import cli, state
-
     root = tmp_path
     (root / ".dropboxignore").write_text("build/\n", encoding="utf-8")
     monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")
@@ -131,8 +127,6 @@ def test_status_omits_conflicts_section_when_empty(tmp_path, monkeypatch):
 
 def test_explain_annotates_dropped_negations(tmp_path, monkeypatch):
     import click.testing
-
-    from dbxignore import cli
 
     root = tmp_path
     (root / ".dropboxignore").write_text(
@@ -158,8 +152,6 @@ def test_status_does_not_log_conflict_warning_to_stderr(tmp_path, monkeypatch, c
     import logging
 
     import click.testing
-
-    from dbxignore import cli, state
 
     root = tmp_path
     (root / ".dropboxignore").write_text(

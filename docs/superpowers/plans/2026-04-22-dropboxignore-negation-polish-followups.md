@@ -77,6 +77,8 @@ Not pressing — the file is still single-responsibility at a stretch, and split
 
 Touches: `src/dropboxignore/rules.py` → `src/dropboxignore/rules_conflicts.py` (new); one import.
 
+**Status: RESOLVED 2026-04-25.** Extracted the detection layer (`literal_prefix`, `_ancestors_of`, `_find_masking_include`, `_detect_conflicts`, `Conflict`) to a new sibling module `src/dbxignore/rules_conflicts.py`. Net: `rules.py` 556 → 389 lines (-167); `rules_conflicts.py` new 186 lines. The followup's "~120 lines" estimate matched the functional content (the additional ~66 lines in `rules_conflicts.py` is the new module docstring + preserved spacing). API preserved — `rules.py` re-imports `Conflict` and `_detect_conflicts` so `RuleCache.conflicts()` still returns `Conflict` objects without external import changes; the only direct importer (`tests/test_rules_conflicts.py`) got a one-line update. Done as part of the 2026-04-25 backlog completeness sweep, overriding the followup's "Not pressing" guidance — neither trigger had fired (file was at 556, not 650+; no new detection feature scheduled). Landed in PR #38.
+
 ## 7. No test for the "sandwich" ordering `include → negation → another_include`
 
 By inspection of `_detect_conflicts`, the algorithm only looks at `sequence[:i]` (entries before the current negation), so a later include can't retroactively affect an earlier negation's conflict state. The `include → !negation → another_include` shape therefore works correctly — the `another_include` is invisible to the detector.
@@ -299,9 +301,9 @@ Distinct from item 14 (which tracks a flaky daemon *singleton* test in `test_dae
 - Replace the timing-sensitive poll with an explicit flush/drain helper if reconcile or the debouncer exposes one (e.g., synchronous `daemon._dispatch` invocation after a rule write).
 - Mock the watchdog layer and drive events deterministically — loses real-OS integration coverage.
 
-**Urgency:** low until second observation on the same test. Note in CHANGELOG if it recurs on a user-visible CI run (not a PR retry).
+**Urgency:** PROMOTED 2026-04-25. Second observation occurred during PR #38's PR-triggered Windows CI run. Same test, same assertion (`build/keep/ should stay marked — the negation is dropped`), same shape — the second `_poll_until` (3.0s timeout) timed out. Same-commit duration discrepancy was again striking: 27s passing (push-triggered) vs 1m26s failing (PR-triggered). Re-run of the failed PR-triggered job passed, confirming flake. PR #38's diff was a structural refactor (extract detection layer to `rules_conflicts.py`) — touches no daemon, watchdog, or debouncer code, ruling out regression as the cause. Per item 18's own "if it recurs on a user-visible CI run (not a PR retry)" guidance, this second occurrence triggers a CHANGELOG note in the next release. The cheapest fix candidate from the list above (widen the `_poll_until` timeout on the second assertion from 3.0s to ~5–8s) is the recommended next move.
 
-Touches: `tests/test_daemon_smoke.py` (scope depends on chosen fix).
+Touches: `tests/test_daemon_smoke.py` (scope depends on chosen fix); `CHANGELOG.md` (one-line note in the next release describing the flake + the chosen fix).
 
 ## 19. Items 8, 9, 10 lack inline RESOLVED markers (tracker hygiene)
 
@@ -319,4 +321,4 @@ Touches: `docs/superpowers/plans/2026-04-22-dropboxignore-negation-polish-follow
 
 ## Status
 
-Items 1–5, 7–13, 15–17 resolved (1, 2, 7 in PR #33; 3 + 5 in PR #34; 13 in PR #35; 4 in PR #36; 8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). Items 6, 14, 18, 19 still open. Item 6 is explicitly deferred-by-design ("not pressing — single-responsibility at a stretch"); items 14 and 18 are flaky-test observations awaiting second occurrences; item 19 is trivial tracker hygiene. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun); item 19 added 2026-04-25 from a top-down tracker readability audit.
+Items 1–13, 15–17 resolved (1, 2, 7 in PR #33; 3 + 5 in PR #34; 13 in PR #35; 4 in PR #36; 6 in PR #38; 8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). Items 14, 18, 19 still open. Item 14 awaits its second observation (no recurrence yet); item 18 is awaiting fix candidate selection (see item body); item 19 is trivial tracker hygiene. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun), then promoted to actionable 2026-04-25 after a second observation during PR #38; item 19 added 2026-04-25 from a top-down tracker readability audit.

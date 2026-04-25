@@ -301,9 +301,9 @@ Distinct from item 14 (which tracks a flaky daemon *singleton* test in `test_dae
 - Replace the timing-sensitive poll with an explicit flush/drain helper if reconcile or the debouncer exposes one (e.g., synchronous `daemon._dispatch` invocation after a rule write).
 - Mock the watchdog layer and drive events deterministically — loses real-OS integration coverage.
 
-**Urgency:** low until second observation on the same test. Note in CHANGELOG if it recurs on a user-visible CI run (not a PR retry).
+**Urgency:** PROMOTED 2026-04-25. Second observation occurred during PR #38's PR-triggered Windows CI run. Same test, same assertion (`build/keep/ should stay marked — the negation is dropped`), same shape — the second `_poll_until` (3.0s timeout) timed out. Same-commit duration discrepancy was again striking: 27s passing (push-triggered) vs 1m26s failing (PR-triggered). Re-run of the failed PR-triggered job passed, confirming flake. PR #38's diff was a structural refactor (extract detection layer to `rules_conflicts.py`) — touches no daemon, watchdog, or debouncer code, ruling out regression as the cause. Per item 18's own "if it recurs on a user-visible CI run (not a PR retry)" guidance, this second occurrence triggers a CHANGELOG note in the next release. The cheapest fix candidate from the list above (widen the `_poll_until` timeout on the second assertion from 3.0s to ~5–8s) is the recommended next move.
 
-Touches: `tests/test_daemon_smoke.py` (scope depends on chosen fix).
+Touches: `tests/test_daemon_smoke.py` (scope depends on chosen fix); `CHANGELOG.md` (one-line note in the next release describing the flake + the chosen fix).
 
 ## 19. Items 8, 9, 10 lack inline RESOLVED markers (tracker hygiene)
 
@@ -321,4 +321,4 @@ Touches: `docs/superpowers/plans/2026-04-22-dropboxignore-negation-polish-follow
 
 ## Status
 
-Items 1–13, 15–17 resolved (1, 2, 7 in PR #33; 3 + 5 in PR #34; 13 in PR #35; 4 in PR #36; 6 in PR #38; 8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). Items 14, 18, 19 still open. Item 14 awaits its second observation (no recurrence yet); item 18 is awaiting fix candidate selection (see item body); item 19 is trivial tracker hygiene. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun); item 19 added 2026-04-25 from a top-down tracker readability audit.
+Items 1–13, 15–17 resolved (1, 2, 7 in PR #33; 3 + 5 in PR #34; 13 in PR #35; 4 in PR #36; 6 in PR #38; 8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). Items 14, 18, 19 still open. Item 14 awaits its second observation (no recurrence yet); item 18 is awaiting fix candidate selection (see item body); item 19 is trivial tracker hygiene. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun), then promoted to actionable 2026-04-25 after a second observation during PR #38; item 19 added 2026-04-25 from a top-down tracker readability audit.

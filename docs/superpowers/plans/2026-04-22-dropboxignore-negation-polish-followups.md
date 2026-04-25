@@ -303,8 +303,20 @@ Distinct from item 14 (which tracks a flaky daemon *singleton* test in `test_dae
 
 Touches: `tests/test_daemon_smoke.py` (scope depends on chosen fix).
 
+## 19. Items 8, 9, 10 lack inline RESOLVED markers (tracker hygiene)
+
+The bottom Status section lists items 8–10 as resolved ("8–10 in v0.2.1 via PRs #15/#18/#19"), but the items' own bodies have no inline `**Status: RESOLVED**` marker. A reader scanning the tracker top-down sees three open-looking items with no closure indication and has to scroll to the Status section to learn they're resolved — a noticeable asymmetry from items 11–17, which all carry inline markers.
+
+The cause is just timing. Items 8–10 were resolved in v0.2.1 (PRs #15/#18/#19) before the inline-marker convention was established. Items 11–12 got inline markers in PR #24 when the convention started; items 13, 15–17 in the 2026-04-24/25 backlog sweep. Items 8–10 never got backfilled.
+
+**Fix:** add three short `**Status: RESOLVED in v0.2.1.** Landed in PR #N.` lines to the bodies of items 8, 9, 10. Mapping each item to its PR (#15, #18, or #19) requires a one-time `gh pr view <N>` cross-check against the items' stated changes. Three single-line additions total.
+
+**Urgency:** trivial. Tracker hygiene only — improves top-down readability, doesn't block anything. Discovered during the 2026-04-25 backlog sweep while running a `grep "^## [0-9]\|^\*\*Status: RESOLVED"` cross-reference against the tracker. Bundle with any other tracker-only PR or take as a one-commit standalone.
+
+Touches: `docs/superpowers/plans/2026-04-22-dropboxignore-negation-polish-followups.md` (3 lines added).
+
 ---
 
 ## Status
 
-Items 1–5, 7–13, 15–17 resolved (1, 2, 7 in PR #33; 3 + 5 in PR #34; 13 in PR #35; 4 in this PR; 8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). Items 6, 14, 18 still open. Item 6 is explicitly deferred-by-design ("not pressing — single-responsibility at a stretch"); items 14 and 18 are flaky-test observations awaiting second occurrences. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun).
+Items 1–5, 7–13, 15–17 resolved (1, 2, 7 in PR #33; 3 + 5 in PR #34; 13 in PR #35; 4 in PR #36; 8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). Items 6, 14, 18, 19 still open. Item 6 is explicitly deferred-by-design ("not pressing — single-responsibility at a stretch"); items 14 and 18 are flaky-test observations awaiting second occurrences; item 19 is trivial tracker hygiene. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun); item 19 added 2026-04-25 from a top-down tracker readability audit.

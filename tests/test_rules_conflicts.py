@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from dbxignore.rules import Conflict, _detect_conflicts, literal_prefix
+from dbxignore.rules_conflicts import Conflict, _detect_conflicts, literal_prefix
 
 
 @pytest.mark.parametrize(

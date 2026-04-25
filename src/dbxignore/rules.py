@@ -8,6 +8,7 @@ import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 import pathspec
 from pathspec.patterns.gitwildmatch import GitIgnoreSpecPattern
@@ -123,6 +124,13 @@ def _ancestors_of(prefix: str, ancestor_dir: Path, root: Path) -> list[Path]:
     """
     # Resolve the prefix against its scoping directory and strip the trailing
     # slash so we can navigate via Path.parent.
+    # NOTE: .resolve() here is intentional — do not "optimize" it out. Two
+    # reasons: (1) cost is bounded — _detect_conflicts fires only on rule
+    # mutations (load_root / reload_file / remove_file), not the steady-state
+    # sweep, and resolves exactly one path per negation rule; (2) downstream
+    # is_relative_to(root) and equality checks below assume canonical paths,
+    # so without resolution a symlink or `..` component could fool both into
+    # disagreeing on path identity and missing valid ancestors.
     target = (ancestor_dir / prefix.rstrip("/")).resolve()
     results: list[Path] = []
     current = target
@@ -230,6 +238,17 @@ class _LoadedRules:
     size: int
 
 
+class _PatternLike(Protocol):
+    """Structural type for pattern objects consumed by conflict detection
+    and rule evaluation. Satisfied by ``GitIgnoreSpecPattern`` (production)
+    and ``_FakePattern`` in ``tests/test_rules_conflicts.py`` (unit tests).
+    Only the two attributes listed below are read; pattern objects may
+    expose more without breaking the contract."""
+
+    include: bool | None
+    def match_file(self, path: str) -> bool | None: ...
+
+
 @dataclass(frozen=True)
 class _SequenceEntry:
     """One rule in the flattened evaluation-order sequence used by
@@ -239,7 +258,7 @@ class _SequenceEntry:
     line: int              # 1-based source line number
     raw: str               # source-line text (without trailing newline)
     ancestor_dir: Path     # directory the pattern is scoped to
-    pattern: object        # GitIgnoreSpecPattern; duck-typed (.include, .match_file)
+    pattern: _PatternLike  # GitIgnoreSpecPattern at runtime; see _PatternLike
 
 
 class RuleCache:

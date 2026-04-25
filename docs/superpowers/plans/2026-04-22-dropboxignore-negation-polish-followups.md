@@ -111,6 +111,8 @@ Local green becomes CI green on the message check. Prevents recurrence of the PR
 
 Touches: `CLAUDE.md` (Git workflow section, new bullet or extended existing one).
 
+**Status: RESOLVED in v0.2.1.** Landed in PR #18 (one of three commits in the release-workflow polish bundle).
+
 ## 9. Release workflow should have a `workflow_dispatch` trigger
 
 `.github/workflows/release.yml` triggers only on `push: tags: ['v*']`. That meant the workflow's first real exercise was the v0.2.0 release itself — where it failed at the PyInstaller step (pyinstaller wasn't installed; see PR #14 for the fix). The bug had been latent for the entire lifetime of the workflow; no PR before v0.2.0 exercised it.
@@ -130,6 +132,8 @@ Next time a release-workflow change lands, we can dispatch-run it manually befor
 
 Touches: `.github/workflows/release.yml`.
 
+**Status: RESOLVED in v0.2.1.** Landed in PR #18 (one of three commits in the release-workflow polish bundle). `workflow_dispatch:` trigger added; `Publish GitHub Release` step gated on `startsWith(github.ref, 'refs/tags/')` so dispatch runs build artifacts but don't publish spurious Releases.
+
 ## 10. Publish releases as the repo owner, not `github-actions[bot]`
 
 v0.2.0 was published by `github-actions[bot]` because `softprops/action-gh-release` authenticates via the default `GITHUB_TOKEN`. Visible in `gh release view v0.2.0` → `author: github-actions[bot]`. The release is still authoritative and tied to the repo's audit trail, but the UI-facing attribution reads as machine-authored rather than owner-authored.
@@ -142,6 +146,8 @@ Two mechanisms to fix:
 PAT is the standard solo-dev choice. Requires a one-time setup (generate PAT → add secret → update workflow), then releases surface under your GitHub identity.
 
 Touches: `.github/workflows/release.yml` (add `token:` input to the `softprops/action-gh-release` step); repo secrets (one-time, outside of the repo tree).
+
+**Status: RESOLVED in v0.2.1.** Landed in PR #18 (one of three commits in the release-workflow polish bundle). PAT-with-fallback pattern adopted: `token: ${{ secrets.GH_RELEASE_TOKEN || github.token }}` — zero-risk to existing workflows since the fallback evaluates to the default token when the secret isn't configured.
 
 ## 11. Publish releases to PyPI from the release workflow
 
@@ -319,8 +325,10 @@ The cause is just timing. Items 8–10 were resolved in v0.2.1 (PRs #15/#18/#19)
 
 Touches: `docs/superpowers/plans/2026-04-22-dropboxignore-negation-polish-followups.md` (3 lines added).
 
+**Status: RESOLVED 2026-04-25 (in this PR).** Backfilled the three inline RESOLVED markers per the proposed fix. Surprise finding during the cross-check: the Status section's attribution of items 8–10 to "PRs #15/#18/#19" was wrong — PRs #15 and #19 were docs-only (tracking + adding followup items respectively), and **PR #18 alone resolved all three items** in three commits. Status section attribution corrected from "PRs #15/#18/#19" to "PR #18 (single PR, three commits)". 4 single-line additions total — one more than this item's "three single-line additions" estimate, because of the Status correction.
+
 ---
 
 ## Status
 
-Items 1–13, 15–18 resolved (1, 2, 7 in PR #33; 3 + 5 in PR #34; 13 in PR #35; 4 in PR #36; 6 in PR #38; 18 in this PR; 8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). Items 14, 19 still open. Item 14 awaits its second observation (no recurrence yet); item 19 is trivial tracker hygiene. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun), then promoted to actionable 2026-04-25 after a second observation during PR #38, then resolved 2026-04-25 in this PR; item 19 added 2026-04-25 from a top-down tracker readability audit.
+Items 1–13, 15–19 resolved (1, 2, 7 in PR #33; 3 + 5 in PR #34; 13 in PR #35; 4 in PR #36; 6 in PR #38; 18 in PR #40; 19 in this PR; 8–10 in v0.2.1 via PR #18 (single PR, three commits — Status previously misattributed to "PRs #15/#18/#19", corrected as part of item 19); 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). **Item 14 is the only item still open** — awaits its second observation (no recurrence yet). Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun), then promoted to actionable 2026-04-25 after a second observation during PR #38, then resolved 2026-04-25 in PR #40; item 19 added 2026-04-25 from a top-down tracker readability audit, resolved same-day in this PR.

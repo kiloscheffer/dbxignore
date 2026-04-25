@@ -8,6 +8,7 @@ import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 import pathspec
 from pathspec.patterns.gitwildmatch import GitIgnoreSpecPattern
@@ -230,6 +231,17 @@ class _LoadedRules:
     size: int
 
 
+class _PatternLike(Protocol):
+    """Structural type for pattern objects consumed by conflict detection
+    and rule evaluation. Satisfied by ``GitIgnoreSpecPattern`` (production)
+    and ``_FakePattern`` in ``tests/test_rules_conflicts.py`` (unit tests).
+    Only the two attributes listed below are read; pattern objects may
+    expose more without breaking the contract."""
+
+    include: bool | None
+    def match_file(self, path: str) -> bool | None: ...
+
+
 @dataclass(frozen=True)
 class _SequenceEntry:
     """One rule in the flattened evaluation-order sequence used by
@@ -239,7 +251,7 @@ class _SequenceEntry:
     line: int              # 1-based source line number
     raw: str               # source-line text (without trailing newline)
     ancestor_dir: Path     # directory the pattern is scoped to
-    pattern: object        # GitIgnoreSpecPattern; duck-typed (.include, .match_file)
+    pattern: _PatternLike  # GitIgnoreSpecPattern at runtime; see _PatternLike
 
 
 class RuleCache:

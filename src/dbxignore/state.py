@@ -57,7 +57,14 @@ def default_path() -> Path:
 def write(state: State, path: Path | None = None) -> None:
     path = path or default_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(_encode(state), indent=2), encoding="utf-8")
+    # Write to a sibling tmp file then os.replace into place. A SIGKILL or
+    # power loss between truncate and write completion would otherwise leave
+    # an empty / partial state.json — _read_at would log WARNING and return
+    # None, and daemon.run's singleton check would then proceed and start a
+    # second daemon while the first is still alive (followup item 20).
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(_encode(state), indent=2), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def read(path: Path | None = None) -> State | None:

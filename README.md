@@ -148,7 +148,7 @@ Logs (rotated, 25 MB total):
 
 State:
 - Windows — `%LOCALAPPDATA%\dbxignore\state.json`.
-- Linux — `$XDG_STATE_HOME/dbxignore/state.json` (fallback `~/.local/state/dbxignore/state.json`). Installs that pre-date the XDG move are read transparently from the legacy `~/AppData/Local/dbxignore/state.json` for one release, with a WARNING; the next daemon write persists to the XDG path.
+- Linux — `$XDG_STATE_HOME/dbxignore/state.json` (fallback `~/.local/state/dbxignore/state.json`).
 
 ## License
 

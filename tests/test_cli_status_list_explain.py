@@ -125,6 +125,40 @@ def test_status_omits_conflicts_section_when_empty(tmp_path, monkeypatch):
     assert "rule conflicts" not in result.output
 
 
+def test_status_column_aligns_conflicts_with_varying_pattern_lengths(tmp_path, monkeypatch):
+    """Multi-conflict output column-aligns the 'masked by' prefix and trailing
+    fields even when dropped patterns differ in length. Regression backstop:
+    a future "simplification" back to fixed two-space separators would fail
+    here rather than only surfacing in real-world `.dropboxignore` files."""
+    import click.testing
+
+    root = tmp_path
+    # Two independent (include, negation-under-it) pairs with very different
+    # negation lengths — short ("!build/keep/") vs long ("!node_modules/...").
+    (root / ".dropboxignore").write_text(
+        "build/\n"
+        "node_modules/some-very-long-package/\n"
+        "!build/keep/\n"
+        "!node_modules/some-very-long-package/patched/\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+
+    result = click.testing.CliRunner().invoke(cli.main, ["status"])
+    assert result.exit_code == 0
+
+    conflict_lines = [line for line in result.output.splitlines() if "masked by" in line]
+    assert len(conflict_lines) == 2, (
+        f"expected 2 conflict lines, got: {conflict_lines}"
+    )
+    columns = [line.index("masked by") for line in conflict_lines]
+    assert len(set(columns)) == 1, (
+        f"'masked by' should be column-aligned across conflicts; "
+        f"got columns {columns} in lines {conflict_lines}"
+    )
+
+
 def test_explain_annotates_dropped_negations(tmp_path, monkeypatch):
     import click.testing
 

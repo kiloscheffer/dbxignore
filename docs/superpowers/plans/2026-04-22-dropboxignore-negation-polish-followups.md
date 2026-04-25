@@ -207,6 +207,18 @@ The current action versions we use were contemporary when the workflows were wri
 
 Touches: `.github/workflows/test.yml`, `.github/workflows/release.yml`, `.github/workflows/commit-check.yml`.
 
+**Status: RESOLVED 2026-04-25.** Bumped 5 actions across `test.yml` and `release.yml` (`commit-check.yml` was already on `actions/checkout@v5`):
+
+- `actions/checkout` v4 → v5 (followup-recommended; matches existing `commit-check.yml` pin)
+- `astral-sh/setup-uv` v5 → v7 (latest moving major-version tag; v6 still on node20, no v8 major-tag yet)
+- `softprops/action-gh-release` v2 → v3 (followup predicted; latest moving major)
+- `actions/upload-artifact` v4 → v7 (NOT in the followup's literal list — discovered while verifying named actions; same node20 root cause)
+- `actions/download-artifact` v4 → v8 (same — not in followup; same root cause)
+
+Per item 13's test strategy, one commit per action so a future regression bisects to a single bump. Test.yml's actions get validated by every push-triggered CI run; release.yml's release-only actions (publish-github, publish-pypi, build) need a `workflow_dispatch` run to fully exercise — courtesy of item 9.
+
+The two un-bumped actions (`commit-check/commit-check-action@v2.6.0`, `pypa/gh-action-pypi-publish@release/v1`) are **composite actions**, not Node-based — they're shell-script orchestrators and immune to the Node 20 deprecation entirely.
+
 ## 14. Flaky `test_run_refuses_when_another_pid_is_alive`
 
 `tests/test_daemon_singleton.py::test_run_refuses_when_another_pid_is_alive` failed once during the PR #22 pre-flight full-suite run on Linux (Python 3.14.2), then passed on rerun and passed in isolation. Classic flaky-test signal — likely a psutil race between the test's PID-alive check and concurrent pytest worker processes (no `-p no:xdist` in our config, but other subprocess-launching tests could also perturb the system-wide process table).
@@ -293,4 +305,4 @@ Touches: `tests/test_daemon_smoke.py` (scope depends on chosen fix).
 
 ## Status
 
-Items 1–3, 5, 7–12, 15–17 resolved (1, 2, 7 in PR #33; 3 + 5 in this PR; 8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). Items 4, 6, 13, 14, 18 still open. Item 13 (Node.js 20 → 24 action bump) has a hard stop September 2026 when the runner removes Node 20. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun).
+Items 1–3, 5, 7–13, 15–17 resolved (1, 2, 7 in PR #33; 3 + 5 in PR #34; 13 in this PR; 8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). Items 4, 6, 14, 18 still open — none deadline-bound now that item 13's Node 20 hold-outs are off the runner. Items 4 and 6 are explicitly deferred-by-design ("not worth doing without a user report" and "not pressing — single-responsibility at a stretch" respectively); items 14 and 18 are flaky-test observations awaiting second occurrences. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun).

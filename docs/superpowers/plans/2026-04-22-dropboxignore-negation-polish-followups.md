@@ -41,6 +41,8 @@ class _SequenceEntry:
 
 Touches: `src/dropboxignore/rules.py` near `_SequenceEntry`; likely a Protocol declaration next to the existing imports.
 
+**Status: RESOLVED 2026-04-24.** Replaced `pattern: object` with a `_PatternLike` Protocol (`include: bool | None`, `match_file(path: str) -> bool | None`) defined just before `_SequenceEntry`. Tightened the followup's proposed return type from `object` to `bool | None` to match the actual contract of both `GitIgnoreSpecPattern` and the `_FakePattern` test shim — gives static checkers something useful to verify against. The 36 tests in `test_rules_conflicts.py` + `test_rules_reload_explain.py` continued to pass without test-side changes (structural typing working as intended).
+
 ## 4. `dropboxignore status` output doesn't column-align conflicts
 
 The conflicts section uses fixed two-space separators between fields. At 5+ conflicts with varying pattern lengths, the columns slide based on content, reducing scannability. For example:
@@ -62,6 +64,8 @@ CLAUDE.md's Gotchas section flags `Path.resolve()` as a Windows perf hazard (per
 The note here is about documentation, not optimization: add a comment in `_ancestors_of` explaining that the `.resolve()` cost is bounded to mutation events so a future reader doesn't "optimize" it out for the wrong reason (and break the path-equality invariant that downstream `is_relative_to` checks depend on).
 
 Touches: `src/dropboxignore/rules.py` `_ancestors_of` docstring.
+
+**Status: RESOLVED 2026-04-24.** Added a multi-line `NOTE:` comment at the `.resolve()` call in `_ancestors_of` (not the docstring — at the call site, where the temptation to "optimize the syscall" would strike). Captures both facts: (1) cost is bounded to mutation events (`load_root` / `reload_file` / `remove_file`), not the steady-state sweep, and resolves exactly one path per negation rule; (2) removing the resolution would break the downstream `is_relative_to(root)` and equality checks that assume canonical paths — a symlink or `..` component in `target` could fool both into disagreeing on path identity and missing valid ancestors.
 
 ## 6. `rules.py` has grown to ~530 lines; detection layer could extract
 
@@ -289,4 +293,4 @@ Touches: `tests/test_daemon_smoke.py` (scope depends on chosen fix).
 
 ## Status
 
-Items 1, 2, 7–12, 15–17 resolved (1, 2, 7 in this PR; 8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). Items 3–6, 13, 14, 18 still open. Item 13 (Node.js 20 → 24 action bump) has a hard stop September 2026 when the runner removes Node 20. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun).
+Items 1–3, 5, 7–12, 15–17 resolved (1, 2, 7 in PR #33; 3 + 5 in this PR; 8–10 in v0.2.1 via PRs #15/#18/#19; 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). Items 4, 6, 13, 14, 18 still open. Item 13 (Node.js 20 → 24 action bump) has a hard stop September 2026 when the runner removes Node 20. Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun).

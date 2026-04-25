@@ -180,12 +180,24 @@ def status() -> None:
         conflicts = cache.conflicts()
         if conflicts:
             click.echo(f"rule conflicts ({len(conflicts)}):")
-            for c in conflicts:
-                dropped_loc = _format_ignore_file_loc(c.dropped_source, discovered)
-                masking_loc = _format_ignore_file_loc(c.masking_source, discovered)
+            # Pre-format and column-align so the "masked by" prefix and the
+            # masking pattern land on consistent columns when dropped patterns
+            # vary in length. Pads with f"{s:<width}" — only trailing spaces
+            # are added, so substring-based test asserts continue to match.
+            rows = [
+                (
+                    f"{_format_ignore_file_loc(c.dropped_source, discovered)}:{c.dropped_line}",
+                    c.dropped_pattern,
+                    f"{_format_ignore_file_loc(c.masking_source, discovered)}:{c.masking_line}",
+                    c.masking_pattern,
+                )
+                for c in conflicts
+            ]
+            w_dloc, w_dpat, w_mloc = (max(len(r[i]) for r in rows) for i in (0, 1, 2))
+            for d_loc, d_pat, m_loc, m_pat in rows:
                 click.echo(
-                    f"  {dropped_loc}:{c.dropped_line}  {c.dropped_pattern}  "
-                    f"masked by {masking_loc}:{c.masking_line}  {c.masking_pattern}"
+                    f"  {d_loc:<{w_dloc}}  {d_pat:<{w_dpat}}  "
+                    f"masked by {m_loc:<{w_mloc}}  {m_pat}"
                 )
 
 

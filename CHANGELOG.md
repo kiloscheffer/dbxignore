@@ -5,11 +5,23 @@ All notable changes to dbxignore are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.1] — 2026-04-25
+
+Maintenance release. Two silent-failure-mode bug fixes around state I/O and the per-file reconcile loop, a per-file `is_dir()` syscall cache in the match path, and a stale-doc cleanup. **No breaking changes.** Upgrade is `pip install --upgrade dbxignore` (or download the new binaries) followed by restarting the daemon (`systemctl --user restart dbxignore.service` on Linux; log out / back in or `schtasks /Run /TN dbxignore` on Windows).
 
 ### Fixed
 
+- **`state.write()` is now atomic.** Writes go to `state.json.tmp` and `os.replace` into place — POSIX-atomic on Linux, `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` on Windows. Previously a `path.write_text()` truncate-then-write could leave a zero-length / partial `state.json` if the daemon was SIGKILLed or the machine lost power mid-write; on next start, the singleton check would see corrupt state, treat it as "no prior daemon", and let a second daemon launch alongside the first. Narrow conjunction (hard crash within the few-ms write window AND the user re-runs the daemon before the prior process exits), but the failure mode was silent — two daemons writing markers concurrently, hard to attribute back to corrupt state. `uninstall --purge` also cleans a leaked `state.json.tmp` if one is found.
+- **Per-file reconcile loop now survives generic `OSError` on the read side.** `_reconcile_path` previously caught `FileNotFoundError` and `PermissionError` only when checking a marker; any other `OSError` (e.g. `EIO` on a flaky network drive, or `ENOTSUP` from `getxattr` on a filesystem that doesn't support `user.*` xattrs at all) escaped the per-file try/except and silently killed the per-root sweep worker — markers stopped being maintained on that root and nothing surfaced in the report. The read-side except is now broadened to a generic `OSError` arm with errno classification, mirroring the existing write-side ENOTSUP/EOPNOTSUPP handling.
 - **Flaky `test_daemon_reacts_to_dropboxignore_and_directory_creation` on Windows CI.** Widened the second `_poll_until` timeout from 3.0s to 5.0s. The test exercises a watchdog event-ordering race ("RULES before DIR_CREATE" — documented in the v0.2.1 negation-semantics spec as "masked on Windows") that two same-commit observations (PR #30, PR #38) showed isn't absolute under runner load. No production-code change; the daemon's behavior is unchanged.
+
+### Changed
+
+- **`RuleCache.match()` and `RuleCache.explain()` now compute `path.is_dir()` once per call instead of once per ancestor `.dropboxignore`.** The directory-only-pattern check inside `_rel_path_str()` was repeating the syscall `D` times for the same path when `D` ancestor rule files applied. Hoisting the call to the per-call layer is a stat-syscall reduction of `N × (D − 1)` per full sweep; on a 100k-file tree with one nested ruleset, that's ~100k fewer `is_dir()` calls per hourly sweep. No behavior change.
+
+### Documentation
+
+- **README:** removed a stale paragraph in the "Logging and state" subsection that claimed v0.3 would transparently read v0.2.x state from the old `~/AppData/Local/dbxignore/` path with a WARNING. The paragraph contradicted the README's top-level `## Upgrading from v0.2.x` section and predated the v0.3.0 fallback removal — it would have misled v0.2.x users into expecting their state to migrate when in fact the upgrade requires running `dropboxignore uninstall --purge` first.
 
 ## [0.3.0] — 2026-04-24
 
@@ -131,6 +143,7 @@ Initial release. Windows-only.
 - **PyInstaller-built standalone binaries** — `dropboxignore.exe` + `dropboxignored.exe`, published via GitHub Releases.
 - **Windows test leg** with `pytest -m windows_only` NTFS-ADS integration tests.
 
+[0.3.1]: https://github.com/kiloscheffer/dbxignore/releases/tag/v0.3.1
 [0.3.0]: https://github.com/kiloscheffer/dbxignore/releases/tag/v0.3.0
 [0.2.1]: https://github.com/kiloscheffer/dbxignore/releases/tag/v0.2.1
 [0.2.0]: https://github.com/kiloscheffer/dbxignore/releases/tag/v0.2.0

@@ -155,9 +155,10 @@ class RuleCache:
         # entries in source order; every matching pattern overwrites `matched`
         # with its include bit. Deeper ancestors come later, so their patterns
         # override shallower ones — gitignore's last-match-wins semantics.
+        is_dir = path.is_dir()
         matched = False
         for ancestor, loaded in self._applicable(root, path):
-            rel_str = self._rel_path_str(ancestor, path)
+            rel_str = self._rel_path_str(ancestor, path, is_dir)
             ignore_file = ancestor / IGNORE_FILENAME
             for line_idx, pattern in loaded.entries:
                 if (ignore_file, line_idx) in self._dropped:
@@ -186,9 +187,10 @@ class RuleCache:
         if root is None:
             return []
 
+        is_dir = path.is_dir()
         results: list[Match] = []
         for ancestor, loaded in self._applicable(root, path):
-            rel_str = self._rel_path_str(ancestor, path)
+            rel_str = self._rel_path_str(ancestor, path, is_dir)
             ignore_file = ancestor / IGNORE_FILENAME
             for line_idx, pattern in loaded.entries:
                 if pattern.match_file(rel_str) is None:
@@ -262,13 +264,12 @@ class RuleCache:
         return result
 
     @staticmethod
-    def _rel_path_str(ancestor: Path, path: Path) -> str:
-        rel_str = path.relative_to(ancestor).as_posix()
+    def _rel_path_str(ancestor: Path, path: Path, is_dir: bool) -> str:
         # Directory-only rules (e.g. `node_modules/`) only fire when the
-        # tested path string ends in `/`. If the path no longer exists
-        # is_dir() returns False; callers reconciling deleted paths discard
-        # the result (design doc §Failure modes).
-        if path.is_dir():
+        # tested path string ends in `/`. Callers compute is_dir once per
+        # path so deep `.dropboxignore` chains don't repeat the syscall.
+        rel_str = path.relative_to(ancestor).as_posix()
+        if is_dir:
             rel_str += "/"
         return rel_str
 
@@ -370,7 +371,7 @@ def _build_entries(
     """
     active_line_indices = [
         i for i, raw in enumerate(lines)
-        if raw.strip() and not raw.strip().startswith("#")
+        if (s := raw.strip()) and not s.startswith("#")
     ]
     active_patterns = [p for p in spec.patterns if p.include is not None]
     if len(active_line_indices) == len(active_patterns):

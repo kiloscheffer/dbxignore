@@ -51,9 +51,18 @@ def test_daemon_reacts_to_dropboxignore_and_directory_creation(tmp_path, monkeyp
         )
         (tmp_path / "build" / "keep").mkdir()
 
+        # Wider timeout (5.0s vs the 3.0s used elsewhere in this test) to
+        # absorb the watchdog event-ordering race documented in followup
+        # item 18: under Windows runner load, the RULES-before-DIR_CREATE
+        # masking that the v0.2.1 negation-semantics spec relies on isn't
+        # absolute. Two same-commit pass-then-fail observations (PR #30,
+        # PR #38) showed the failing leg taking 3.75s+ in pytest stage vs
+        # ~0.4s for the passing leg. 5.0s leaves comfortable headroom
+        # without bumping into pytest's per-test 10s timeout (the third
+        # poll below still has 3.0s, so total worst case is 2+5+3=10s).
         assert _poll_until(
             lambda: markers.is_ignored(tmp_path / "build" / "keep"),
-            timeout_s=3.0,
+            timeout_s=5.0,
         ), "build/keep/ should stay marked — the negation is dropped"
 
         # Verify the WARNING made it into daemon.log. The log lives under

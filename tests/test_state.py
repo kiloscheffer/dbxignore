@@ -36,6 +36,23 @@ def test_read_corrupt_returns_none(tmp_path):
     assert state.read(p) is None
 
 
+def test_write_leaves_no_tmp_file(tmp_path):
+    """Atomic write: state.json.tmp must be renamed away on success."""
+    p = tmp_path / "state.json"
+    state.write(state.State(daemon_pid=1), p)
+    assert p.exists()
+    assert not (tmp_path / "state.json.tmp").exists()
+
+
+def test_write_overwrites_stale_tmp(tmp_path):
+    """A leaked tmp from a prior crash must not break the next write."""
+    p = tmp_path / "state.json"
+    (tmp_path / "state.json.tmp").write_text("garbage from crash", encoding="utf-8")
+    state.write(state.State(daemon_pid=2), p)
+    assert state.read(p).daemon_pid == 2
+    assert not (tmp_path / "state.json.tmp").exists()
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows path layout")
 def test_default_path_windows_under_localappdata(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))

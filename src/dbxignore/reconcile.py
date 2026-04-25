@@ -69,6 +69,18 @@ def _reconcile_path(path: Path, cache: RuleCache, report: Report) -> bool | None
         logger.warning("Permission denied reading %s: %s", path, exc)
         report.errors.append((path, f"read: {exc}"))
         return None
+    except OSError as exc:
+        # Catch-all for read-side I/O errors that aren't FileNotFoundError or
+        # PermissionError — e.g. EIO on a flaky network drive, or ENOTSUP
+        # from getxattr on a filesystem that doesn't support xattrs at all.
+        # Without this arm the error would escape `_reconcile_path` and kill
+        # the per-root sweep worker silently (followup item 21). Mirrors the
+        # write-side ENOTSUP/EOPNOTSUPP handling shape.
+        logger.warning(
+            "I/O error reading marker on %s: errno=%s %s", path, exc.errno, exc
+        )
+        report.errors.append((path, f"read: errno={exc.errno} {exc}"))
+        return None
 
     try:
         if should_ignore and not currently_ignored:

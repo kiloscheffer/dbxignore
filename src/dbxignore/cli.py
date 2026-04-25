@@ -53,6 +53,11 @@ def _purge_local_state() -> None:
     state_json = state.default_path()
     if state_json.exists():
         candidates.append(state_json)
+    # Atomic-write tmp file (state.json.tmp) — only present if a daemon
+    # crashed mid-write before os.replace; usually absent.
+    state_tmp = state_json.with_name(state_json.name + ".tmp")
+    if state_tmp.exists():
+        candidates.append(state_tmp)
     # Base file plus RotatingFileHandler backups. The handler only creates
     # integer-suffixed rotations (daemon.log, daemon.log.1, daemon.log.2, ...).
     # A bare glob `daemon.log*` would also catch unrelated files like

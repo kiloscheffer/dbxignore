@@ -327,8 +327,57 @@ Touches: `docs/superpowers/plans/2026-04-22-dropboxignore-negation-polish-follow
 
 **Status: RESOLVED 2026-04-25 (in this PR).** Backfilled the three inline RESOLVED markers per the proposed fix. Surprise finding during the cross-check: the Status section's attribution of items 8–10 to "PRs #15/#18/#19" was wrong — PRs #15 and #19 were docs-only (tracking + adding followup items respectively), and **PR #18 alone resolved all three items** in three commits. Status section attribution corrected from "PRs #15/#18/#19" to "PR #18 (single PR, three commits)". 4 single-line additions total — one more than this item's "three single-line additions" estimate, because of the Status correction.
 
+## 20. `state.write()` is not atomic — torn JSON could bypass singleton check
+
+`src/dbxignore/state.py`'s `write()` calls `path.write_text(...)`, which truncates then writes. A crash between truncation and completion (SIGKILL, power loss) leaves a zero-length or partial `state.json`. On next startup, `_read_at` catches `json.JSONDecodeError`, logs WARNING, and returns `None`; `daemon.run`'s singleton check (`if prior is not None and _is_other_live_daemon(prior.daemon_pid)`) sees `None` and proceeds — a second daemon instance can start while the first is still alive.
+
+**Fix:** standard write-temp-then-`os.replace` pattern. Write to `state.json.tmp` in the same directory, then `os.replace(tmp, final)` — POSIX-atomic on Linux; uses `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` on Windows. ~5 lines added to `write()`, no API change.
+
+**Urgency:** low. Hits only on hard-crash within the few-ms write window AND the user re-runs `dbxignore daemon` before the prior process exits — narrow conjunction. But the failure mode is silent (two daemons writing markers concurrently) and hard to attribute back to corrupt state.
+
+Touches: `src/dbxignore/state.py` (`write()`). Optional: regression test that injects a partial file and asserts singleton check still blocks — would need a richer "prior daemon alive but state corrupt" protocol than the current code expresses.
+
+## 21. Windows backend `is_ignored` only catches `FileNotFoundError`
+
+`src/dbxignore/_backends/windows_ads.py`'s `is_ignored` opens the `:com.dropbox.ignored` ADS stream and returns `False` on `FileNotFoundError`, but propagates any other `OSError`. The matching read-side guard in `reconcile._reconcile_path` catches `FileNotFoundError` and `PermissionError` only — the `OSError(ENOTSUP|EOPNOTSUPP)` arm sits on the *write* side and is Linux-shaped.
+
+So an unexpected `OSError` from `is_ignored` (e.g. `EIO` on a flaky network drive, network-disconnect on a mapped drive) escapes the per-file try/except, propagates out of `_reconcile_path`, and kills the per-root thread-pool worker in `_sweep_once` without landing in `Report.errors`. CLAUDE.md's stated contract for the analogous Linux ENOTSUP case is "log WARNING, append to `Report.errors`, continue the sweep" — applying the same shape on the read side keeps the contract uniform across platforms.
+
+**Fix:** broaden the read-side `except` in `_reconcile_path` to catch `OSError`, classify by `errno` in the log line, append to `Report.errors`. ~5 lines.
+
+**Urgency:** low. Network-drive Dropbox roots are uncommon and locked-file edges on Windows mostly map cleanly to `PermissionError`. Worth doing because "silent worker death on one root" is a hard-to-debug failure mode — markers stop being maintained on that root and the user sees nothing in the report.
+
+Touches: `src/dbxignore/reconcile.py` (`_reconcile_path` read-side except).
+
+## 22. `README.md` describes a legacy state-path fallback that v0.3 removed
+
+`README.md:151` reads "Installs that pre-date the XDG move are read transparently from the legacy `~/AppData/Local/dbxignore/state.json` for one release, with a WARNING; the next daemon write persists to the XDG path." The path name was rename-swept (`dropboxignore` → `dbxignore`) in commit `48e43a3`, but the underlying fallback was removed in commit `61e95a9` (one commit later). `state.py` has no `_legacy_linux_path()` function and no fallback branch; CLAUDE.md and `CHANGELOG.md` v0.3.0 both document the removal.
+
+A v0.2.x user who skips `uninstall --purge` and reads only the README will silently lose their state on first run of v0.3+. CHANGELOG carries the authoritative text; README is just stale.
+
+**Fix:** rewrite the paragraph to describe the actual upgrade path — clone the CHANGELOG v0.3.0 wording. Something like: "Upgrading from v0.2.x: run `dropboxignore uninstall --purge` first to clear v0.2 state and markers, then `pip install dbxignore`. The v0.2-era legacy state-path fallback was removed in v0.3 — there is no auto-migration."
+
+**Urgency:** low (CHANGELOG is authoritative), but README is the higher-traffic doc.
+
+Touches: `README.md` (~3 lines around line 151).
+
+## 23. `RuleCache._applicable` does multi-step lock-free reads of `_rules`
+
+`src/dbxignore/rules.py`'s `_applicable` walks ancestor paths and calls `self._rules.get(ancestor / IGNORE_FILENAME)` once per ancestor under the lock-free contract documented in CLAUDE.md ("reconcile reads the cache lock-free, single-op `.get()`s"). Each `.get()` is GIL-atomic on its own, but the loop is not — between two calls the debouncer thread can `reload_file` or `remove_file` and change which ancestor's rules apply.
+
+Worst observable outcome: one path during one sweep tick is matched against a slightly stale ancestor view — recoverable on the next watchdog event or hourly sweep. So the system isn't *broken*, but CLAUDE.md's "single-op `.get()`s" wording arguably promises stronger per-traversal consistency than `_applicable`'s loop delivers.
+
+**Fix candidates:**
+- **Snapshot under the lock once per `_applicable` call.** Acquire `self._lock`, build a `dict[Path, _LoadedRules]` for the relevant ancestors, release, then iterate. Trades a brief lock acquisition per file for per-traversal consistency. May regress sweep wall-clock — CLAUDE.md notes locking was avoided on the read path deliberately.
+- **Tighten the CLAUDE.md wording** to acknowledge per-traversal consistency isn't guaranteed and is OK because the next event recovers. Documents reality without code changes.
+- **Status quo** — accept the borderline drift; downstream behavior is convergent.
+
+**Urgency:** very low. No observed bug; the sweep is event-driven and self-healing. Filing this so a future reader walking `_applicable` doesn't re-derive the same uncertainty cold.
+
+Touches: `src/dbxignore/rules.py` (`_applicable`) OR `CLAUDE.md` (RuleCache lock-free gotcha), depending on which arm gets picked.
+
 ---
 
 ## Status
 
-Items 1–13, 15–19 resolved (1, 2, 7 in PR #33; 3 + 5 in PR #34; 13 in PR #35; 4 in PR #36; 6 in PR #38; 18 in PR #40; 19 in this PR; 8–10 in v0.2.1 via PR #18 (single PR, three commits — Status previously misattributed to "PRs #15/#18/#19", corrected as part of item 19); 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). **Item 14 is the only item still open** — awaits its second observation (no recurrence yet). Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun), then promoted to actionable 2026-04-25 after a second observation during PR #38, then resolved 2026-04-25 in PR #40; item 19 added 2026-04-25 from a top-down tracker readability audit, resolved same-day in this PR.
+Items 1–13, 15–19 resolved (1, 2, 7 in PR #33; 3 + 5 in PR #34; 13 in PR #35; 4 in PR #36; 6 in PR #38; 18 in PR #40; 19 in PR #41; 8–10 in v0.2.1 via PR #18 (single PR, three commits — Status previously misattributed to "PRs #15/#18/#19", corrected as part of item 19); 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). **Open: items 14, 20, 21, 22, 23.** Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun), then promoted to actionable 2026-04-25 after a second observation during PR #38, then resolved 2026-04-25 in PR #40; item 19 added 2026-04-25 from a top-down tracker readability audit, resolved same-day in PR #41; items 20–23 added 2026-04-25 from a whole-codebase code-review pass (four 75-confidence advisories — none cleared the ≥80 ship-bar but verified-real, filed for backlog).

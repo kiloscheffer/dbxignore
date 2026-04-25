@@ -85,6 +85,18 @@ def _purge_local_state() -> None:
         pass
 
 
+def _load_cache(roots: list[Path]) -> RuleCache:
+    """Build a RuleCache loaded from every root, with conflict warnings muted.
+
+    The CLI surfaces conflicts via structured stdout (``status``, ``explain``)
+    so the per-mutation WARNING records would be a stderr duplicate.
+    """
+    cache = RuleCache()
+    for r in roots:
+        cache.load_root(r, log_warnings=False)
+    return cache
+
+
 def _process_is_alive(pid: int | None) -> bool:
     if pid is None:
         return False
@@ -118,9 +130,7 @@ def apply(path: Path | None) -> None:
         click.echo("No Dropbox roots found. Is Dropbox installed?", err=True)
         sys.exit(2)
 
-    cache = RuleCache()
-    for r in discovered:
-        cache.load_root(r, log_warnings=False)
+    cache = _load_cache(discovered)
 
     if path is None:
         targets: list[tuple[Path, Path]] = [(r, r) for r in discovered]
@@ -174,9 +184,7 @@ def status() -> None:
     # `status` pays for an rglob we don't need.
     discovered = _discover_roots()
     if discovered:
-        cache = RuleCache()
-        for r in discovered:
-            cache.load_root(r, log_warnings=False)
+        cache = _load_cache(discovered)
         conflicts = cache.conflicts()
         if conflicts:
             click.echo(f"rule conflicts ({len(conflicts)}):")
@@ -257,9 +265,7 @@ def explain(path: Path) -> None:
         click.echo("No Dropbox roots found.", err=True)
         sys.exit(2)
 
-    cache = RuleCache()
-    for r in discovered:
-        cache.load_root(r, log_warnings=False)
+    cache = _load_cache(discovered)
 
     matches = cache.explain(path.resolve())
     if not matches:

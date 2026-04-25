@@ -337,6 +337,8 @@ Touches: `docs/superpowers/plans/2026-04-22-dropboxignore-negation-polish-follow
 
 Touches: `src/dbxignore/state.py` (`write()`). Optional: regression test that injects a partial file and asserts singleton check still blocks — would need a richer "prior daemon alive but state corrupt" protocol than the current code expresses.
 
+**Status: RESOLVED 2026-04-25 (PR #45).** `state.write()` now writes to `state.json.tmp` and `os.replace`s into place. `_purge_local_state()` also cleans a leaked tmp file if one exists. Two regression tests added (`test_write_leaves_no_tmp_file`, `test_write_overwrites_stale_tmp`). The richer "corrupt state vs. live daemon" coverage suggested in the optional clause was not pursued — would require expressing a state shape the code doesn't currently model.
+
 ## 21. Windows backend `is_ignored` only catches `FileNotFoundError`
 
 `src/dbxignore/_backends/windows_ads.py`'s `is_ignored` opens the `:com.dropbox.ignored` ADS stream and returns `False` on `FileNotFoundError`, but propagates any other `OSError`. The matching read-side guard in `reconcile._reconcile_path` catches `FileNotFoundError` and `PermissionError` only — the `OSError(ENOTSUP|EOPNOTSUPP)` arm sits on the *write* side and is Linux-shaped.
@@ -348,6 +350,8 @@ So an unexpected `OSError` from `is_ignored` (e.g. `EIO` on a flaky network driv
 **Urgency:** low. Network-drive Dropbox roots are uncommon and locked-file edges on Windows mostly map cleanly to `PermissionError`. Worth doing because "silent worker death on one root" is a hard-to-debug failure mode — markers stop being maintained on that root and the user sees nothing in the report.
 
 Touches: `src/dbxignore/reconcile.py` (`_reconcile_path` read-side except).
+
+**Status: RESOLVED 2026-04-25 (PR #45).** Added a generic `OSError` arm after the existing `FileNotFoundError` / `PermissionError` arms — logs WARNING with errno classification, appends to `Report.errors`, returns `None`. Two regression tests cover the EIO and read-side ENOTSUP paths. The fix is in `_reconcile_path`, not in the Windows backend itself — the title's "Windows backend `is_ignored`" framing was misleading; the right layer to broaden was the reconcile loop, since the same shape covers Linux ENOTSUP-on-read too.
 
 ## 22. `README.md` describes a legacy state-path fallback that v0.3 removed
 
@@ -380,4 +384,4 @@ Touches: `src/dbxignore/rules.py` (`_applicable`) OR `CLAUDE.md` (RuleCache lock
 
 ## Status
 
-Items 1–13, 15–19 resolved (1, 2, 7 in PR #33; 3 + 5 in PR #34; 13 in PR #35; 4 in PR #36; 6 in PR #38; 18 in PR #40; 19 in PR #41; 8–10 in v0.2.1 via PR #18 (single PR, three commits — Status previously misattributed to "PRs #15/#18/#19", corrected as part of item 19); 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). **Open: items 14, 20, 21, 22, 23.** Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun), then promoted to actionable 2026-04-25 after a second observation during PR #38, then resolved 2026-04-25 in PR #40; item 19 added 2026-04-25 from a top-down tracker readability audit, resolved same-day in PR #41; items 20–23 added 2026-04-25 from a whole-codebase code-review pass (four 75-confidence advisories — none cleared the ≥80 ship-bar but verified-real, filed for backlog).
+Items 1–13, 15–21 resolved (1, 2, 7 in PR #33; 3 + 5 in PR #34; 13 in PR #35; 4 in PR #36; 6 in PR #38; 18 in PR #40; 19 in PR #41; 20 + 21 in PR #45; 8–10 in v0.2.1 via PR #18 (single PR, three commits — Status previously misattributed to "PRs #15/#18/#19", corrected as part of item 19); 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). **Open: items 14, 22, 23.** Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun), then promoted to actionable 2026-04-25 after a second observation during PR #38, then resolved 2026-04-25 in PR #40; item 19 added 2026-04-25 from a top-down tracker readability audit, resolved same-day in PR #41; items 20–23 added 2026-04-25 from a whole-codebase code-review pass (four 75-confidence advisories — none cleared the ≥80 ship-bar but verified-real, filed for backlog); items 20 + 21 resolved 2026-04-25 in PR #45 (silent-failure-mode polish — atomic state write + broaden read-side OSError catch).

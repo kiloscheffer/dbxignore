@@ -1,8 +1,13 @@
-# dropboxignore — post-v0.2 polish follow-ups
+# dbxignore — backlog and resolved-items log
 
-Items surfaced during PR #11's end-of-branch review (negation-semantics, item 10) and adjacent v0.2-maturation PRs. All are polish-scope — none block the features as shipped — but worth tracking so they don't accumulate into systemic drift.
+Central tracker for open items, planned work, and the historical record of what was filed/fixed and when. Originated as the v0.2.1 negation-polish followups doc; renamed and restructured 2026-04-26 (PR #52) once it had outgrown that scope.
 
-Carry into a v0.3 polish PR or address as standalone small PRs whenever the file in question is next touched.
+**Conventions** (also noted in `CLAUDE.md`):
+- New items append at the bottom (`## <N>. <title>`) with body, fix candidates, urgency, and a `Touches:` file list.
+- Resolved items get an inline `**Status: RESOLVED <date> (PR #<N>).**` marker AND an entry in the Status section at the bottom.
+- The Status section maintains an at-a-glance Open list, a reverse-chronological Resolved log, and Provenance notes covering how items were sourced.
+
+**Scope.** Mixes engineering tech-debt, CI flake observations, release-workflow hardening, and CLAUDE.md currency findings. Not user-filed issues — the project doesn't currently host any (PyPI traffic + zero open GitHub issues at last check). When external reports show up, this file may need to evolve toward GitHub Issues; for now, in-tree provenance + grep is the right tradeoff.
 
 ## 1. Stale `# Task 3` banner in `tests/test_rules_conflicts.py`
 
@@ -416,4 +421,52 @@ Touches: `src/dbxignore/daemon.py` (`_classify` return type, `_dispatch` unpack,
 
 ## Status
 
-Items 1–13, 15–25 resolved (1, 2, 7 in PR #33; 3 + 5 in PR #34; 13 in PR #35; 4 in PR #36; 6 in PR #38; 18 in PR #40; 19 in PR #41; 20 + 21 in PR #45; 22 in PR #46; 23 in PR #49 (doc-tightening arm); 24 + 25 in PR #50; 8–10 in v0.2.1 via PR #18 (single PR, three commits — Status previously misattributed to "PRs #15/#18/#19", corrected as part of item 19); 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). **Open: item 14 only** (passive — awaits 2nd observation). Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun), then promoted to actionable 2026-04-25 after a second observation during PR #38, then resolved 2026-04-25 in PR #40; item 19 added 2026-04-25 from a top-down tracker readability audit, resolved same-day in PR #41; items 20–23 added 2026-04-25 from a whole-codebase code-review pass (four 75-confidence advisories — none cleared the ≥80 ship-bar but verified-real, filed for backlog); items 20 + 21 resolved 2026-04-25 in PR #45 (silent-failure-mode polish — atomic state write + broaden read-side OSError catch); item 22 resolved 2026-04-25 in PR #46 by deleting the contradiction-with-top-of-README rather than rewriting (top-level "Upgrading from v0.2.x" section is authoritative); items 24 + 25 added 2026-04-25 from a second-look code-review pass post-v0.3.1 (`_decode` shape-mismatch fragility — defensive-coding gap that the first pass missed even after fixing item 20; `find_containing` double-call in watchdog dispatch — no measurable cost, sloppy duplication only); item 23 resolved 2026-04-25 in PR #49 via the doc-tightening arm (CLAUDE.md lock-free wording now explicitly acknowledges multi-step `_applicable` traversals may see slightly-stale views, with convergence-on-next-event as the design rationale); items 24 + 25 resolved 2026-04-26 in PR #50 (state read-side shape-mismatch defense + `_classify` return-type widening to eliminate watchdog-event double-lookup).
+### Open
+
+One item, passive:
+
+- **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
+
+### Resolved (reverse chronological)
+
+#### 2026-04-26
+
+- **#24 + #25** in PR #50 — `state._read_at` broadened except for shape-mismatched JSON; `daemon._classify` returns root to skip double-lookup.
+
+#### 2026-04-25
+
+- **#23** in PR #49 — doc-tightening arm: CLAUDE.md lock-free wording now acknowledges multi-step `_applicable` traversals may see slightly-stale views.
+- **#20 + #21** in PR #45 — atomic state write + broaden read-side OSError catch in reconcile.
+- **#22** in PR #46 — deletion of stale README legacy state-path claim (top-level "Upgrading from v0.2.x" section is authoritative).
+- **#19** in PR #41 — backfilled inline RESOLVED markers for items 8-10.
+
+#### 2026-04-24
+
+- **#6** in PR #38 — extract detection layer to `rules_conflicts.py`.
+- **#18** in PR #40 — widen flaky daemon smoke test poll timeout 3.0s → 5.0s.
+- **#4** in PR #36 — column-align rule-conflict rows in `status` output.
+- **#13** in PR #35 — bump CI actions off Node.js 20.
+- **#3 + #5** in PR #34 — `_SequenceEntry.pattern` Protocol + remove `_ancestors_of` resolve.
+- **#1, #2, #7** in PR #33 — small fixes from negation-polish.
+- **#15 + #17** in PR #30 — CHANGELOG repo URL + header rename.
+- **#16** in PR #32 — `markers.py` NotImplementedError v0.3 reference.
+
+#### v0.3.0 (2026-04-23 to 2026-04-24)
+
+- **#11 + #12** in PRs #22, #23 — rename project to dbxignore + first PyPI publish.
+
+#### v0.2.1 (2026-04-22)
+
+- **#8, #9, #10** in PR #18 — three commits in one PR. (Status was previously misattributed to "PRs #15/#18/#19", corrected as part of item 19's PR #41.)
+
+### Provenance notes
+
+How items entered this tracker:
+
+- **Items 1-13** — original v0.2.1 negation-polish followups (this file's first scope).
+- **Items 14-16** added 2026-04-24 from v0.3.0 post-ship observations.
+- **Item 17** added 2026-04-24 from a CLAUDE.md currency audit.
+- **Item 18** added 2026-04-24 from a CI flake (PR #30 initial run); promoted to actionable 2026-04-25 after 2nd observation in PR #38; resolved same day in PR #40.
+- **Item 19** added 2026-04-25 from a top-down tracker readability audit; resolved same day in PR #41.
+- **Items 20-23** added 2026-04-25 from a whole-codebase code-review pass (four 75-confidence advisories — below the ≥80 ship-bar but verified-real, filed for backlog).
+- **Items 24-25** added 2026-04-25 from a second-look code-review pass post-v0.3.1 (defensive-coding gap missed by the first pass + sloppy duplication in watchdog dispatch).

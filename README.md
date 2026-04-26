@@ -150,6 +150,10 @@ State:
 - Windows — `%LOCALAPPDATA%\dbxignore\state.json`.
 - Linux — `$XDG_STATE_HOME/dbxignore/state.json` (fallback `~/.local/state/dbxignore/state.json`).
 
+## Backlog
+
+Open items, planned work, and the historical record of fixes are tracked in [BACKLOG.md](BACKLOG.md).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

@@ -74,12 +74,18 @@ def read(path: Path | None = None) -> State | None:
 def _read_at(path: Path) -> State | None:
     if not path.exists():
         return None
+    # Catch both JSON-syntax errors and shape errors raised by _decode (KeyError
+    # if a nested last_error sub-key is missing; TypeError if last_error is
+    # present but not a dict; ValueError if a stored datetime no longer parses).
+    # Without _decode being inside the try, a hand-edited or schema-mismatched
+    # state.json crashes the daemon on startup instead of falling back to
+    # "no prior state" — followup item 24.
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        logger.warning("State file %s corrupt: %s", path, exc)
+        return _decode(raw)
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        logger.warning("State file %s corrupt or shape-mismatched: %s", path, exc)
         return None
-    return _decode(raw)
 
 
 def _encode(state: State) -> dict:

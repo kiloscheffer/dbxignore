@@ -29,17 +29,18 @@ from dbxignore.rules import IGNORE_FILENAME, RuleCache
 logger = logging.getLogger(__name__)
 
 
-def _classify(event: Any, roots: list[Path]) -> tuple[EventKind, str] | None:
+def _classify(event: Any, roots: list[Path]) -> tuple[EventKind, str, Path] | None:
     src = Path(event.src_path)
-    if find_containing(src, roots) is None:
+    root = find_containing(src, roots)
+    if root is None:
         return None
     if src.name == IGNORE_FILENAME:
         # any CRUD on a .dropboxignore is an EventKind.RULES event
-        return EventKind.RULES, str(src).lower()
+        return EventKind.RULES, str(src).lower(), root
     if event.event_type == "created" and event.is_directory:
-        return EventKind.DIR_CREATE, str(src).lower()
+        return EventKind.DIR_CREATE, str(src).lower(), root
     if event.event_type in ("created", "moved"):
-        return EventKind.OTHER, str(src).lower()
+        return EventKind.OTHER, str(src).lower(), root
     # Everything else (modified non-rules file, deleted non-rules file) — skip.
     return None
 
@@ -48,11 +49,8 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
     classification = _classify(event, roots)
     if classification is None:
         return
-    kind, _key = classification
+    kind, _key, root = classification
     src = Path(event.src_path)
-    root = find_containing(src, roots)
-    if root is None:
-        return
 
     if kind is EventKind.RULES:
         if event.event_type == "deleted":
@@ -200,7 +198,7 @@ class _WatchdogHandler(FileSystemEventHandler):
         try:
             classification = _classify(event, self._roots)
             if classification is not None:
-                kind, key = classification
+                kind, key, _root = classification
                 self._debouncer.submit(kind, key, event)
         except Exception:  # noqa: BLE001 — watcher must not die
             logger.exception("watchdog handler failed on event %r", event)

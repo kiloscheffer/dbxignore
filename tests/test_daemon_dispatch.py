@@ -18,17 +18,19 @@ def test_classify_rules_file_created(tmp_path):
     root = tmp_path
     src = root / "proj" / ".dropboxignore"
     ev = _stub_event("created", str(src))
-    kind, key = daemon._classify(ev, roots=[root])
+    kind, key, classified_root = daemon._classify(ev, roots=[root])
     assert kind == EventKind.RULES
     assert key == str(src).lower()
+    assert classified_root == root
 
 
 def test_classify_directory_created(tmp_path):
     root = tmp_path
     src = root / "proj" / "node_modules"
     ev = _stub_event("created", str(src), is_directory=True)
-    kind, _key = daemon._classify(ev, roots=[root])
+    kind, _key, classified_root = daemon._classify(ev, roots=[root])
     assert kind == EventKind.DIR_CREATE
+    assert classified_root == root
 
 
 def test_classify_file_modified_is_ignored():

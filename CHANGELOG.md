@@ -5,6 +5,18 @@ All notable changes to dbxignore are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] — 2026-04-26
+
+Maintenance release. One silent-failure-mode bug fix that prevents a daemon-startup crash on shape-mismatched `state.json`, plus an internal cleanup in the watchdog dispatch path. **No breaking changes.** Upgrade is `pip install --upgrade dbxignore` (or download the new binaries) followed by restarting the daemon (`systemctl --user restart dbxignore.service` on Linux; log out / back in or `schtasks /Run /TN dbxignore` on Windows).
+
+### Fixed
+
+- **`state._read_at()` no longer crashes the daemon on shape-mismatched `state.json`.** The function caught `json.JSONDecodeError` from the JSON parser but called `_decode(raw)` *outside* the try/except. `_decode` directly indexed nested `last_error` sub-keys (`raw["last_error"]["time"]/["path"]/["message"]`), so a hand-edited or schema-mismatched `state.json` that's still valid JSON raised `KeyError`/`TypeError`/`ValueError` from `_decode`, propagated out of `daemon.run`'s singleton check, and the daemon crashed on startup. Recovery via systemd's `Restart=on-failure RestartSec=60s` was loud-and-slow — an unfortunate experience for the "user just upgraded and the daemon won't start" case. Fix: move `_decode(raw)` inside the try and broaden the except to `(json.JSONDecodeError, KeyError, TypeError, ValueError)`. Same recovery shape as before — log WARNING, return `None`, daemon treats the file as "no prior state" and starts fresh. Symmetric to the v0.3.1 atomic-write fix (which addressed the write-side torn-JSON case); together the two close the read/write halves of the same I/O contract.
+
+### Changed
+
+- **`daemon._classify()` now returns the root path along with the event kind and key.** Previously `_classify` called `find_containing(src, roots)` purely as a gate (return value discarded), then `_dispatch` called it again to obtain the actual root — two passes over the roots list per accepted watchdog event. The widened return shape (`tuple[EventKind, str, Path] | None`) eliminates the redundant lookup. Per-event work only — not in any per-file hot path. No observable behavior change.
+
 ## [0.3.1] — 2026-04-25
 
 Maintenance release. Two silent-failure-mode bug fixes around state I/O and the per-file reconcile loop, a per-file `is_dir()` syscall cache in the match path, and a stale-doc cleanup. **No breaking changes.** Upgrade is `pip install --upgrade dbxignore` (or download the new binaries) followed by restarting the daemon (`systemctl --user restart dbxignore.service` on Linux; log out / back in or `schtasks /Run /TN dbxignore` on Windows).
@@ -143,6 +155,7 @@ Initial release. Windows-only.
 - **PyInstaller-built standalone binaries** — `dropboxignore.exe` + `dropboxignored.exe`, published via GitHub Releases.
 - **Windows test leg** with `pytest -m windows_only` NTFS-ADS integration tests.
 
+[0.3.2]: https://github.com/kiloscheffer/dbxignore/releases/tag/v0.3.2
 [0.3.1]: https://github.com/kiloscheffer/dbxignore/releases/tag/v0.3.1
 [0.3.0]: https://github.com/kiloscheffer/dbxignore/releases/tag/v0.3.0
 [0.2.1]: https://github.com/kiloscheffer/dbxignore/releases/tag/v0.2.1

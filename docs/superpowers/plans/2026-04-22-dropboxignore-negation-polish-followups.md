@@ -382,8 +382,32 @@ Worst observable outcome: one path during one sweep tick is matched against a sl
 
 Touches: `src/dbxignore/rules.py` (`_applicable`) OR `CLAUDE.md` (RuleCache lock-free gotcha), depending on which arm gets picked.
 
+## 24. `state._decode()` raises on shape-mismatched `state.json`, bypassing `_read_at`'s graceful fallback
+
+`src/dbxignore/state.py`'s `_read_at()` defends against `json.JSONDecodeError` by logging WARNING and returning `None` — the daemon then treats the situation as "no prior state" and starts fresh. But `_decode(raw)` is called *outside* the try/except. Inside `_decode`, the `last_error` branch directly indexes `raw["last_error"]["time"]`, `raw["last_error"]["path"]`, and `raw["last_error"]["message"]` with no fallback. A `state.json` that's valid JSON but shape-mismatched (hand-edited; produced by a newer/older schema; partially corrupt in a way the JSON parser still accepts) raises `KeyError` or `TypeError` from `_decode`, which propagates out of `_read_at` and out of `daemon.run`'s `prior = state_module.read()` call — daemon crashes on startup.
+
+The atomic-write fix from item 20 (PR #45) made *partial-write* corruption nearly impossible, but does not address shape-mismatch. The asymmetry is: write-side is now defensive; read-side parses defensively at the JSON layer but trusts `_decode` to produce a `State` unconditionally.
+
+**Fix:** broaden the `_read_at` except to `(json.JSONDecodeError, KeyError, TypeError, ValueError)`, log WARNING, return `None`. ~3 lines. Same recovery shape as the existing JSONDecodeError arm.
+
+**Urgency:** low. systemd's `Restart=on-failure RestartSec=60s` would recover the daemon eventually (each restart attempts to re-read state and would retry the crash until something rewrites `state.json`). Worth fixing because (a) the recovery is loud-and-slow rather than silent-and-fast, and (b) any future schema migration adding required fields would re-introduce the same crash for users upgrading from older versions. Filing rather than fixing immediately to keep the second-look pass purely doc-only and let the fix bundle with any future schema work.
+
+Touches: `src/dbxignore/state.py` (`_read_at` except clause).
+
+## 25. `find_containing()` is called twice per watchdog event — once in `_classify`, once in `_dispatch`
+
+`src/dbxignore/daemon.py`'s `_classify(event, roots)` calls `find_containing(src, roots)` purely as a gate (return value discarded). When `_classify` returns a non-None classification, `_dispatch(event, cache, roots)` then calls `find_containing(src, roots)` *again* to obtain the actual root. Two passes over the roots list per accepted event.
+
+Per call cost is small — `find_containing` is `O(R)` where R is the number of Dropbox roots, and most users have R=1 — but the duplication is in the watchdog event path, fired post-debouncer for every accepted event. The redundancy is sloppy more than slow.
+
+**Fix:** widen `_classify`'s return shape from `tuple[EventKind, str] | None` to `tuple[EventKind, str, Path] | None`, including the root. `_dispatch` then unpacks the root from the classification instead of calling `find_containing` a second time. Updates to one production call site (`_dispatch`) and any test that constructs classification tuples directly.
+
+**Urgency:** very low. Not in any per-file hot path; per-event work is post-debouncer. Filed because it's an obvious tightening that surfaced from a tracing audit, not because there's a measurable cost.
+
+Touches: `src/dbxignore/daemon.py` (`_classify` return type, `_dispatch` unpack, watchdog handler unpack), and any test in `tests/test_daemon_dispatch.py` that constructs classification tuples by hand.
+
 ---
 
 ## Status
 
-Items 1–13, 15–22 resolved (1, 2, 7 in PR #33; 3 + 5 in PR #34; 13 in PR #35; 4 in PR #36; 6 in PR #38; 18 in PR #40; 19 in PR #41; 20 + 21 in PR #45; 22 in PR #46; 8–10 in v0.2.1 via PR #18 (single PR, three commits — Status previously misattributed to "PRs #15/#18/#19", corrected as part of item 19); 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). **Open: items 14, 23.** Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun), then promoted to actionable 2026-04-25 after a second observation during PR #38, then resolved 2026-04-25 in PR #40; item 19 added 2026-04-25 from a top-down tracker readability audit, resolved same-day in PR #41; items 20–23 added 2026-04-25 from a whole-codebase code-review pass (four 75-confidence advisories — none cleared the ≥80 ship-bar but verified-real, filed for backlog); items 20 + 21 resolved 2026-04-25 in PR #45 (silent-failure-mode polish — atomic state write + broaden read-side OSError catch); item 22 resolved 2026-04-25 in PR #46 by deleting the contradiction-with-top-of-README rather than rewriting (top-level "Upgrading from v0.2.x" section is authoritative).
+Items 1–13, 15–22 resolved (1, 2, 7 in PR #33; 3 + 5 in PR #34; 13 in PR #35; 4 in PR #36; 6 in PR #38; 18 in PR #40; 19 in PR #41; 20 + 21 in PR #45; 22 in PR #46; 8–10 in v0.2.1 via PR #18 (single PR, three commits — Status previously misattributed to "PRs #15/#18/#19", corrected as part of item 19); 11–12 in v0.3.0 via PRs #22/#23; 15 + 17 in PR #30; 16 in PR #32). **Open: items 14, 23, 24, 25.** Items 14–16 added 2026-04-24 from v0.3.0 post-ship observations; item 17 added 2026-04-24 from a CLAUDE.md currency audit; item 18 added 2026-04-24 from a CI flake observed during PR #30's initial run (passed on rerun), then promoted to actionable 2026-04-25 after a second observation during PR #38, then resolved 2026-04-25 in PR #40; item 19 added 2026-04-25 from a top-down tracker readability audit, resolved same-day in PR #41; items 20–23 added 2026-04-25 from a whole-codebase code-review pass (four 75-confidence advisories — none cleared the ≥80 ship-bar but verified-real, filed for backlog); items 20 + 21 resolved 2026-04-25 in PR #45 (silent-failure-mode polish — atomic state write + broaden read-side OSError catch); item 22 resolved 2026-04-25 in PR #46 by deleting the contradiction-with-top-of-README rather than rewriting (top-level "Upgrading from v0.2.x" section is authoritative); items 24 + 25 added 2026-04-25 from a second-look code-review pass post-v0.3.1 (`_decode` shape-mismatch fragility — defensive-coding gap that the first pass missed even after fixing item 20; `find_containing` double-call in watchdog dispatch — no measurable cost, sloppy duplication only).

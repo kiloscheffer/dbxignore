@@ -29,9 +29,15 @@ def test_coalesces_repeated_events_for_same_key():
                   timeouts_ms={EventKind.DIR_CREATE: 10, EventKind.OTHER: 100, EventKind.RULES: 20})
     d.start()
     try:
+        # 2ms inter-submit gap (was 20ms) gives 50x headroom against the 100ms
+        # debounce window, instead of 5x. Surfaced first on macos-latest CI when
+        # PR adding macOS to the test matrix saw runner contention drift the
+        # 20ms sleep past the debounce window — the first submit then fully
+        # debounced and emitted before the second arrived (2 emits, expected 1).
+        # Same family as BACKLOG #18 (Windows daemon-smoke poll widening).
         for _ in range(5):
             d.submit(EventKind.OTHER, "samekey", "last")
-            time.sleep(0.02)
+            time.sleep(0.002)
         time.sleep(0.25)
         assert received == [(EventKind.OTHER, "samekey", "last")]
     finally:

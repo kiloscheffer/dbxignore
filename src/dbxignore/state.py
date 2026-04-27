@@ -40,14 +40,32 @@ class State:
 
 
 def user_state_dir() -> Path:
-    """Per-user directory where dbxignore persists state and log files."""
+    """Per-user directory where dbxignore persists state.
+
+    On Windows + Linux, also where daemon.log lives. On macOS, daemon.log
+    is split off to ~/Library/Logs/dbxignore/ — see user_log_dir().
+    """
     if sys.platform == "win32":
         localappdata = os.environ.get("LOCALAPPDATA")
         base = Path(localappdata) if localappdata else Path.home() / "AppData" / "Local"
         return base / "dbxignore"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "dbxignore"
     xdg = os.environ.get("XDG_STATE_HOME")
     base = Path(xdg) if xdg else Path.home() / ".local" / "state"
     return base / "dbxignore"
+
+
+def user_log_dir() -> Path:
+    """Per-user directory where dbxignore writes daemon.log.
+
+    Same as user_state_dir() on Windows + Linux. On macOS, splits off
+    to ~/Library/Logs/dbxignore/ to match Apple's app-data conventions
+    (state files live in Application Support/, log files in Logs/).
+    """
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Logs" / "dbxignore"
+    return user_state_dir()
 
 
 def default_path() -> Path:

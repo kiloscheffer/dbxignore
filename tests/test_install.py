@@ -285,3 +285,26 @@ def test_purge_preserves_files_not_matching_daemon_log_rotation(
     assert (state_dir / "daemon.logger").exists()
     # State dir survives because user content remains.
     assert state_dir.exists()
+
+
+def test_purge_cleans_separate_log_dir_on_darwin(tmp_path, monkeypatch):
+    """When state.user_log_dir != state.user_state_dir, purge cleans both."""
+    state_dir = tmp_path / "state"
+    log_dir = tmp_path / "logs"
+    state_dir.mkdir()
+    log_dir.mkdir()
+    (state_dir / "state.json").write_text("{}")
+    (log_dir / "daemon.log").write_text("entry")
+    (log_dir / "daemon.log.1").write_text("rotated")
+    (log_dir / "launchd.log").write_text("oops")
+
+    from dbxignore import cli, state
+
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(state, "user_log_dir", lambda: log_dir)
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    cli._purge_local_state()
+
+    assert not state_dir.exists()
+    assert not log_dir.exists()

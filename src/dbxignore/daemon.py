@@ -106,7 +106,7 @@ def _timeouts_from_env() -> dict[EventKind, int]:
 
 
 def _log_dir() -> Path:
-    return state_module.user_state_dir()
+    return state_module.user_log_dir()
 
 
 @contextlib.contextmanager

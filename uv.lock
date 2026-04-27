@@ -86,6 +86,7 @@ dependencies = [
     { name = "pathspec" },
     { name = "psutil" },
     { name = "watchdog" },
+    { name = "xattr", marker = "sys_platform == 'darwin'" },
 ]
 
 [package.optional-dependencies]
@@ -105,6 +106,7 @@ requires-dist = [
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.3" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "watchdog", specifier = ">=4.0" },
+    { name = "xattr", marker = "sys_platform == 'darwin'", specifier = ">=1.0" },
     { name = "xattr", marker = "sys_platform != 'win32' and extra == 'dev'", specifier = ">=1.0" },
 ]
 provides-extras = ["dev"]

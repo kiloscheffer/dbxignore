@@ -5,11 +5,11 @@ All notable changes to dbxignore are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0a1] — 2026-04-27
+## [0.4.0a2] — 2026-04-27
 
-Alpha pre-release for beta-tester validation on real macOS hardware. **Do not install on PyPI** — this is a GitHub-pre-release-only artifact (the `pypi` environment gate stays unapproved for the alpha). Promotes to `[0.4.0]` once the tester signs off on the 10-step checklist from the v0.4 spec § "Beta-test workflow".
+Alpha pre-release for beta-tester validation on real macOS hardware. Supersedes the yanked `0.4.0a1`, which was uploaded to PyPI inadvertently because the prior `publish-pypi` `if:` clause used a SemVer-style hyphen check (`-a`) that doesn't match PEP 440 alphas (`0.4.0a1` has no hyphen). PR #62 added a proper PEP 440 detector via a new `classify-tag` job; pre-release tags now skip `publish-pypi` entirely, and the GitHub Release `prerelease:` flag sources from the same detector. Promotes to `[0.4.0]` once the beta tester signs off on the 10-step checklist from the v0.4 spec § "Beta-test workflow".
 
-Brief summary of what's landed across PRs #53 – #60:
+Brief summary of what's landed across PRs #53 – #62:
 
 ### Added — macOS support
 

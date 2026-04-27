@@ -67,10 +67,37 @@ jobs:
           path: dist/
           retention-days: 1
 
+  classify-tag:
+    # Parse the pushed tag against PEP 440 pre-release patterns so both
+    # publish-* jobs share a single source of truth for "is this a release
+    # tag or a pre-release tag?". GitHub Actions expressions don't have
+    # regex, and PEP 440 doesn't use a hyphen separator (alphas are
+    # `0.4.0a1`, not `0.4.0-a1`), so a `contains(github.ref, '-a')` check
+    # is wrong — that's the v0.4.0a1 misfire (PR #62 root cause).
+    #
+    # Recognized pre-release suffixes: `aN`, `bN`, `rcN`, `.devN`.
+    # `.postN` (post-release) is NOT a pre-release per PEP 440 and
+    # correctly classifies as a release tag.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    outputs:
+      is_prerelease: ${{ steps.detect.outputs.is_prerelease }}
+    steps:
+      - id: detect
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          if [[ "$tag" =~ (a|b|rc)[0-9]+$ ]] || [[ "$tag" =~ \.dev[0-9]+$ ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "Tag $tag → pre-release"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "Tag $tag → release"
+          fi
+
   publish-github:
     # GitHub Release: wheel + sdist + Windows binaries + macOS binaries.
     # Runs on every tag push; both build legs must succeed first.
-    needs: [build, build-macos]
+    needs: [build, build-macos, classify-tag]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -99,11 +126,9 @@ jobs:
             dist-macos/dbxignore
             dist-macos/dbxignored
           generate_release_notes: true
-          # Tags containing '-a' (alphas like v0.4.0a1) or '-rc' (release
-          # candidates) are auto-marked as GitHub pre-releases. Allows the
-          # v0.4 beta-test workflow to ship a downloadable artifact without
-          # promoting to PyPI (which is gated on the `pypi` environment).
-          prerelease: ${{ contains(github.ref, '-a') || contains(github.ref, '-rc') }}
+          # Pre-release flag is sourced from classify-tag's PEP 440 detector
+          # so it can't disagree with publish-pypi's gating below.
+          prerelease: ${{ needs.classify-tag.outputs.is_prerelease == 'true' }}
           # When `GH_RELEASE_TOKEN` is configured as a repo secret (a PAT with
           # `contents: write` scope belonging to the repo owner), releases are
           # authored under the owner's GitHub identity. Falls back to the
@@ -119,17 +144,15 @@ jobs:
     # only — least privilege. macOS Mach-O binaries are not shipped to
     # PyPI (only wheels/sdists), so dist-macos isn't downloaded here.
     #
-    # Alpha and RC tags skip PyPI entirely (defense-in-depth on top of
-    # the environment gate). Mirror of the publish-github prerelease:
-    # expression, inverted: tags containing `-a` or `-rc` don't enter
-    # the publish-pypi job at all, so there's no queued-publish for
-    # someone to accidentally approve. The environment gate remains
-    # for the release-tag path as a second safety layer.
-    needs: build
+    # PEP 440 pre-release tags skip PyPI entirely via classify-tag's
+    # detector — defense-in-depth on top of the environment gate.
+    # Pre-releases never enter this job, so there's no queued-publish
+    # for someone to accidentally approve. The environment gate
+    # remains for the release-tag path as a second safety layer.
+    needs: [build, classify-tag]
     if: |
       startsWith(github.ref, 'refs/tags/')
-      && !contains(github.ref, '-a')
-      && !contains(github.ref, '-rc')
+      && needs.classify-tag.outputs.is_prerelease != 'true'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

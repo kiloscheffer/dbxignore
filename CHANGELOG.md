@@ -5,9 +5,11 @@ All notable changes to dbxignore are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0a1] — 2026-04-27
 
-This is the work-in-progress changeset that will roll into `[0.4.0]` once the alpha promotes to stable. Brief summary of what's landed across PRs #53 – #59:
+Alpha pre-release for beta-tester validation on real macOS hardware. **Do not install on PyPI** — this is a GitHub-pre-release-only artifact (the `pypi` environment gate stays unapproved for the alpha). Promotes to `[0.4.0]` once the tester signs off on the 10-step checklist from the v0.4 spec § "Beta-test workflow".
+
+Brief summary of what's landed across PRs #53 – #60:
 
 ### Added — macOS support
 

@@ -38,15 +38,4 @@ jobs:
 
       - name: macOS-only integration tests
         if: runner.os == 'macOS'
-        # The exit-5 tolerance ("no tests collected") is temporary — there are
-        # no macos_only tests yet. Removed in PR 2 once the macos_only
-        # integration suite exists.
-        run: |
-          set +e
-          uv run pytest -m macos_only -v
-          code=$?
-          if [ "$code" = "5" ]; then
-            echo "No macos_only tests yet — accepted."
-            exit 0
-          fi
-          exit $code
+        run: uv run pytest -m macos_only -v

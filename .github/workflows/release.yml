@@ -40,19 +40,53 @@ jobs:
           path: dist/
           retention-days: 1
 
+  build-macos:
+    # arm64 Mach-O binaries built on macos-latest (which aliases to macos-14
+    # / Apple Silicon). Intel users install via the universal Python wheel
+    # from PyPI; an x86_64 build leg can be added in a point release if
+    # demand surfaces.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Sync deps
+        run: uv sync --all-extras
+
+      - name: Build macOS binaries
+        run: uv run --with pyinstaller pyinstaller pyinstaller/dbxignore-macos.spec
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-macos
+          path: dist/
+          retention-days: 1
+
   publish-github:
-    # GitHub Release: wheel + sdist + Windows binaries. Runs on every tag push.
-    needs: build
+    # GitHub Release: wheel + sdist + Windows binaries + macOS binaries.
+    # Runs on every tag push; both build legs must succeed first.
+    needs: [build, build-macos]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download dist artifacts
+      - name: Download Windows + wheel artifacts
         uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-macos
+          path: dist-macos/
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
@@ -62,7 +96,14 @@ jobs:
             dist/*.tar.gz
             dist/dbxignore.exe
             dist/dbxignored.exe
+            dist-macos/dbxignore
+            dist-macos/dbxignored
           generate_release_notes: true
+          # Tags containing '-a' (alphas like v0.4.0a1) or '-rc' (release
+          # candidates) are auto-marked as GitHub pre-releases. Allows the
+          # v0.4 beta-test workflow to ship a downloadable artifact without
+          # promoting to PyPI (which is gated on the `pypi` environment).
+          prerelease: ${{ contains(github.ref, '-a') || contains(github.ref, '-rc') }}
           # When `GH_RELEASE_TOKEN` is configured as a repo secret (a PAT with
           # `contents: write` scope belonging to the repo owner), releases are
           # authored under the owner's GitHub identity. Falls back to the
@@ -75,7 +116,8 @@ jobs:
     # PyPI via Trusted Publishing (OIDC). Gated on the `pypi` GitHub
     # environment, which requires manual approval before the upload
     # step runs. The id-token:write permission is scoped to this job
-    # only — least privilege.
+    # only — least privilege. macOS Mach-O binaries are not shipped to
+    # PyPI (only wheels/sdists), so dist-macos isn't downloaded here.
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest

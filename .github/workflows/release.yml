@@ -118,8 +118,18 @@ jobs:
     # step runs. The id-token:write permission is scoped to this job
     # only — least privilege. macOS Mach-O binaries are not shipped to
     # PyPI (only wheels/sdists), so dist-macos isn't downloaded here.
+    #
+    # Alpha and RC tags skip PyPI entirely (defense-in-depth on top of
+    # the environment gate). Mirror of the publish-github prerelease:
+    # expression, inverted: tags containing `-a` or `-rc` don't enter
+    # the publish-pypi job at all, so there's no queued-publish for
+    # someone to accidentally approve. The environment gate remains
+    # for the release-tag path as a second safety layer.
     needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    if: |
+      startsWith(github.ref, 'refs/tags/')
+      && !contains(github.ref, '-a')
+      && !contains(github.ref, '-rc')
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

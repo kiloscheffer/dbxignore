@@ -93,6 +93,30 @@ def install_task() -> None:
     finally:
         tmp_path.unlink(missing_ok=True)
 
+    # Kick the task immediately so the daemon runs without waiting for next logon.
+    # Linux + macOS installers do equivalent (`systemctl --user enable --now`,
+    # `launchctl bootstrap` + `RunAtLoad: true`); without /Run on Windows the
+    # user sees "Installed scheduled task" but `dbxignore status` reports no
+    # daemon until they log out and back in.
+    #
+    # /Run failures are non-fatal: the task is registered and will start at
+    # next logon regardless. WARNING-and-continue rather than raising so the
+    # user doesn't see an install error for a partial-success state.
+    run_result = subprocess.run(  # noqa: S603 — hardcoded args, no user data
+        ["schtasks", "/Run", "/TN", TASK_NAME],
+        capture_output=True, text=True, check=False,
+    )
+    if run_result.returncode == 0:
+        logger.info("Started scheduled task %s", TASK_NAME)
+    else:
+        logger.warning(
+            "schtasks /Run returned %s: %s. Task is registered and will start "
+            "at next logon; run `schtasks /Run /TN %s` to start now.",
+            run_result.returncode,
+            run_result.stderr.strip() or run_result.stdout.strip() or "(no output)",
+            TASK_NAME,
+        )
+
 
 def uninstall_task() -> None:
     """Remove the Task Scheduler entry; raises RuntimeError if schtasks fails."""

@@ -32,6 +32,26 @@ dbxignore install
 
 `dbxignore install` registers a Task Scheduler entry that launches the daemon (`pythonw -m dbxignore daemon`) at every user logon.
 
+### If install fails with "ERROR_CLOUD_FILE_INCOMPATIBLE_HARDLINKS"
+
+Windows users whose `AppData` is OneDrive-synced (Files On-Demand) can hit:
+
+```
+error: Failed to install: psutil-...whl
+  Caused by: failed to hardlink file from
+  C:\Users\<user>\AppData\Roaming\uv\tools\... to
+  C:\Users\<user>\AppData\Local\uv\cache\...:
+  The cloud operation cannot be performed on a file with incompatible hardlinks. (os error 396)
+```
+
+uv hardlinks files from its cache into the tool's site-packages by default; the Cloud Files API rejects hardlinks on placeholder files (those backed by cloud storage but not yet fully materialized locally). Force uv to copy instead:
+
+```powershell
+uv tool install --link-mode=copy git+https://github.com/kiloscheffer/dbxignore
+```
+
+Or set it as a session-wide default before the install: `$env:UV_LINK_MODE = "copy"`. Either form works for `uv tool upgrade` too.
+
 ## Install (Linux)
 
 Requires a systemd user session (standard on Ubuntu, Fedora, Debian, Arch, and most modern distros; WSL2 requires `systemd=true` in `/etc/wsl.conf`).

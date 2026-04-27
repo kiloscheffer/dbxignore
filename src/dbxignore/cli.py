@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import sys
@@ -36,58 +37,43 @@ def _format_ignore_file_loc(path: Path, roots: list[Path]) -> str:
     return str(path)
 
 
+def _purge_dir(dir_path: Path, patterns: list[str]) -> None:
+    """Delete files matching any glob in patterns within dir_path; rmdir if empty."""
+    if not dir_path.exists():
+        return
+    for pattern in patterns:
+        for f in dir_path.glob(pattern):
+            with contextlib.suppress(FileNotFoundError):
+                f.unlink()
+    with contextlib.suppress(OSError):
+        # Non-empty (user dropped something else in there) — preserve it.
+        dir_path.rmdir()
+
+
 def _purge_local_state() -> None:
-    """Delete state.json, daemon.log and rotated backups, then rmdir the state dir.
+    """Delete state.json + daemon.log + rotated backups; rmdir empty dirs.
 
     Called by ``uninstall --purge`` after the ignore markers are cleared.
-    Best-effort: per-file OSError is swallowed and logged on stderr (daemon
-    may still hold daemon.log open on Windows during a brief race after
-    uninstall_service returns). ``rmdir`` of the containing directory only
-    succeeds if it's empty — if the user has dropped something else in
-    there, we preserve it.
+    On Windows + Linux, state and log live in the same dir. On macOS, the
+    log dir (~/Library/Logs/dbxignore/) is separate from the state dir
+    (~/Library/Application Support/dbxignore/), so we clean both.
     """
     state_dir = state.user_state_dir()
-    if not state_dir.exists():
-        return
-    candidates = []
-    state_json = state.default_path()
-    if state_json.exists():
-        candidates.append(state_json)
-    # Atomic-write tmp file (state.json.tmp) — only present if a daemon
-    # crashed mid-write before os.replace; usually absent.
-    state_tmp = state_json.with_name(state_json.name + ".tmp")
-    if state_tmp.exists():
-        candidates.append(state_tmp)
-    # Base file plus RotatingFileHandler backups. The handler only creates
-    # integer-suffixed rotations (daemon.log, daemon.log.1, daemon.log.2, ...).
-    # A bare glob `daemon.log*` would also catch unrelated files like
-    # `daemon.log_backup`, which we must not silently delete.
-    base_log = state_dir / "daemon.log"
-    if base_log.exists():
-        candidates.append(base_log)
-    for p in sorted(state_dir.glob("daemon.log.*")):
-        suffix = p.name.removeprefix("daemon.log.")
-        if suffix.isdigit():
-            candidates.append(p)
+    if state_dir.exists():
+        _purge_dir(
+            state_dir,
+            patterns=["state.json", "state.json.tmp", "daemon.log", "daemon.log.*"],
+        )
+        click.echo(f"Cleaned {state_dir}.")
 
-    removed = 0
-    for p in candidates:
-        try:
-            p.unlink()
-            removed += 1
-        except OSError as exc:
-            click.echo(f"Could not remove {p}: {exc}", err=True)
-
-    if removed:
-        click.echo(f"Removed {removed} local state file(s) from {state_dir}.")
-
-    # Remove the state dir itself if now empty. Use rmdir (not rmtree):
-    # rmdir fails if non-empty, preserving any user-authored content.
-    try:
-        state_dir.rmdir()
-        click.echo(f"Removed state directory {state_dir}.")
-    except OSError:
-        pass
+    if sys.platform == "darwin":
+        log_dir = state.user_log_dir()
+        if log_dir.exists() and log_dir != state_dir:
+            _purge_dir(
+                log_dir,
+                patterns=["daemon.log", "daemon.log.*", "launchd.log"],
+            )
+            click.echo(f"Cleaned {log_dir}.")
 
 
 def _load_cache(roots: list[Path]) -> RuleCache:

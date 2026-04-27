@@ -32,7 +32,8 @@ def _info_json_path() -> Path | None:
             logger.warning("APPDATA not set; cannot locate Dropbox info.json")
             return None
         return Path(appdata) / "Dropbox" / "info.json"
-    if sys.platform.startswith("linux"):
+    # Dropbox desktop places info.json at ~/.dropbox/info.json on both Linux and macOS.
+    if sys.platform.startswith("linux") or sys.platform == "darwin":
         home = os.environ.get("HOME")
         if not home:
             logger.warning("HOME not set; cannot locate Dropbox info.json")

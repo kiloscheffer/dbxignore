@@ -43,6 +43,12 @@ def log_dir(tmp_path, monkeypatch):
     if sys.platform == "win32":
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
         return tmp_path / "LocalAppData" / "dbxignore"
+    if sys.platform == "darwin":
+        # daemon._log_dir() reads from state.user_log_dir() which on darwin
+        # uses Path.home() / "Library" / "Logs" / "dbxignore". Redirect HOME
+        # so the log lands in tmp rather than the runner's ~/Library/Logs/.
+        monkeypatch.setenv("HOME", str(tmp_path))
+        return tmp_path / "Library" / "Logs" / "dbxignore"
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     return tmp_path / "state" / "dbxignore"
 

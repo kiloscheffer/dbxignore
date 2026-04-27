@@ -20,12 +20,17 @@ elif sys.platform.startswith("linux"):
         is_ignored,
         set_ignored,
     )
+elif sys.platform == "darwin":
+    from dbxignore._backends.macos_xattr import (
+        clear_ignored,
+        is_ignored,
+        set_ignored,
+    )
 else:
     def _unsupported(*_args, **_kwargs):
         raise NotImplementedError(
             f"dbxignore has no ignore-marker backend for platform "
-            f"{sys.platform!r}; supported: 'win32', 'linux'. "
-            "macOS support is planned for a future release."
+            f"{sys.platform!r}; supported: 'win32', 'linux', 'darwin'."
         )
     is_ignored = set_ignored = clear_ignored = _unsupported
 

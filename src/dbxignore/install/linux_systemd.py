@@ -6,8 +6,9 @@ import logging
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
+
+from dbxignore.install._common import detect_invocation
 
 logger = logging.getLogger(__name__)
 
@@ -40,24 +41,6 @@ def _escape_systemd_env_value(value: str) -> str:
     string.
     """
     return value.replace("\\", "\\\\").replace('"', '\\"')
-
-
-def _detect_invocation() -> tuple[Path, str]:
-    """Return (executable, arguments) to run the daemon in the current install."""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable), ""
-    # uv tool install places a `dbxignored` shim on PATH.
-    exe = shutil.which("dbxignored")
-    if exe:
-        return Path(exe), ""
-    # Fallback: the current Python + `-m dbxignore daemon`.
-    python = shutil.which("python3") or sys.executable
-    if not python:
-        raise RuntimeError(
-            "dbxignored not on PATH and no python3 found; "
-            "run `uv tool install .` from the dbxignore checkout first"
-        )
-    return Path(python), "-m dbxignore daemon"
 
 
 def _run_systemctl(cmd: list[str]) -> None:
@@ -111,7 +94,7 @@ WantedBy=default.target
 
 
 def install_unit() -> None:
-    exe, args = _detect_invocation()
+    exe, args = detect_invocation()
     environment = {
         name: os.environ[name]
         for name in _FORWARDED_ENV_VARS

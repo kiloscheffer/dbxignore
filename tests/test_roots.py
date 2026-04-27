@@ -25,11 +25,22 @@ def _stage_info(monkeypatch, tmp_path, fixture_name: str | None):
         content = (FIXTURES / fixture_name).read_text(encoding="utf-8")
         (dropbox_dir / "info.json").write_text(content, encoding="utf-8")
     monkeypatch.setenv(env_var, str(base))
+    if sys.platform == "win32":
+        # Clear LOCALAPPDATA so the LOCALAPPDATA fallback in _info_json_paths
+        # doesn't pick up the developer's real `%LOCALAPPDATA%\Dropbox\info.json`
+        # when running tests on a machine that has Dropbox installed per-machine.
+        # CI runners don't hit this (no Dropbox), but local dev machines do.
+        monkeypatch.delenv("LOCALAPPDATA", raising=False)
 
 
 def _clear_platform_env(monkeypatch):
     if sys.platform == "win32":
         monkeypatch.delenv("APPDATA", raising=False)
+        # Clear LOCALAPPDATA too — `_info_json_paths` checks both Windows
+        # candidates, so leaving LOCALAPPDATA set would point discovery
+        # at the runner's real `%LOCALAPPDATA%` (no info.json there in
+        # CI, but an environment-dependent assertion regardless).
+        monkeypatch.delenv("LOCALAPPDATA", raising=False)
     elif sys.platform.startswith("linux"):
         monkeypatch.delenv("HOME", raising=False)
 
@@ -138,3 +149,90 @@ def test_discover_non_utf8_bytes(monkeypatch, tmp_path):
     (dropbox_dir / "info.json").write_bytes(b'{"personal": {"path": "C:\\\\Dr\xf6pbox"}}')
     monkeypatch.setenv(env_var, str(base))
     assert roots.discover() == []
+
+
+# ---- Windows LOCALAPPDATA fallback (per-machine Dropbox install) ----------
+# Per-machine Dropbox installs put info.json under `%LOCALAPPDATA%\Dropbox\`
+# instead of `%APPDATA%\Dropbox\`. `_info_json_paths` returns both candidates
+# in priority order (APPDATA first); discover picks the first existing one.
+
+
+def test_discover_finds_info_json_via_localappdata(monkeypatch, tmp_path):
+    """LOCALAPPDATA fallback fires when APPDATA's candidate doesn't exist."""
+    if sys.platform != "win32":
+        import pytest
+        pytest.skip("LOCALAPPDATA is Windows-only")
+
+    # Stage info.json under LOCALAPPDATA only.
+    localappdata = tmp_path / "LocalAppData"
+    (localappdata / "Dropbox").mkdir(parents=True)
+    (localappdata / "Dropbox" / "info.json").write_text(
+        (FIXTURES / "info_personal.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LOCALAPPDATA", str(localappdata))
+    # Point APPDATA at an empty dir (env set, but no Dropbox subdir).
+    appdata_empty = tmp_path / "AppData"
+    appdata_empty.mkdir()
+    monkeypatch.setenv("APPDATA", str(appdata_empty))
+
+    assert roots.discover() == [Path(r"C:\Dropbox")]
+
+
+def test_discover_appdata_wins_over_localappdata(monkeypatch, tmp_path):
+    """When both candidates exist, APPDATA (per-user install) takes priority."""
+    if sys.platform != "win32":
+        import pytest
+        pytest.skip("LOCALAPPDATA is Windows-only")
+
+    # Stage personal at APPDATA, business at LOCALAPPDATA — different content
+    # so the assertion can distinguish which candidate was picked.
+    appdata = tmp_path / "AppData"
+    (appdata / "Dropbox").mkdir(parents=True)
+    (appdata / "Dropbox" / "info.json").write_text(
+        (FIXTURES / "info_personal.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("APPDATA", str(appdata))
+
+    localappdata = tmp_path / "LocalAppData"
+    (localappdata / "Dropbox").mkdir(parents=True)
+    (localappdata / "Dropbox" / "info.json").write_text(
+        (FIXTURES / "info_personal_business.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LOCALAPPDATA", str(localappdata))
+
+    # APPDATA's personal-only fixture wins; LOCALAPPDATA's two-account file is ignored.
+    assert roots.discover() == [Path(r"C:\Dropbox")]
+
+
+def test_discover_warns_with_both_candidates_when_neither_exists(
+    monkeypatch, tmp_path, caplog
+):
+    """If both env vars are set but neither file exists, the WARNING message
+    names both candidate paths — so a user who hits this in the wild knows
+    both standard locations were checked."""
+    if sys.platform != "win32":
+        import pytest
+        pytest.skip("LOCALAPPDATA is Windows-only")
+
+    import logging
+
+    appdata = tmp_path / "AppData"
+    appdata.mkdir()
+    monkeypatch.setenv("APPDATA", str(appdata))
+    localappdata = tmp_path / "LocalAppData"
+    localappdata.mkdir()
+    monkeypatch.setenv("LOCALAPPDATA", str(localappdata))
+
+    with caplog.at_level(logging.WARNING, logger="dbxignore.roots"):
+        result = roots.discover()
+
+    assert result == []
+    assert any(
+        "Dropbox info.json not found at any of" in rec.message
+        and "AppData" in rec.message
+        and "LocalAppData" in rec.message
+        for rec in caplog.records
+    ), [rec.message for rec in caplog.records]

@@ -24,23 +24,40 @@ def find_containing(path: Path, roots: list[Path]) -> Path | None:
     return None
 
 
-def _info_json_path() -> Path | None:
-    """Return the platform's Dropbox info.json location, or None if unknown."""
+def _info_json_paths() -> list[Path]:
+    """Return candidate Dropbox info.json locations, in priority order.
+
+    Windows: Dropbox's per-user installer writes ``%APPDATA%\\Dropbox\\info.json``;
+    the per-machine installer (also called "install for all users") writes
+    ``%LOCALAPPDATA%\\Dropbox\\info.json``. Check both, ``%APPDATA%`` first
+    since the per-user installer is the more common shape.
+
+    Linux + macOS: Dropbox desktop places ``info.json`` at
+    ``~/.dropbox/info.json`` on both, so a single arm covers them.
+
+    Empty list signals "no candidates derivable from environment" — caller
+    treats it the same as "no info.json exists" and returns ``[]`` from
+    ``discover()`` so the daemon's "no roots" path fires cleanly.
+    """
     if sys.platform == "win32":
-        appdata = os.environ.get("APPDATA")
-        if not appdata:
-            logger.warning("APPDATA not set; cannot locate Dropbox info.json")
-            return None
-        return Path(appdata) / "Dropbox" / "info.json"
-    # Dropbox desktop places info.json at ~/.dropbox/info.json on both Linux and macOS.
+        candidates: list[Path] = []
+        for env_var in ("APPDATA", "LOCALAPPDATA"):
+            value = os.environ.get(env_var)
+            if value:
+                candidates.append(Path(value) / "Dropbox" / "info.json")
+        if not candidates:
+            logger.warning(
+                "Neither APPDATA nor LOCALAPPDATA set; cannot locate Dropbox info.json"
+            )
+        return candidates
     if sys.platform.startswith("linux") or sys.platform == "darwin":
         home = os.environ.get("HOME")
         if not home:
             logger.warning("HOME not set; cannot locate Dropbox info.json")
-            return None
-        return Path(home) / ".dropbox" / "info.json"
+            return []
+        return [Path(home) / ".dropbox" / "info.json"]
     logger.warning("Unsupported platform %s; cannot locate Dropbox info.json", sys.platform)
-    return None
+    return []
 
 
 def discover() -> list[Path]:
@@ -55,15 +72,26 @@ def discover() -> list[Path]:
             return []
         return [override_path]
 
-    info_path = _info_json_path()
+    candidates = _info_json_paths()
+    if not candidates:
+        return []
+
+    info_path: Path | None = None
+    for candidate in candidates:
+        if candidate.exists():
+            info_path = candidate
+            break
+
     if info_path is None:
+        if len(candidates) == 1:
+            logger.warning("Dropbox info.json not found at %s", candidates[0])
+        else:
+            paths = ", ".join(str(p) for p in candidates)
+            logger.warning("Dropbox info.json not found at any of: %s", paths)
         return []
 
     try:
         data = json.loads(info_path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        logger.warning("Dropbox info.json not found at %s", info_path)
-        return []
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         logger.warning("Cannot read Dropbox info.json at %s: %s", info_path, exc)
         return []

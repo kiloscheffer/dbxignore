@@ -9,7 +9,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 Alpha pre-release for beta-tester validation on real macOS hardware. Supersedes the yanked `0.4.0a1`, which was uploaded to PyPI inadvertently because the prior `publish-pypi` `if:` clause used a SemVer-style hyphen check (`-a`) that doesn't match PEP 440 alphas (`0.4.0a1` has no hyphen). PR #62 added a proper PEP 440 detector via a new `classify-tag` job; pre-release tags now skip `publish-pypi` entirely, and the GitHub Release `prerelease:` flag sources from the same detector. Promotes to `[0.4.0]` once the beta tester signs off on the 10-step checklist from the v0.4 spec § "Beta-test workflow".
 
-Brief summary of what's landed across PRs #53 – #62:
+Brief summary of what's landed across PRs #53 – #66:
 
 ### Added — macOS support
 
@@ -27,9 +27,15 @@ Brief summary of what's landed across PRs #53 – #62:
 - **`cli._purge_local_state()` refactored** to use a per-dir helper (`_purge_dir`) so it can clean both `user_state_dir()` AND `user_log_dir()` on macOS.
 - **Project description string** mentions macOS.
 
+### Fixed — Windows correctness
+
+- **Per-machine Dropbox installs are now discovered.** `roots.discover()` checks both `%APPDATA%\Dropbox\info.json` (per-user installer) and `%LOCALAPPDATA%\Dropbox\info.json` (per-machine "install for all users") on Windows. Per-machine installs previously surfaced as "No Dropbox roots found" and required `DBXIGNORE_ROOT` as a manual workaround. `_info_json_path()` (singular, returning `Path | None`) refactored to `_info_json_paths()` (plural, returning `list[Path]`) — Windows arm yields up to two candidates in priority order; Linux/macOS arm unchanged. `discover()` iterates and uses the first existing file. Surfaced during v0.4 alpha testing on a per-machine Windows install.
+- **`dbxignore install` now starts the daemon immediately on Windows.** Previously the Task Scheduler entry was registered but only kicked at the next user logon; users saw "Installed scheduled task" but `dbxignore status` reported no daemon until they logged out and back in. `install_task()` now runs `schtasks /Run /TN dbxignore` after `/Create` and treats `/Run` failures as non-fatal WARNINGs (the task is registered and will start at next logon regardless). Aligns Windows with Linux (`systemctl --user enable --now`) and macOS (`launchctl bootstrap` + `RunAtLoad: true`), both of which already started during install.
+
 ### Documentation
 
 - **README** gains an "Install (macOS)" section between Linux and `.exe` install paths. Updated platform-support table now includes the macOS row. Logs and State sections list macOS paths.
+- **README + CLAUDE.md: Windows OneDrive hardlink workaround.** `uv tool install` can fail with `ERROR_CLOUD_FILE_INCOMPATIBLE_HARDLINKS` (os error 396) when `%AppData%` is OneDrive-synced via Files On-Demand — the Cloud Files API refuses hardlinks on placeholder files. The documented workaround is `uv tool install --link-mode=copy git+...` or session-wide `$env:UV_LINK_MODE = "copy"`. Surfaced during v0.4 alpha install on a OneDrive-backed AppData.
 - **CLAUDE.md** gains four new gotchas covering: the `xattr` package's `symlink=True` API surface (NOT `options=XATTR_NOFOLLOW` despite what Apple's libc docs suggest); macOS-only test pattern; the symlink-marking divergence between Linux/macOS/Windows; modern launchctl bootstrap with the GUI-domain prerequisite; `_common.detect_invocation` shared module + the import-site monkeypatching gotcha.
 - **`docs/release-notes/v0.4.0.md`** — hand-crafted GitHub Release body for promotion via `gh release edit v0.4.0 --notes-file ...`.
 

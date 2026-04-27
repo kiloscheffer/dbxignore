@@ -417,15 +417,96 @@ Touches: `src/dbxignore/daemon.py` (`_classify` return type, `_dispatch` unpack,
 
 **Status: RESOLVED 2026-04-26 (PR #50).** `_classify`'s return type widened from `tuple[EventKind, str] | None` to `tuple[EventKind, str, Path] | None`. `_dispatch` now unpacks the root from the classification (one fewer `find_containing` call per event); `_WatchdogHandler.on_any_event` discards the root since it only needs the kind+key for the debouncer. Two existing `test_classify_*` tests grew an assertion that the returned root matches expectations — verifies the new return shape rather than just unpacking it silently.
 
+## 26. `install._common.detect_invocation` has an unreachable `RuntimeError` branch
+
+`src/dbxignore/install/_common.py`'s `detect_invocation()` ends with:
+
+```python
+python = shutil.which("python3") or sys.executable
+if not python:
+    raise RuntimeError(
+        "dbxignored not on PATH and no python3 found; "
+        "run `uv tool install .` from the dbxignore checkout first"
+    )
+return Path(python), "-m dbxignore daemon"
+```
+
+`sys.executable` is always a non-empty string in any running Python process, so the `or sys.executable` clause makes `python` always truthy, and `if not python` can never be True. The `RuntimeError` is never raised. The docstring documents this error path as load-bearing (`Raises RuntimeError if no python3 is on PATH…`), but the contract diverges from the actual behavior.
+
+Preexisting bug from `linux_systemd._detect_invocation` that was faithfully preserved during the PR 4 extraction (see PR #57). Surfaced when the function got its own module + dedicated docstring and the inconsistency became more visible.
+
+**Fix candidates:**
+
+- **Drop the guard**, treat `sys.executable` fallback as authoritative — the most honest rendering of current behavior. One-line change to `_common.py` plus a docstring trim.
+- **Replace the `or sys.executable` with `None`** so the guard is reachable when no `python3` is on PATH (mostly Windows installs without `python3` aliased to `python.exe`). Gives the documented error-path teeth. Requires verifying the existing test `test_detect_invocation_falls_back_to_python_module` still passes; it might already cover this case.
+- **Document as intentional**: keep the safety belt-and-braces, rewrite the docstring to acknowledge that the branch is currently unreachable but kept as a guard against future Python installs where `sys.executable` could be empty (vendored embeddings, `multiprocessing` on certain spawn modes, etc.). Lowest-effort but doesn't fix the divergence.
+
+**Urgency:** low. Hits no production code path, surfaces only as a doc-vs-code inconsistency. Worth fixing when next touching the install layer to avoid future readers re-deriving the same uncertainty cold.
+
+Touches: `src/dbxignore/install/_common.py` (function body + docstring); possibly `tests/test_install_common.py` if the fallback guard's reachability changes.
+
+## 27. Intel Mac (x86_64) Mach-O binary build leg
+
+v0.4 ships arm64 Mach-O binaries only (built on `macos-latest` which aliases to `macos-14` / Apple Silicon). Intel Mac users install via the universal Python wheel from PyPI — documented in the README's macOS section.
+
+If x86_64 demand surfaces, add a `macos-13` runner to `.github/workflows/release.yml` (similar shape to `build-macos`, different artifact name to avoid collision). The `pyinstaller/dbxignore-macos.spec` is already arch-agnostic (`target_arch=None` follows the runner), so no spec changes needed.
+
+**Fix candidates:**
+
+- **Add `build-macos-x86_64` job** alongside the existing `build-macos`. Two parallel arm64 + x86_64 artifacts on the GitHub Release.
+- **Switch to universal2** (covered by item #28 below) — single artifact, more complex setup. Mutually exclusive with the dual-build approach.
+
+**Urgency:** low until demand surfaces. The user-base is small enough that field signals will reach via GitHub Issues if Intel users hit the gap.
+
+Touches: `.github/workflows/release.yml` (new build job + publish-github files: list extension); README's macOS section (remove the "Apple Silicon only" caveat).
+
+## 28. Universal2 macOS binary as the single artifact
+
+Apple's `universal2` Mach-O format bundles arm64 + x86_64 in one binary. Would replace the current arm64-only artifact (and the eventual x86_64 artifact from item #27) with a single one. PyInstaller supports this via `target_arch="universal2"` in the spec, but the build environment must have a universal2 Python interpreter.
+
+**Fix candidates:**
+
+- **Switch `pyinstaller/dbxignore-macos.spec` to `target_arch="universal2"`** and verify `macos-latest`'s Python is universal2-built (likely yes — Homebrew Python on `macos-14` ships as universal2). Test by inspecting the resulting binary with `lipo -info`.
+- **Defer until item #27 actually fires** and decide between dual-build vs universal2 at that time.
+
+**Urgency:** very low. Quality-of-life only; doesn't change what users can install. Not pressing until either x86_64 demand surfaces (then we choose between #27 and #28) or some other reason makes the unified artifact preferable.
+
+Touches: `pyinstaller/dbxignore-macos.spec` (`target_arch` change); `release.yml` (potentially simplify if #28 obviates the need for a second build job from #27).
+
+## 29. Codesigning + notarization for macOS binaries
+
+Currently the GitHub-Release Mach-O binaries are unsigned. macOS Gatekeeper refuses unsigned binaries on first launch with "cannot be opened because it is from an unidentified developer." The README documents the workaround (`xattr -d com.apple.quarantine /usr/local/bin/dbxignore`), but a proper signed-and-notarized binary would just work.
+
+Requires:
+
+1. An **Apple Developer Program** membership (~$99/year — recurring).
+2. A **Developer ID Application** signing certificate.
+3. An **app-specific password** for the notarization service.
+4. GitHub Secrets to hold the certificate (base64'd `.p12`), the certificate password, and the notarization credentials.
+5. A `codesign` step in `release.yml` after the PyInstaller build, then a `xcrun notarytool submit` step.
+
+**Fix candidates:**
+
+- **Defer indefinitely.** The current workaround is one shell command; users who hit it can copy-paste from the README. The $99/year cost + the secret-management complexity is a real ongoing burden.
+- **Adopt** if Gatekeeper-bypass friction becomes a frequently-reported pain point or if a more polished install story becomes load-bearing for adoption.
+
+**Urgency:** lowest of the four v0.4 followups. Worth filing for visibility but not for action absent a concrete user-pain signal.
+
+Touches: `.github/workflows/release.yml` (signing + notarization steps); GitHub Secrets (cert, password, notarization creds); README's macOS section (remove the Gatekeeper-bypass instructions).
+
 ---
 
 ## Status
 
 ### Open
 
-One item, passive:
+Five items, all passive (no concrete trigger requires action):
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
+- **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
+- **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
+- **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
+- **#29** — Codesigning + notarization for macOS binaries. Smooths Gatekeeper UX but requires $99/yr Apple Developer membership. Awaits concrete pain signal.
 
 ### Resolved (reverse chronological)
 
@@ -470,3 +551,4 @@ How items entered this tracker:
 - **Item 19** added 2026-04-25 from a top-down tracker readability audit; resolved same day in PR #41.
 - **Items 20-23** added 2026-04-25 from a whole-codebase code-review pass (four 75-confidence advisories — below the ≥80 ship-bar but verified-real, filed for backlog).
 - **Items 24-25** added 2026-04-25 from a second-look code-review pass post-v0.3.1 (defensive-coding gap missed by the first pass + sloppy duplication in watchdog dispatch).
+- **Items 26-29** added 2026-04-27 from the v0.4 macOS port post-ship. #26 is a preexisting bug surfaced by extraction; #27-29 are deferred macOS-distribution polish (Intel binary, universal2, codesigning) — all noted in the v0.4 spec § "Post-ship backlog candidates" and filed here for visibility.

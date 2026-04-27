@@ -17,7 +17,7 @@ import pytest
 def test_unit_file_content_has_exec_start_and_wanted_by(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(
-        "dbxignore.install.linux_systemd._detect_invocation",
+        "dbxignore.install.linux_systemd.detect_invocation",
         lambda: (Path("/usr/local/bin/dbxignored"), ""),
     )
 
@@ -112,7 +112,7 @@ def test_install_propagates_dbxignore_root_env(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("DBXIGNORE_ROOT", "/home/kilo/dbx-smoke")
     monkeypatch.setattr(
-        "dbxignore.install.linux_systemd._detect_invocation",
+        "dbxignore.install.linux_systemd.detect_invocation",
         lambda: (Path("/usr/local/bin/dbxignored"), ""),
     )
     monkeypatch.setattr(
@@ -135,7 +135,7 @@ def test_install_omits_environment_when_dbxignore_root_unset(tmp_path, monkeypat
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("DBXIGNORE_ROOT", raising=False)
     monkeypatch.setattr(
-        "dbxignore.install.linux_systemd._detect_invocation",
+        "dbxignore.install.linux_systemd.detect_invocation",
         lambda: (Path("/usr/local/bin/dbxignored"), ""),
     )
     monkeypatch.setattr(
@@ -159,7 +159,7 @@ def test_install_ignores_empty_dbxignore_root(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("DBXIGNORE_ROOT", "")
     monkeypatch.setattr(
-        "dbxignore.install.linux_systemd._detect_invocation",
+        "dbxignore.install.linux_systemd.detect_invocation",
         lambda: (Path("/usr/local/bin/dbxignored"), ""),
     )
     monkeypatch.setattr(
@@ -179,7 +179,7 @@ def test_install_ignores_empty_dbxignore_root(tmp_path, monkeypatch):
 def test_install_writes_unit_and_invokes_systemctl(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(
-        "dbxignore.install.linux_systemd._detect_invocation",
+        "dbxignore.install.linux_systemd.detect_invocation",
         lambda: (Path("/usr/local/bin/dbxignored"), ""),
     )
 
@@ -237,7 +237,7 @@ def test_install_raises_when_executable_not_found(tmp_path, monkeypatch):
         raise RuntimeError("dbxignored not on PATH; run `uv tool install .`")
 
     monkeypatch.setattr(
-        "dbxignore.install.linux_systemd._detect_invocation",
+        "dbxignore.install.linux_systemd.detect_invocation",
         _raise_not_found,
     )
 
@@ -255,7 +255,7 @@ def test_install_wraps_calledprocesserror_from_systemctl(tmp_path, monkeypatch):
     """
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(
-        "dbxignore.install.linux_systemd._detect_invocation",
+        "dbxignore.install.linux_systemd.detect_invocation",
         lambda: (Path("/usr/local/bin/dbxignored"), ""),
     )
 

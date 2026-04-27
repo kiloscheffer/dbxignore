@@ -5,6 +5,37 @@ All notable changes to dbxignore are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+This is the work-in-progress changeset that will roll into `[0.4.0]` once the alpha promotes to stable. Brief summary of what's landed across PRs #53 – #59:
+
+### Added — macOS support
+
+- **macOS xattr backend.** `src/dbxignore/_backends/macos_xattr.py` talks to the `com.dropbox.ignored` extended attribute via the `xattr` PyPI package with `symlink=True` (operates on the link itself, not its target). Three-function API matches the Linux and Windows backends. Symlinks are marked silently and successfully on macOS — a small but meaningful behavioral improvement over Linux, where the kernel refuses `user.*` xattrs on symlinks with `EPERM`. The macOS-vs-Linux divergence is documented in CLAUDE.md and the README's macOS section.
+- **launchd User Agent installer.** `src/dbxignore/install/macos_launchd.py` writes `~/Library/LaunchAgents/com.kiloscheffer.dbxignore.plist` and bootstraps it into the user's GUI session via modern `launchctl bootstrap gui/<uid>` / `bootout gui/<uid>/<label>` (not legacy `load -w` / `unload -w`). `KeepAlive: {SuccessfulExit: False, Crashed: True}` matches systemd's `Restart=on-failure` semantics. Install requires that the user has logged into the GUI at least once since the last reboot — SSH-on-fresh-boot installs fail with `Bootstrap failed: 5: Input/output error` and need a GUI login + retry.
+- **Conditional `xattr>=1.0` runtime dep** on `sys_platform == 'darwin'`. Linux and Windows installs don't pull it. Dev dep is also conditional on `sys_platform != 'win32'` because the package's C extension fails to build on Windows (no Windows wheel).
+- **Split state vs. log directories on macOS.** `state.json` lives in `~/Library/Application Support/dbxignore/`; `daemon.log` and `launchd.log` live in `~/Library/Logs/dbxignore/`. Apple's app-data conventions. Windows and Linux behavior unchanged — state and log remain combined under `user_state_dir()`. New `state.user_log_dir()` function exposes the split; `daemon._log_dir()` now reads from it.
+- **arm64 Mach-O binaries** ship to the GitHub Release. Built via `pyinstaller/dbxignore-macos.spec` on the `macos-latest` runner. Intel Mac users install via the universal Python wheel from PyPI.
+- **`macos_only` pytest marker** + `macos-latest` CI matrix leg in `.github/workflows/test.yml`.
+- **`prerelease:` expression on the GitHub Release publish step.** Tags containing `-a` (alphas) or `-rc` (release candidates) are auto-marked as pre-releases. Enables the v0.4 beta-test workflow: cut `v0.4.0a1` → GitHub Release auto-pre-release → PyPI publish stays gated until manual approval → beta tester downloads the binaries → promote to `v0.4.0` after sign-off.
+
+### Changed
+
+- **`detect_invocation()` extracted** to `src/dbxignore/install/_common.py`. Previously inlined as `_detect_invocation` in `linux_systemd.py`; now shared between linux + macOS installers.
+- **`cli._purge_local_state()` refactored** to use a per-dir helper (`_purge_dir`) so it can clean both `user_state_dir()` AND `user_log_dir()` on macOS.
+- **Project description string** mentions macOS.
+
+### Documentation
+
+- **README** gains an "Install (macOS)" section between Linux and `.exe` install paths. Updated platform-support table now includes the macOS row. Logs and State sections list macOS paths.
+- **CLAUDE.md** gains four new gotchas covering: the `xattr` package's `symlink=True` API surface (NOT `options=XATTR_NOFOLLOW` despite what Apple's libc docs suggest); macOS-only test pattern; the symlink-marking divergence between Linux/macOS/Windows; modern launchctl bootstrap with the GUI-domain prerequisite; `_common.detect_invocation` shared module + the import-site monkeypatching gotcha.
+- **`docs/release-notes/v0.4.0.md`** — hand-crafted GitHub Release body for promotion via `gh release edit v0.4.0 --notes-file ...`.
+
+### Caveats (will appear in 0.4.0 release notes)
+
+- **No Intel Mac binary in v0.4.** Pre-built binaries are arm64 only; Intel users install via PyPI. If demand surfaces, an x86_64 build leg will land in a point release.
+- **Beta-validated, not field-validated at scale.** v0.4.0 is validated by a single beta tester on real hardware before tagging, but lacks the multi-user shake-out that Windows and Linux have accumulated. File issues for anything unexpected.
+
 ## [0.3.2] — 2026-04-26
 
 Maintenance release. One silent-failure-mode bug fix that prevents a daemon-startup crash on shape-mismatched `state.json`, plus an internal cleanup in the watchdog dispatch path. **No breaking changes.** Upgrade is `pip install --upgrade dbxignore` (or download the new binaries) followed by restarting the daemon (`systemctl --user restart dbxignore.service` on Linux; log out / back in or `schtasks /Run /TN dbxignore` on Windows).

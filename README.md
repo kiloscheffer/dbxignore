@@ -1,6 +1,6 @@
 # dbxignore
 
-Hierarchical `.dropboxignore` files for Dropbox. Drop a `.dropboxignore` into any folder under your Dropbox root and matching paths get the Dropbox ignore marker set automatically — no more `node_modules/` cluttering your sync. Windows (NTFS alternate data streams) and Linux (`user.*` xattrs) supported.
+Hierarchical `.dropboxignore` files for Dropbox. Drop a `.dropboxignore` into any folder under your Dropbox root and matching paths get the Dropbox ignore marker set automatically — no more `node_modules/` cluttering your sync. Windows (NTFS alternate data streams), Linux (`user.*` xattrs), and macOS (xattrs) supported.
 
 ## Upgrading from v0.2.x
 
@@ -19,9 +19,9 @@ modified by install/uninstall.
 
 ## Requirements
 
-- **Windows 10/11** (NTFS), **or** a modern Linux distro with a systemd user session
+- **Windows 10/11** (NTFS), **or** a modern Linux distro with a systemd user session, **or** macOS (Apple Silicon for pre-built binaries; Intel via PyPI)
 - Dropbox desktop client installed
-- Python ≥ 3.11 with [`uv`](https://docs.astral.sh/uv/). The pre-built `.exe` (Windows only) is an alternative on Windows.
+- Python ≥ 3.11 with [`uv`](https://docs.astral.sh/uv/). Pre-built binaries (Windows `.exe`, macOS arm64 Mach-O) are alternatives.
 
 ## Install (Windows, from source)
 
@@ -58,6 +58,57 @@ Notes:
 - Several common operations strip xattrs silently: `cp` without `-a`, `mv` across filesystems, most archivers, `vim`'s default save-via-rename. The watchdog plus hourly sweep re-apply markers automatically; no action needed.
 - Linux symlinks cannot carry `user.*` xattrs (kernel restriction). A symlink matched by a rule logs one `WARNING` per sweep and is skipped. Its target is not affected.
 
+## Install (macOS)
+
+dbxignore on macOS uses the `com.dropbox.ignored` extended attribute (the same xattr Dropbox itself reads) and registers the daemon as a launchd User Agent.
+
+```bash
+pip install dbxignore                # or: uv tool install dbxignore
+dbxignore install                    # writes ~/Library/LaunchAgents/com.kiloscheffer.dbxignore.plist
+                                     # and bootstraps it into your GUI session
+```
+
+`dbxignore install` requires that you've logged into the macOS GUI at least once since the last reboot — the GUI domain that LaunchAgents bootstrap into isn't initialized until a graphical login. SSH-on-fresh-boot installs fail with `Bootstrap failed: 5: Input/output error`. Log into the GUI, then retry.
+
+### Pre-built binaries (arm64 only)
+
+Pre-built Mach-O binaries are arm64 (Apple Silicon). Intel Mac users: install via PyPI — the wheel is universal Python.
+
+```bash
+curl -L -o dbxignore  https://github.com/kiloscheffer/dbxignore/releases/latest/download/dbxignore
+curl -L -o dbxignored https://github.com/kiloscheffer/dbxignore/releases/latest/download/dbxignored
+chmod +x dbxignore dbxignored
+sudo mv dbxignore dbxignored /usr/local/bin/
+```
+
+The binaries are unsigned — Gatekeeper refuses them on first launch with "cannot be opened because it is from an unidentified developer." Either right-click → Open in Finder (macOS remembers the override), or strip the quarantine xattr explicitly:
+
+```bash
+xattr -d com.apple.quarantine /usr/local/bin/dbxignore
+xattr -d com.apple.quarantine /usr/local/bin/dbxignored
+dbxignore install
+```
+
+To uninstall:
+
+```bash
+dbxignore uninstall                  # bootouts the agent, removes the plist
+dbxignore uninstall --purge          # also clears markers, state files, logs
+```
+
+Files written:
+
+```
+~/Library/LaunchAgents/com.kiloscheffer.dbxignore.plist   # launchd unit
+~/Library/Application Support/dbxignore/state.json        # daemon state
+~/Library/Logs/dbxignore/daemon.log                       # daemon log (rotated)
+~/Library/Logs/dbxignore/launchd.log                      # launchd-captured stdout/stderr
+```
+
+Notes:
+- A symlink matched by a `.dropboxignore` rule is marked on the **link itself**, not its target. macOS allows xattrs on symlinks; Linux refuses with `EPERM` and emits a WARNING. So on macOS the marker lands silently and successfully — matching the design intent better than the Linux behavior.
+- macOS support is new in v0.4. If you hit anything unexpected, please file an issue.
+
 ## Install (.exe)
 
 1. Download `dbxignore.exe` and `dbxignored.exe` from the latest [Release](https://github.com/kiloscheffer/dbxignore/releases).
@@ -66,9 +117,11 @@ Notes:
 
 ## Platform support
 
-- **Windows 10 / 11** — first-class (v0.1). Uses NTFS Alternate Data Streams.
-- **Linux** — first-class (v0.2). Uses `user.com.dropbox.ignored` xattrs. Tested on Ubuntu 22.04 / 24.04. Requires a systemd user session.
-- **macOS** — planned for v0.3. Dropbox on macOS uses a different attribute mechanism (Apple File Provider) that requires runtime detection — not yet implemented.
+| Platform | Marker mechanism                  | Daemon mechanism                | Tested |
+|----------|-----------------------------------|---------------------------------|--------|
+| Windows 10 / 11 | NTFS Alternate Data Streams | Task Scheduler (user task)      | yes (since v0.1) |
+| Linux (Ubuntu 22.04 / 24.04 + most modern distros with systemd user session) | `user.com.dropbox.ignored` xattr | systemd user unit | yes (since v0.2) |
+| macOS (Apple Silicon; Intel via PyPI) | `com.dropbox.ignored` xattr | launchd User Agent | new in v0.4 — please report issues |
 
 ## `.dropboxignore` syntax
 
@@ -145,10 +198,12 @@ Environment variables read at daemon startup:
 Logs (rotated, 25 MB total):
 - Windows — `%LOCALAPPDATA%\dbxignore\daemon.log`.
 - Linux — two sinks, same records. The rotating file at `$XDG_STATE_HOME/dbxignore/daemon.log` (fallback `~/.local/state/dbxignore/daemon.log`) is authoritative for offline debugging and bug-report bundling; `journalctl --user -u dbxignore.service` surfaces the same records via systemd-journald for live tailing and cross-service filtering.
+- macOS — `~/Library/Logs/dbxignore/daemon.log` (rotated). `~/Library/Logs/dbxignore/launchd.log` captures launchd-time stdout/stderr (near-empty unless the daemon crashes during startup before its own log handler initializes).
 
 State:
 - Windows — `%LOCALAPPDATA%\dbxignore\state.json`.
 - Linux — `$XDG_STATE_HOME/dbxignore/state.json` (fallback `~/.local/state/dbxignore/state.json`).
+- macOS — `~/Library/Application Support/dbxignore/state.json` (split from the log dir to match Apple's app-data conventions).
 
 ## Backlog
 

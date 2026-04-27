@@ -22,6 +22,12 @@ dev = [
     "pytest>=8",
     "pytest-timeout>=2.3",
     "ruff>=0.6",
+    # Pinned to non-Windows platforms: `xattr` has a C extension and ships no
+    # Windows wheel, so an unconditional dep makes `uv sync --all-extras` fail
+    # on the Windows CI runner with a missing-MSVC build error. The macOS unit
+    # tests that monkeypatch `xattr` accordingly skip on Windows — Linux still
+    # exercises the mocking path for cross-platform coverage.
+    "xattr>=1.0; sys_platform != 'win32'",
 ]
 
 [project.scripts]
@@ -42,6 +48,7 @@ testpaths = ["tests"]
 markers = [
     "windows_only: test requires NTFS alternate data streams",
     "linux_only: test requires Linux user.* xattrs",
+    "macos_only: test requires macOS xattrs (com.dropbox.ignored)",
 ]
 timeout = 10
 

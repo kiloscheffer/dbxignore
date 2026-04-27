@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -25,8 +25,8 @@ jobs:
       - name: Lint
         run: uv run ruff check
 
-      - name: Unit tests (non-Windows-only)
-        run: uv run pytest -m "not windows_only and not linux_only" -v
+      - name: Unit tests (cross-platform)
+        run: uv run pytest -m "not windows_only and not linux_only and not macos_only" -v
 
       - name: Windows-only integration tests
         if: runner.os == 'Windows'
@@ -35,3 +35,18 @@ jobs:
       - name: Linux-only integration tests
         if: runner.os == 'Linux'
         run: uv run pytest -m linux_only -v
+
+      - name: macOS-only integration tests
+        if: runner.os == 'macOS'
+        # The exit-5 tolerance ("no tests collected") is temporary — there are
+        # no macos_only tests yet. Removed in PR 2 once the macos_only
+        # integration suite exists.
+        run: |
+          set +e
+          uv run pytest -m macos_only -v
+          code=$?
+          if [ "$code" = "5" ]; then
+            echo "No macos_only tests yet — accepted."
+            exit 0
+          fi
+          exit $code

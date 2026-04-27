@@ -63,6 +63,67 @@ def test_uninstall_task_succeeds_silently_on_zero_exit(monkeypatch):
     install.uninstall_task()  # must not raise
 
 
+def test_install_task_runs_schtasks_create_then_run(monkeypatch, tmp_path):
+    """install_task should both register the task (Create) and start it now (Run)
+    so the daemon comes up without waiting for next logon. Mirrors what
+    `systemctl --user enable --now` does on Linux and what
+    `launchctl bootstrap` + RunAtLoad does on macOS."""
+    monkeypatch.setattr(
+        install, "detect_invocation", lambda: (Path(r"C:\bin\dbxignored.exe"), "")
+    )
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(install.subprocess, "run", fake_run)
+
+    install.install_task()
+
+    assert len(calls) == 2, calls
+    assert calls[0][0:2] == ["schtasks", "/Create"]
+    assert "/TN" in calls[0] and install.TASK_NAME in calls[0]
+    assert calls[1] == ["schtasks", "/Run", "/TN", install.TASK_NAME]
+
+
+def test_install_task_warns_but_does_not_raise_when_run_fails(
+    monkeypatch, caplog
+):
+    """A schtasks /Run failure must NOT surface as an install error — the
+    Create succeeded, the task is registered, and it'll start at next logon
+    regardless. Suppressing the failure here avoids a confusing partial-
+    success state where the user sees an exception but the task is in
+    fact installed."""
+    import logging
+
+    monkeypatch.setattr(
+        install, "detect_invocation", lambda: (Path(r"C:\bin\dbxignored.exe"), "")
+    )
+
+    def fake_run(cmd, **kwargs):
+        if cmd[0:2] == ["schtasks", "/Create"]:
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+        # /Run fails (e.g. task scheduler service unavailable mid-install).
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=1,
+            stdout="",
+            stderr="ERROR: The Task Scheduler service is not available.\r\n",
+        )
+
+    monkeypatch.setattr(install.subprocess, "run", fake_run)
+
+    with caplog.at_level(logging.WARNING, logger="dbxignore.install.windows_task"):
+        install.install_task()  # must not raise
+
+    assert any(
+        "schtasks /Run returned 1" in rec.message
+        and "Task is registered and will start at next logon" in rec.message
+        for rec in caplog.records
+    ), [rec.message for rec in caplog.records]
+
+
 def test_cli_uninstall_reports_schtasks_failure(monkeypatch):
     """cli.uninstall must echo the failure to stderr and exit non-zero when
     uninstall_service raises — not print "Uninstalled" anyway."""

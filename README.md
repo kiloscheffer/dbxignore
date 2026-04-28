@@ -212,8 +212,54 @@ Environment variables read at daemon startup:
 | `DBXIGNORE_DEBOUNCE_RULES_MS` | `100` | Debounce window for `.dropboxignore` file events. |
 | `DBXIGNORE_DEBOUNCE_DIRS_MS` | `0` | Debounce for directory-creation events (`0` = react immediately, no coalescing). |
 | `DBXIGNORE_DEBOUNCE_OTHER_MS` | `500` | Debounce for other file events. |
-| `DBXIGNORE_LOG_LEVEL` | `INFO` | Daemon log level. |
+| `DBXIGNORE_LOG_LEVEL` | `INFO` | Daemon log level. Accepts `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive). Unknown values fall back to `INFO`. Affects `dbxignore daemon` only — CLI commands use the top-level `--verbose` / `-v` flag (DEBUG when set, INFO otherwise). See [Log levels](#log-levels) below for what each level surfaces. |
 | `DBXIGNORE_ROOT` | *(unset)* | Escape hatch for non-stock Dropbox installs: overrides `info.json` discovery and treats the given absolute path as the sole Dropbox root. If the path doesn't exist, a WARNING is logged and no roots are returned (so `dbxignore apply` exits with "No Dropbox roots found"). |
+
+### Log levels
+
+The daemon and CLI have separate log-config knobs:
+
+- **Daemon (`dbxignore daemon`)** reads `DBXIGNORE_LOG_LEVEL` from the environment at startup. Output goes to the rotating file (and stderr on Linux for journald).
+- **CLI commands (`apply`, `list`, `status`, `explain`, `install`, `uninstall`)** use the top-level `--verbose` / `-v` flag — DEBUG when set, INFO otherwise. The env var is **not** consulted here. Output goes to stderr.
+
+What each level surfaces:
+
+| Level | What you see |
+|---|---|
+| `DEBUG` | Per-operation traces — individual marker reads/writes, watchdog event payloads, debouncer ticks, "xattr absent" / "path gone" race-condition skips on `clear_ignored`. Useful when debugging a specific reconcile decision or a marker-API edge case. |
+| `INFO` (default) | Daemon start/stop banners, sweep summaries (paths marked / cleared per sweep), install/uninstall confirmations, environment-forwarding diagnostics. The "what's the daemon doing right now" baseline. |
+| `WARNING` | Recoverable conditions — filesystems that don't support markers (`ENOTSUP`/`EOPNOTSUPP`), missing `info.json`, dropped negations under ignored ancestors, symlink `EPERM` on Linux, `schtasks /Run` failure post-install, corrupt or shape-mismatched `state.json`. None of these stop the daemon. |
+| `ERROR` | Conditions that prevent progress on a specific concern — "No Dropbox roots discovered; exiting", sweep-startup failures, watchdog or debouncer handler crashes (with traceback). The daemon either continues with reduced scope or shuts down cleanly. |
+| `CRITICAL` | Accepted by the env var but no production code path emits at this level — the project tops out at `ERROR`. |
+
+Ad-hoc debugging — bump the daemon's verbosity for one run:
+
+```bash
+# Linux / macOS
+systemctl --user stop dbxignore.service     # Linux: stop the running daemon
+launchctl bootout gui/$(id -u)/com.kiloscheffer.dbxignore   # macOS: same idea
+
+DBXIGNORE_LOG_LEVEL=DEBUG dbxignore daemon  # foreground; output streams to terminal
+```
+
+```powershell
+# Windows
+schtasks /End /TN dbxignore                       # stop the running task instance
+$env:DBXIGNORE_LOG_LEVEL = "DEBUG"
+dbxignore daemon                                  # foreground in this shell
+```
+
+Re-enable the managed daemon (`systemctl --user start dbxignore.service`, `launchctl bootstrap`, or wait for next logon on Windows) when you're done.
+
+CLI-side debugging — pass `--verbose` to any command:
+
+```bash
+dbxignore --verbose status
+dbxignore -v apply ~/Dropbox/some/subtree
+dbxignore -v explain ~/Dropbox/build/keep
+```
+
+Persisting a non-default level across managed-daemon restarts requires a platform-specific override and is not covered here — it's rarely the right move (DEBUG floods the daemon log fast). For one-off investigations, the foreground-run pattern above is the recommended path.
 
 Logs (rotated, 25 MB total):
 - Windows — `%LOCALAPPDATA%\dbxignore\daemon.log`.

@@ -494,19 +494,60 @@ Requires:
 
 Touches: `.github/workflows/release.yml` (signing + notarization steps); GitHub Secrets (cert, password, notarization creds); README's macOS section (remove the Gatekeeper-bypass instructions).
 
+## 30. Windows-aware single binary — collapse `dbxignore.exe` + `dbxignored.exe`
+
+The project currently ships TWO Windows binaries from the same codebase: `dbxignore.exe` (PyInstaller `console=True`, interactive CLI, brief help-flash on double-click) and `dbxignored.exe` (`console=False`, daemon, no console window when launched by Task Scheduler). The duplication exists because PyInstaller's `console=True/False` switch is binary — there's no built-in "attach to parent console if there is one, else stay silent" mode — and the project has three distinct UX requirements that no single console-mode satisfies:
+
+- **Terminal users** want output to flow to their terminal.
+- **Task Scheduler launches** want NO console window pop at every login.
+- **Double-click users** want some indication the `.exe` did something (currently a brief help flash via `console=True`).
+
+A "best of all worlds" single binary calls `AttachConsole(ATTACH_PARENT_PROCESS)` early in startup. If attach succeeds (terminal launch), stdout/stderr flow to the parent terminal as if `console=True`. If attach fails (double-click, Task Scheduler), the binary runs without a console — like `console=False`. For double-click specifically, a small Windows MessageBox can pop saying "dbxignore is a CLI tool — open a terminal and run `dbxignore --help`" so the user gets feedback instead of silent no-op.
+
+Some Windows-native tools (`go.exe`, `winget.exe`) implement this pattern. PyInstaller doesn't add it automatically.
+
+**Fix candidates:**
+
+- **`AttachConsole` via stdlib `ctypes`** — call `ctypes.windll.kernel32.AttachConsole(-1)` (where `-1` = `ATTACH_PARENT_PROCESS`) early in `cli.main` before click parses argv. On success, redirect `sys.stdout`/`sys.stderr` to the attached console's handles. On failure, leave stdout/stderr as-is. Then add a no-args + no-attached-console branch that pops `ctypes.windll.user32.MessageBoxW(...)` with a "open a terminal" hint. No new dependencies.
+- **`AttachConsole` via `pywin32`** — same logic with `win32console.AttachConsole` and `win32api.MessageBox`. Cleaner ergonomics but adds `pywin32` to runtime deps (large, Windows-only).
+- **Status quo** — keep both binaries. The current state works correctly; the duplication has a clear UX justification per binary. ~20MB of redundant binary content per release is the only concrete cost.
+
+**Scope of follow-on work** if implemented:
+
+- `pyinstaller/dbxignore.spec`: drop the second `EXE(...)` block. Switch the remaining one to `console=False`.
+- `pyinstaller/dbxignore-macos.spec`: same treatment if simplifying macOS too. (macOS has no console-mode distinction — both binaries are CLI Mach-O — so the duplication there is purely Unix `<name>d` convention.)
+- `pyproject.toml`: drop `[project.scripts].dbxignored` entry.
+- `src/dbxignore/cli.py`: drop `daemon_main` shim. Add the `AttachConsole` + MessageBox logic at the top of `main()` (Windows-only branch).
+- `src/dbxignore/install/_common.py`: `detect_invocation()` no longer searches for `dbxignored` shim.
+- `src/dbxignore/install/windows_task.py`: binary-mode invocation now points at `dbxignore.exe daemon` (was `dbxignored.exe`).
+- `src/dbxignore/install/linux_systemd.py`, `src/dbxignore/install/macos_launchd.py`: `ExecStart` / `ProgramArguments` reference `dbxignore daemon` instead of `dbxignored`.
+- README's "Install (.exe)" section: simplify the binary list (just `dbxignore.exe`).
+- CHANGELOG entry: noteworthy as a breaking change for users with `dbxignored.exe` in PATH or referenced in custom configs.
+
+**Urgency:** low. The current two-binary state is correct and has clear UX rationale. Triggers for promotion: binary-size complaints, PyInstaller build-time friction, or a simplification effort post-1.0 that bundles this with other cross-platform installer cleanup. The three-context tradeoff (terminal / Task Scheduler / double-click) is the load-bearing constraint, not Unix `<name>d` aesthetics.
+
+**Risks if implemented:**
+
+- The `AttachConsole` path needs testing in PowerShell, cmd, Windows Terminal, Git Bash, and `powershell -NoProfile` minimal-shell scenarios. Each handles inherited handles slightly differently.
+- The MessageBox branch adds a `user32.dll` dependency at startup; on locked-down Server Core systems without the GUI subsystem, that import would fail and the binary would crash before even reaching click. The branch needs a try/except wrapper.
+- Beta-testing on real Windows installs across a few editions (Pro, Home, Server) before merging.
+
+Touches: `pyinstaller/dbxignore.spec`, `pyinstaller/dbxignore-macos.spec` (optional but coherent), `pyproject.toml`, `src/dbxignore/cli.py`, `src/dbxignore/install/_common.py`, `src/dbxignore/install/windows_task.py`, `src/dbxignore/install/linux_systemd.py`, `src/dbxignore/install/macos_launchd.py`, `README.md` "Install (.exe)" section, `CHANGELOG.md`.
+
 ---
 
 ## Status
 
 ### Open
 
-Five items, all passive (no concrete trigger requires action):
+Six items, all passive (no concrete trigger requires action):
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
 - **#29** — Codesigning + notarization for macOS binaries. Smooths Gatekeeper UX but requires $99/yr Apple Developer membership. Awaits concrete pain signal.
+- **#30** — Windows-aware single binary via `AttachConsole(ATTACH_PARENT_PROCESS)`. Collapses `dbxignore.exe` + `dbxignored.exe` to one. Three-context UX tradeoff (terminal / Task Scheduler / double-click) is load-bearing today; ctypes path is the implementation route. Awaits binary-size or build-time pain signal.
 
 ### Resolved (reverse chronological)
 
@@ -552,3 +593,4 @@ How items entered this tracker:
 - **Items 20-23** added 2026-04-25 from a whole-codebase code-review pass (four 75-confidence advisories — below the ≥80 ship-bar but verified-real, filed for backlog).
 - **Items 24-25** added 2026-04-25 from a second-look code-review pass post-v0.3.1 (defensive-coding gap missed by the first pass + sloppy duplication in watchdog dispatch).
 - **Items 26-29** added 2026-04-27 from the v0.4 macOS port post-ship. #26 is a preexisting bug surfaced by extraction; #27-29 are deferred macOS-distribution polish (Intel binary, universal2, codesigning) — all noted in the v0.4 spec § "Post-ship backlog candidates" and filed here for visibility.
+- **Item 30** added 2026-04-27 from a v0.4 alpha-test conversation about the rationale for shipping two Windows binaries. The author proposed collapsing them, then walked it back after surfacing the three-context UX tradeoff (terminal / Task Scheduler / double-click) that the duplication addresses. Filed for the eventual `AttachConsole`-based simplification path.

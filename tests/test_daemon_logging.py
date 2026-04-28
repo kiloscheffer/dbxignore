@@ -113,6 +113,77 @@ def test_configured_logging_respects_log_level_env(
         assert pkg_logger.level == logging.DEBUG
 
 
+def test_configured_logging_accepts_lowercase_level(
+    isolated_pkg_logger, log_dir, monkeypatch
+):
+    """The env var is case-insensitive: `debug` should resolve to logging.DEBUG."""
+    monkeypatch.setenv("DBXIGNORE_LOG_LEVEL", "debug")
+    pkg_logger = logging.getLogger("dbxignore")
+
+    with daemon._configured_logging():
+        assert pkg_logger.level == logging.DEBUG
+
+
+def test_configured_logging_warns_and_falls_back_on_unknown_level(
+    isolated_pkg_logger, log_dir, monkeypatch
+):
+    """A typo'd level (e.g. `DEUG`) silently degraded to INFO before the fix —
+    user lost the level they wanted, no signal that anything went wrong.
+    Now the daemon falls back to INFO AND emits a WARNING naming the bad
+    value, so the user sees the misconfiguration in daemon.log."""
+    monkeypatch.setenv("DBXIGNORE_LOG_LEVEL", "DEUG")
+    pkg_logger = logging.getLogger("dbxignore")
+
+    # The WARNING must surface through the daemon's configured handlers, not
+    # be lost during early startup. Sniff the file handler's RotatingFileHandler
+    # output by reading daemon.log after the context exits.
+    with daemon._configured_logging():
+        assert pkg_logger.level == logging.INFO  # fell back
+
+    # Read what was written. log_dir fixture redirects %APPDATA%/HOME/etc.
+    # to tmp_path, so daemon.log lands inside the test's tmp tree.
+    daemon_log = log_dir / "daemon.log"
+    assert daemon_log.exists(), f"expected log at {daemon_log}"
+    log_text = daemon_log.read_text(encoding="utf-8")
+    assert "DBXIGNORE_LOG_LEVEL='DEUG'" in log_text, log_text
+    assert "not a recognized logging level" in log_text, log_text
+    assert "falling back to INFO" in log_text, log_text
+
+
+def test_configured_logging_unset_env_is_silent(
+    isolated_pkg_logger, log_dir, monkeypatch
+):
+    """When DBXIGNORE_LOG_LEVEL is unset, no warning fires — the default-INFO
+    path is the common case and should not emit a misconfiguration warning."""
+    monkeypatch.delenv("DBXIGNORE_LOG_LEVEL", raising=False)
+
+    with daemon._configured_logging():
+        pass
+
+    daemon_log = log_dir / "daemon.log"
+    if daemon_log.exists():  # may be empty / not created if no records flowed
+        log_text = daemon_log.read_text(encoding="utf-8")
+        assert "not a recognized logging level" not in log_text, log_text
+
+
+def test_configured_logging_empty_string_env_is_silent(
+    isolated_pkg_logger, log_dir, monkeypatch
+):
+    """DBXIGNORE_LOG_LEVEL="" is shell-quirk-equivalent to unset — fall back
+    to INFO without a warning. Mirrors the DBXIGNORE_ROOT="" → fall back to
+    info.json discovery treatment in roots.discover()."""
+    monkeypatch.setenv("DBXIGNORE_LOG_LEVEL", "")
+    pkg_logger = logging.getLogger("dbxignore")
+
+    with daemon._configured_logging():
+        assert pkg_logger.level == logging.INFO
+
+    daemon_log = log_dir / "daemon.log"
+    if daemon_log.exists():
+        log_text = daemon_log.read_text(encoding="utf-8")
+        assert "not a recognized logging level" not in log_text, log_text
+
+
 def test_configured_logging_restores_logger_state_on_exit(
     isolated_pkg_logger, log_dir
 ):

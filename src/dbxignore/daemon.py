@@ -28,6 +28,12 @@ from dbxignore.rules import IGNORE_FILENAME, RuleCache
 
 logger = logging.getLogger(__name__)
 
+# Explicitly enumerated rather than `getattr(logging, name, default)` so that
+# `DBXIGNORE_LOG_LEVEL=NOTSET` (a real logging constant but rarely what the user
+# wants — means "use parent level", typically root which defaults to WARNING)
+# also surfaces as "unknown" with the same fallback-to-INFO + WARNING treatment.
+_VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
 
 def _classify(event: Any, roots: list[Path]) -> tuple[EventKind, str, Path] | None:
     src = Path(event.src_path)
@@ -121,8 +127,16 @@ def _configured_logging() -> Iterator[None]:
     sinks, so grabbing ``daemon.log`` still yields a complete debug record
     on Linux, matching the Windows workflow.
     """
-    level_name = os.environ.get("DBXIGNORE_LOG_LEVEL", "INFO").upper()
-    level = getattr(logging, level_name, logging.INFO)
+    level_name_raw = os.environ.get("DBXIGNORE_LOG_LEVEL")
+    if level_name_raw and level_name_raw.upper() in _VALID_LEVELS:
+        level = getattr(logging, level_name_raw.upper())
+        unknown_level = None
+    else:
+        level = logging.INFO
+        # `unknown_level` is the (raw, original-cased) value the user supplied
+        # if non-empty; preserved for the warning message below so a typo like
+        # `DBXIGNORE_LOG_LEVEL=DEUG` shows up verbatim, not lower-cased.
+        unknown_level = level_name_raw if level_name_raw else None
 
     formatter = logging.Formatter(
         "%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -155,6 +169,17 @@ def _configured_logging() -> Iterator[None]:
         pkg_logger.addHandler(h)
     pkg_logger.propagate = False
     pkg_logger.setLevel(level)
+    if unknown_level is not None:
+        # Emit AFTER handlers are configured so the warning lands in
+        # daemon.log (and stderr on Linux), where the user looks for daemon
+        # output. WARNING is always >= INFO so it surfaces even though we
+        # fell back to INFO.
+        logger.warning(
+            "DBXIGNORE_LOG_LEVEL=%r is not a recognized logging level; "
+            "falling back to INFO. Accepted: %s.",
+            unknown_level,
+            ", ".join(_VALID_LEVELS),
+        )
     try:
         yield
     finally:

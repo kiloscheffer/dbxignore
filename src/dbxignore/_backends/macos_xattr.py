@@ -214,14 +214,26 @@ def _detected_attr_name() -> str:
                 # skip and try the next one.
                 continue
 
-    # Path elsewhere + extension allowed → external-drive File Provider.
-    if paths and extension_state == "allowed":
-        _attr_name_cache = ATTR_FILEPROVIDER
-        logger.debug(
-            "Detected File Provider mode (external drive): paths=%s, extension active",
-            paths,
-        )
-        return _attr_name_cache
+    # External-drive File Provider: path on `/Volumes/...` + extension allowed.
+    # Scoped narrowly to the /Volumes prefix so we don't false-positive on
+    # users who have Dropbox.app installed (so the extension is registered
+    # in PluginKit) but who declined the File Provider migration and are
+    # still on legacy sync from their home dir. Per Dropbox docs, File
+    # Provider doesn't permit relocation outside `~/Library/CloudStorage/`
+    # except for the eligibility-gated external-drive feature, which puts
+    # the folder on a mounted `/Volumes/<DriveName>/...` path.
+    if extension_state == "allowed":
+        for p in paths:
+            try:
+                real_parts = Path(os.path.realpath(p)).parts
+            except OSError:
+                continue
+            if len(real_parts) >= 3 and real_parts[1] == "Volumes":
+                _attr_name_cache = ATTR_FILEPROVIDER
+                logger.debug(
+                    "Detected File Provider mode (external drive): %s", p
+                )
+                return _attr_name_cache
 
     # Defensive default: legacy (covers no-Dropbox-installed, pure-legacy,
     # and pluginkit-unknown-with-no-CloudStorage-path cases).

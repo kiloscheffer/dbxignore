@@ -5,13 +5,63 @@ import sys
 from pathlib import Path
 
 
-def test_detect_invocation_returns_frozen_executable(monkeypatch):
+def _daemon_name() -> str:
+    """Platform-appropriate daemon binary name (drives the Windows .exe suffix)."""
+    return "dbxignored.exe" if sys.platform == "win32" else "dbxignored"
+
+
+def test_detect_invocation_returns_frozen_executable_when_already_dbxignored(monkeypatch, tmp_path):
+    """User invoked `dbxignored install` directly: sys.executable IS the daemon shim."""
+    daemon_exe = tmp_path / _daemon_name()
+    daemon_exe.write_text("")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", "/path/to/dbxignored")
+    monkeypatch.setattr(sys, "executable", str(daemon_exe))
     from dbxignore.install import _common
     exe, args = _common.detect_invocation()
-    assert exe == Path("/path/to/dbxignored")
+    assert exe == daemon_exe
     assert args == ""
+
+
+def test_detect_invocation_finds_dbxignored_sibling_from_dbxignore(monkeypatch, tmp_path):
+    """User invoked `dbxignore install` (frozen): resolve to the `dbxignored` sibling.
+
+    Common case for v0.4 macOS / Windows installs — both binaries ship together
+    from a paired PyInstaller Analysis, the user runs the long-form CLI for
+    install, and the service manager needs the daemon-shim binary as its
+    invocation target.
+    """
+    cli_name = "dbxignore.exe" if sys.platform == "win32" else "dbxignore"
+    cli_exe = tmp_path / cli_name
+    cli_exe.write_text("")
+    daemon_exe = tmp_path / _daemon_name()
+    daemon_exe.write_text("")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(cli_exe))
+    from dbxignore.install import _common
+    exe, args = _common.detect_invocation()
+    assert exe == daemon_exe
+    assert args == ""
+
+
+def test_detect_invocation_falls_back_to_daemon_subcommand_when_sibling_missing(
+    monkeypatch, tmp_path
+):
+    """No `dbxignored` sibling: invoke ourselves with the `daemon` subcommand.
+
+    Defensive case — the PyInstaller specs always emit both binaries, so this
+    code path should not be reached in shipped releases. But if it is reached,
+    `(dbxignore, "daemon")` is the correct fallback because Click can dispatch
+    to the daemon subcommand from the long-form binary.
+    """
+    cli_name = "dbxignore.exe" if sys.platform == "win32" else "dbxignore"
+    cli_exe = tmp_path / cli_name
+    cli_exe.write_text("")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(cli_exe))
+    from dbxignore.install import _common
+    exe, args = _common.detect_invocation()
+    assert exe == cli_exe
+    assert args == "daemon"
 
 
 def test_detect_invocation_falls_back_to_python_module(monkeypatch):

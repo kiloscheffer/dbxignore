@@ -632,7 +632,9 @@ Surfaced 2026-05-01 via v0.4 beta-tester confusion: `dbxignore apply` reported `
 
 **Status: RESOLVED 2026-05-01 (PR #77).** Scope decision was (B) — absorbed File Provider support into v0.4 before final tag. Implementation followed the spec above: `_detected_attr_name()` helper in `_backends/macos_xattr.py` probes for `~/Library/CloudStorage/Dropbox/`, caches the result on first call, returns either `ATTR_LEGACY` (`com.dropbox.ignored`) or `ATTR_FILEPROVIDER` (`com.apple.fileprovider.ignore#P`). The three exported functions route through the helper. Tests: 7 new tests in `tests/test_macos_xattr_unit.py` covering detection (4) and File Provider mode end-to-end (3); existing tests updated to use `_detected_attr_name()` instead of the removed `ATTR_NAME` constant. README's macOS section + CLAUDE.md gotchas updated. The three open implementation questions below await Andrea's v0.4.0a4 beta-test roundtrip — they're not blockers for ship, just things we want to learn.
 
-**Open implementation questions** (relevant to (B)):
+**Validated 2026-05-02 (v0.4.0a5).** Andrea's beta-test pass on macOS Tahoe 26.4 / Dropbox 250.4 confirmed the File Provider attribute write actually takes effect — Dropbox stops syncing the marked folder after `dbxignore apply`. All three open implementation questions below resolved in the affirmative: (1) `xattr.setxattr` against `com.apple.fileprovider.ignore#P` works without special entitlements; (2) stub/placeholder files behave the same as materialized files for our marker write (the framework handles the dispatch); (3) `#P` alone is sufficient — no `#N` paired variant needed. The (B) scope decision paid off: v0.4 ships with full File Provider support rather than a documented legacy-only limitation.
+
+**Open implementation questions** (resolved 2026-05-02 — all answered "yes, works as designed"; left in the entry as historical record of what we needed to learn before promoting to v0.4.0):
 
 - Does `xattr.setxattr(path, "com.apple.fileprovider.ignore#P", b"1", symlink=True)` actually take effect, or does the File Provider sandbox model require special entitlements / a different code path? Apple's File Provider framework is more rigid than the legacy xattr API. Needs an end-to-end test on a File Provider machine before (B) can ship — Andrea's machine is the available validation surface.
 - Are there edge cases around stub/placeholder files (File Provider downloads files on-demand by default; an unmaterialized "stub" may behave differently for xattr writes)? Ships with the same beta-test cycle.
@@ -719,13 +721,37 @@ Touches: `src/dbxignore/install/_common.py`; `src/dbxignore/install/windows_task
 
 Touches: `src/dbxignore/_backends/macos_xattr.py`; `tests/test_macos_xattr_unit.py`; `CLAUDE.md`.
 
+## 37. macOS sync-mode detection result should be observable for user-report debugging
+
+The path-primary detection landed in PR #79 (item #36) writes its result to `_attr_name_cache` and returns it from `_detected_attr_name()`. Internal logging is at `DEBUG` level (`logger.debug("Detected legacy mode: ...")` and similar) — visible only with `dbxignore -v ...`, not surfaced anywhere else.
+
+That's enough for self-diagnosis when a user knows to add `-v`, but it's a poor experience when a user reports "dbxignore doesn't seem to be working on my Mac" and we want to ask "what mode did detection conclude?" without round-tripping through "run with -v and paste the daemon log." Two small enrichments would close that gap:
+
+**(A) Promote the detection result to INFO at startup.** Currently the daemon's `daemon.run()` reads `DBXIGNORE_LOG_LEVEL` and configures handlers; the per-call `logger.debug` lines from `_detected_attr_name()` only show if level is DEBUG. Adding a single `logger.info` at daemon startup that calls `_detected_attr_name()` and logs the chosen mode + a short reason would surface the answer in the default log without requiring `-v`. Reason field would distinguish: "info.json path under CloudStorage", "extension explicitly disabled", "external-drive Volumes path + extension active", "no info.json + pluginkit unknown → defensive default", etc.
+
+**(B) Add a "macOS sync mode" line to `dbxignore status` output on darwin.** `cli.status()` already prints daemon health, last-sweep stats, and rule conflicts. Adding `macOS sync mode: file_provider (com.apple.fileprovider.ignore#P)` (or `legacy (com.dropbox.ignored)`) below those lines makes it self-serve diagnostic — users hit `dbxignore status` first when something seems off, and seeing the mode there points at the right next step. macOS-only since Linux/Windows backends don't have mode ambiguity.
+
+**Fix candidates:**
+
+- **Both (A) and (B).** Small, complementary. (A) adds startup log; (B) adds status output. Combined scope: ~30 lines code in `daemon.py` + `cli.py`, plus a `_detection_reason()` helper in `_backends/macos_xattr.py` that returns a human-readable explanation alongside the cached attr name.
+- **Just (A).** Minimum viable; covers the daemon-side diagnostic. Users still need to know to read the log file.
+- **Just (B).** Maximum user-visible; requires running `dbxignore status` to learn the mode but that's an expected diagnostic step.
+
+**Recommendation:** Both. Each is 10-15 lines and they're useful for different contexts (daemon ops vs. user CLI diagnostic). Bundle as one PR since they share the new `_detection_reason()` shape.
+
+**Urgency:** low. v0.4.0a5 works correctly without this; the gap is observability, not correctness. Promote when the macos backend is next touched, OR if a user reports "is dbxignore using the right mode?" and we wish we could answer without `-v`.
+
+**Source:** the proposed-code snippet shared during the v0.4.0a5 detection-design discussion returned a structured `{mode, confidence, reason, ...}` dict. We collapsed to a binary attr-name return for the call site's needs but kept the proposed code's diagnostic richness as a v0.5 follow-up. This item is the place we keep that scope.
+
+Touches: `src/dbxignore/_backends/macos_xattr.py` (new `_detection_reason()` helper); `src/dbxignore/daemon.py` (INFO log at startup); `src/dbxignore/cli.py` (status output line on darwin); `tests/` (small additions covering both surfaces).
+
 ---
 
 ## Status
 
 ### Open
 
-Eight items. Six are passive (no concrete trigger requires action); item #32 has one fired trigger (a beta tester typed `dbxignore --version` and got "no such option") but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18) and waits for a third recurrence before triggering action. (Item #33 was HIGH severity but resolved in PR #77 — see Resolved section below.)
+Nine items. Seven are passive (no concrete trigger requires action); item #32 has one fired trigger (a beta tester typed `dbxignore --version` and got "no such option") but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18) and waits for a third recurrence before triggering action.
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
@@ -735,13 +761,18 @@ Eight items. Six are passive (no concrete trigger requires action); item #32 has
 - **#30** — Windows-aware single binary via `AttachConsole(ATTACH_PARENT_PROCESS)`. Collapses `dbxignore.exe` + `dbxignored.exe` to one. Three-context UX tradeoff (terminal / Task Scheduler / double-click) is load-bearing today; ctypes path is the implementation route. Awaits binary-size or build-time pain signal.
 - **#32** — CLI polish: missing `--version`, unreachable `--verbose` from `dbxignored`, and bogus `Usage: dbxignored daemon` in `dbxignored --help`. All three trace to the `daemon_main` argv-rewrite shim; the consolidated fix is replacing the shim with a standalone Click command and adding `@click.version_option` to both. Sequence-dependent on #30 — fix #32 first if both are scheduled. Awaits CLI-touching change to bundle with.
 - **#34** — `test_daemon_reacts_to_dropboxignore_and_directory_creation` flaked again 2026-05-01 in PR #74's post-rebase Windows leg, post-PR #40 timeout fix (item #18). Reran the failed leg, second run passed in 27s. Per project policy, single post-resolution recurrence is logged but not actioned; third recurrence triggers either further timeout widening or actual root-cause diagnosis.
+- **#37** — macOS sync-mode detection result observability. Detection writes its result to a debug-level log; surface it at INFO at daemon startup AND in `dbxignore status` output on darwin so users can self-diagnose without `dbxignore -v`. ~30 lines code; awaits next macos-backend-touching change to bundle with.
 
 ### Resolved (reverse chronological)
+
+#### 2026-05-02
+
+- **#33** validated by v0.4.0a5 beta-tester pass — Andrea confirmed Dropbox actually stops syncing the marked folder after `dbxignore apply` on her macOS Tahoe 26.4 / Dropbox 250.4 File Provider install. All three open implementation questions in #33's body resolved affirmatively (no entitlements needed, stub files behave the same, `#P` alone is sufficient). The (B) scope decision pays off — v0.4 ships with full File Provider support rather than a documented legacy-only limitation.
 
 #### 2026-05-01
 
 - **#36** in PR #79 — macOS sync-mode detection rewritten as path-primary (info.json) with pluginkit-disambiguation. Fixes a v0.4.0a4 bug where users with Dropbox.app installed but declined the File Provider migration got the wrong attribute name written. Ships in v0.4.0a5.
-- **#33** in PR #77 — macOS xattr backend now auto-detects Dropbox sync mode (legacy vs. File Provider) and selects the matching attribute name (`com.dropbox.ignored` vs. `com.apple.fileprovider.ignore#P`). Resolves the silent-failure mode where v0.4.0a3 wrote the wrong attribute on every File Provider install. (B) scope decision: absorbed into v0.4 before final tag. (Detection logic refined in PR #79 — see item #36.)
+- **#33** in PR #77 — macOS xattr backend now auto-detects Dropbox sync mode (legacy vs. File Provider) and selects the matching attribute name (`com.dropbox.ignored` vs. `com.apple.fileprovider.ignore#P`). Resolves the silent-failure mode where v0.4.0a3 wrote the wrong attribute on every File Provider install. (B) scope decision: absorbed into v0.4 before final tag. (Detection logic refined in PR #79 — see item #36; validated end-to-end on 2026-05-02 — see entry above.)
 - **#35** in PR #76 — macOS launchd plist + Windows Task Scheduler XML now invoke the `dbxignored` sibling binary (with empty args) rather than the long-form `dbxignore` binary (which exits with status 2 on no-subcommand). Frozen branches of `_common.detect_invocation` + `windows_task.detect_invocation` now resolve via a three-step "self-as-dbxignored / sibling-search / fallback-to-daemon-subcommand" rule.
 - **#31** in PR #71 — bundle `_cffi_backend` in macOS PyInstaller spec; smoke-test built binaries before upload on both Windows and macOS build legs.
 
@@ -794,3 +825,5 @@ How items entered this tracker:
 - **Item 34** added 2026-05-01 from a CI flake observed during PR #74's post-rebase run on `windows-latest`. Same test that prompted item #18 (originally filed 2026-04-24), resolved in PR #40 by widening the `_poll_until` timeout from 3.0s to 5.0s. Filed as a separate item rather than re-opening #18 because the Resolved-section history is reverse-chronological-only and re-opening would muddy that contract; #34's body explicitly references #18's resolution path and prior timeline.
 - **Item 35** added 2026-05-01 from the same v0.4.0a3 macOS beta-test session — `launchctl print` revealed the launchd plist invoked the long-form `dbxignore` binary with no subcommand, hitting Click's "no subcommand → exit 2" arm and never reaching `daemon_mod.run()`. Filed and resolved in the same PR because the fix is small (~50 lines), the regression class is well-bounded (the frozen branches of `detect_invocation` in both `_common.py` and `windows_task.py`), and the tracker entry's value is mostly historical/educational rather than awaiting-action. Linux was unaffected — Linux installs don't ship a frozen binary, so they reached the non-frozen branch which already routed correctly through `shutil.which("dbxignored")`.
 - **Item 36** added 2026-05-01 immediately after v0.4.0a4 shipped — the maintainer recognized that v0.4.0a4's pluginkit-primary detection conflated the *system-level* signal (is the extension registered?) with the *user-level* signal (which mode is this account in?), and that the user-level fact lives in info.json's `path` field. PluginKit registration says nothing about whether *this user's account* migrated; the path does. Filed and resolved in PR #79; ships in v0.4.0a5 before any beta tester ran v0.4.0a4 in the wild — caught by reasoning about the signal layers, not by a tester report. Detection logic reframed as path-primary with pluginkit-disambiguation; covers the missed case (extension installed + user in legacy mode → legacy) plus the external-drive File Provider case Dropbox docs document.
+- **Item 37** added 2026-05-02 from the v0.4.0a5 ship cycle — the proposed-code snippet shared during the detection-design discussion returned a structured `{mode, confidence, reason, ...}` dict; we collapsed to a binary attr-name return for the call-site's needs but kept the diagnostic richness scope (mode + reason at INFO log; mode line in `dbxignore status` on darwin) as a v0.5 follow-up. Filed for the next macos-backend-touching change to bundle with.
+- **Item #33 validation note** added 2026-05-02 after Andrea's v0.4.0a5 beta-test pass confirmed the File Provider attribute write actually causes Dropbox to stop syncing — closes the three open implementation questions in #33's body that had been left for end-to-end validation. The `Validated 2026-05-02` paragraph now lives inline in #33's body for future readers walking the trail.

@@ -534,6 +534,28 @@ Some Windows-native tools (`go.exe`, `winget.exe`) implement this pattern. PyIns
 
 Touches: `pyinstaller/dbxignore.spec`, `pyinstaller/dbxignore-macos.spec` (optional but coherent), `pyproject.toml`, `src/dbxignore/cli.py`, `src/dbxignore/install/_common.py`, `src/dbxignore/install/windows_task.py`, `src/dbxignore/install/linux_systemd.py`, `src/dbxignore/install/macos_launchd.py`, `README.md` "Install (.exe)" section, `CHANGELOG.md`.
 
+## 31. macOS PyInstaller binary missed `_cffi_backend` C extension
+
+The v0.4.0a1 macOS arm64 binary failed at first launch with `ModuleNotFoundError: No module named '_cffi_backend'`. Reproduced by a beta tester (M2 MacBook Air, macOS Tahoe 26.4) running `dbxignore --version` after the README's documented Gatekeeper-bypass + `mv ... /usr/local/bin/` install dance.
+
+The failing import chain: `dbxignore.cli` → `dbxignore.markers` → `dbxignore._backends.macos_xattr` line 25 (`import xattr`) → `xattr/__init__.py` → `xattr/lib.py` → `from cffi import FFI` → `cffi/__init__.py`'s `from _cffi_backend import ...`. `_cffi_backend.cpython-3XX-darwin.so` is a top-level C extension that ships *alongside* the `cffi` package on disk (a sibling, not a submodule), so PyInstaller's static AST trace from `cffi` doesn't reach it. `pyinstaller-hooks-contrib` ships a `hook-cffi.py` that should add it as a hidden import automatically; the v0.4.0a1 build skipping it points to version drift (PyInstaller installed via `uv run --with pyinstaller`, no version pin).
+
+The bug is macOS-only. The Linux backend uses `os.{get,set}xattr` (Python stdlib, no cffi), the Windows backend uses raw `open(r"\\?\path:com.dropbox.ignored")` calls (no cffi); v0.4.0a1's Windows binary worked correctly through the same workflow.
+
+CI didn't catch it because `build-macos` uploaded the artifact without ever executing it. A `./dist/dbxignore --help` step after the build exercises the full import chain (the bug fires at import time, before click parses argv) and would have failed the build instead of fails-on-first-tester.
+
+**Fix candidates:**
+
+- **Explicit `_cffi_backend` in `hiddenimports`** (chosen) — adds one entry to the macOS spec's existing list, alongside `watchdog.observers.fsevents`. Belt-and-suspenders the contrib hook so version drift can't silently re-introduce the regression. Same shape as the watchdog entry — both runtime-resolved imports the static analyzer misses.
+- **Pin PyInstaller version** in the workflow's `--with pyinstaller` invocation. Trades one regression risk for another (stale PyInstaller missing future bug fixes). Not chosen.
+- **Drop the `xattr` PyPI package, use `ctypes` against `libsystem`'s `getxattr(2)`** directly — eliminates the cffi dependency entirely. Larger surgery; the package was deliberately chosen for its `symlink=True`/NOFOLLOW semantics (see `_backends/macos_xattr.py:1-17`). Defer.
+
+Mitigation (broader): smoke-test the built binaries in the release workflow's build legs before the artifact upload. Catches this regression class for both Windows and macOS.
+
+**Status: RESOLVED 2026-05-01 (PR #71).** Two-part fix in the same PR. Part 1: added `_cffi_backend` to `pyinstaller/dbxignore-macos.spec`'s `hiddenimports` list. Part 2 (the broader regression net): added `<binary> --help` smoke tests to both `build` and `build-macos` legs of `.github/workflows/release.yml` after PyInstaller emits and before the artifact upload, so any future analyzer miss in any backend's transitive deps fails CI rather than ships. Cut v0.4.0a2 once merged so the beta tester can retest.
+
+Touches: `pyinstaller/dbxignore-macos.spec`; `.github/workflows/release.yml`.
+
 ---
 
 ## Status
@@ -550,6 +572,10 @@ Six items, all passive (no concrete trigger requires action):
 - **#30** — Windows-aware single binary via `AttachConsole(ATTACH_PARENT_PROCESS)`. Collapses `dbxignore.exe` + `dbxignored.exe` to one. Three-context UX tradeoff (terminal / Task Scheduler / double-click) is load-bearing today; ctypes path is the implementation route. Awaits binary-size or build-time pain signal.
 
 ### Resolved (reverse chronological)
+
+#### 2026-05-01
+
+- **#31** in PR #71 — bundle `_cffi_backend` in macOS PyInstaller spec; smoke-test built binaries before upload on both Windows and macOS build legs.
 
 #### 2026-04-26
 
@@ -594,3 +620,4 @@ How items entered this tracker:
 - **Items 24-25** added 2026-04-25 from a second-look code-review pass post-v0.3.1 (defensive-coding gap missed by the first pass + sloppy duplication in watchdog dispatch).
 - **Items 26-29** added 2026-04-27 from the v0.4 macOS port post-ship. #26 is a preexisting bug surfaced by extraction; #27-29 are deferred macOS-distribution polish (Intel binary, universal2, codesigning) — all noted in the v0.4 spec § "Post-ship backlog candidates" and filed here for visibility.
 - **Item 30** added 2026-04-27 from a v0.4 alpha-test conversation about the rationale for shipping two Windows binaries. The author proposed collapsing them, then walked it back after surfacing the three-context UX tradeoff (terminal / Task Scheduler / double-click) that the duplication addresses. Filed for the eventual `AttachConsole`-based simplification path.
+- **Item 31** added 2026-05-01 from a v0.4.0a1 beta-test failure on macOS arm64 (M2 MacBook Air, Tahoe 26.4) — first time the macOS binary was end-to-end-exercised on a tester's machine. Filed and resolved in the same PR because the regression net (smoke-test built binaries before upload) was the more important half of the fix.

@@ -203,20 +203,22 @@ def _fake_pluginkit(stdout: str = "", side_effect: Exception | None = None):
     return fake
 
 
+_DROPBOX_ACCOUNT_KEYS = ("personal", "business")
+
+
 def _stage_dropbox_info(home: Path, *paths: str) -> None:
     """Write a `~/.dropbox/info.json` under `home` listing the given account paths.
 
-    Matches the shape Dropbox writes: one top-level key per account
-    (`personal`, `business`), each with a `path` field. Tests use the
-    helper to set up multi-account configurations as needed.
+    Matches the shape Dropbox actually writes: one top-level key per account
+    (`personal`, `business`), each with a `path` field. Pass 1 path for a
+    personal-only account, 2 for personal+business. Calling with more than
+    2 paths raises — Dropbox doesn't support more than the two account types.
     """
     info_dir = home / ".dropbox"
     info_dir.mkdir(parents=True, exist_ok=True)
     accounts = {
-        ("personal" if i == 0 else f"business{i}"): {
-            "path": p, "host": 1, "is_team": False
-        }
-        for i, p in enumerate(paths)
+        key: {"path": p, "host": 1, "is_team": False}
+        for key, p in zip(_DROPBOX_ACCOUNT_KEYS, paths, strict=True)
     }
     (info_dir / "info.json").write_text(json.dumps(accounts), encoding="utf-8")
 

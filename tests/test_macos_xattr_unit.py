@@ -223,7 +223,7 @@ def _stage_dropbox_info(home: Path, *paths: str) -> None:
     info_dir.mkdir(parents=True, exist_ok=True)
     accounts = {
         key: {"path": p, "host": 1, "is_team": False}
-        for key, p in zip(_DROPBOX_ACCOUNT_KEYS, paths)
+        for key, p in zip(_DROPBOX_ACCOUNT_KEYS, paths, strict=False)
     }
     (info_dir / "info.json").write_text(json.dumps(accounts), encoding="utf-8")
 

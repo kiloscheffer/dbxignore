@@ -5,17 +5,15 @@ All notable changes to dbxignore are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0a5] — 2026-05-01
+## [0.4.0] — 2026-05-02
 
-Alpha pre-release for beta-tester validation on real macOS hardware. Supersedes `0.4.0a4` with a single but consequential refinement: the macOS sync-mode detection in `_backends/macos_xattr.py` is now **path-primary** (info.json's configured sync path) with **pluginkit-disambiguation** (the framework's user-toggled state).
+First release with macOS support. The beta-tester sign-off path (10-step checklist from the v0.4 spec § "Beta-test workflow") completed against `v0.4.0a5` on 2026-05-02; this release promotes that alpha to final without code changes.
 
-v0.4.0a4 queried PluginKit alone and returned File Provider whenever the extension was registered AND not user-disabled. That conflated two distinct signals: PluginKit registration is a *system-level* fact (does macOS know about `DropboxFileProvider.appex`?), but the *user-level* fact (which mode is *this account* in?) lives in `~/.dropbox/info.json`'s `path` field. A user with Dropbox.app installed who declined the File Provider migration would have an active extension registration AND be syncing in legacy mode from `~/Dropbox/` — v0.4.0a4 wrongly returned File Provider for them, writing the wrong attribute name silently. The bug was caught pre-tester-exposure by reasoning about the signal layers, not by a tester report.
+The alpha cycle iterated through five tags (`a1` through `a5`) as beta-testing exposed each layer of the macOS port. `a1` was yanked from PyPI immediately after a CI publish-gating bug (PR #62 fixed). `a2` was a docs-only roll. `a3` shipped the cffi-bundling fix that finally let the macOS binary launch (PR #71). `a4` shipped the launchd-plist invocation fix that let the daemon actually start (PR #76) plus the first File Provider auto-detection (PR #77). `a5` shipped the path-primary mode-detection refinement (PR #79) that closed a system-level-vs-user-level signal-conflation gap caught by reasoning about the design — pre-tester-exposure. v0.4.0 is `a5`'s code, validated end-to-end on real macOS hardware (Tahoe 26.4 / Dropbox 250.4, File Provider mode), promoted to final.
 
-v0.4.0a5's detection: read info.json paths (multi-account aware), query pluginkit for extension state, combine — extension disabled → legacy regardless of path; any path under `~/Library/CloudStorage/` → File Provider; path under `/Volumes/<Drive>/` + extension allowed → File Provider (external-drive eligibility-gated case per [Dropbox docs](https://help.dropbox.com/installs/fix-domain-conflict-on-mac)); otherwise → legacy. PR #79 ships the corrected logic alongside 11 detection-path tests covering the full case matrix.
+The v0.4 ship cycle's headline behavior: dbxignore's macOS xattr backend auto-detects which Dropbox sync mode is active for each account (legacy ↔ `~/Dropbox/`, File Provider ↔ `~/Library/CloudStorage/<vendor>/`, plus an eligibility-gated external-drive variant) and writes the matching attribute name (`com.dropbox.ignored` or `com.apple.fileprovider.ignore#P` per [Dropbox docs](https://help.dropbox.com/sync/ignored-files)). Detection is path-primary (info.json's `path` field is the user-level mode signal) with pluginkit-disambiguation (Apple's PluginKit registry tells us about user-toggled extension state). Result is cached at module-load time so the per-file reconcile loop pays the detection cost exactly once per process.
 
-Also supersedes `0.4.0a3` (launchd plist + the original File Provider attribute fix), `0.4.0a2` (macOS bundling regression — `_cffi_backend`), and the earlier-yanked `0.4.0a1`. Promotes to `[0.4.0]` once the beta tester signs off on the 10-step checklist from the v0.4 spec § "Beta-test workflow".
-
-Brief summary of what's landed across PRs #53 – #79:
+Brief summary of what's landed across PRs #53 – #80:
 
 ### Added — macOS support
 
@@ -55,7 +53,7 @@ Brief summary of what's landed across PRs #53 – #79:
 - **CLAUDE.md** gains four new gotchas covering: the `xattr` package's `symlink=True` API surface (NOT `options=XATTR_NOFOLLOW` despite what Apple's libc docs suggest); macOS-only test pattern; the symlink-marking divergence between Linux/macOS/Windows; modern launchctl bootstrap with the GUI-domain prerequisite; `_common.detect_invocation` shared module + the import-site monkeypatching gotcha.
 - **`docs/release-notes/v0.4.0.md`** — hand-crafted GitHub Release body for promotion via `gh release edit v0.4.0 --notes-file ...`.
 
-### Caveats (will appear in 0.4.0 release notes)
+### Caveats
 
 - **No Intel Mac binary in v0.4.** Pre-built binaries are arm64 only; Intel users install via PyPI. If demand surfaces, an x86_64 build leg will land in a point release.
 - **Beta-validated, not field-validated at scale.** v0.4.0 is validated by a single beta tester on real hardware before tagging, but lacks the multi-user shake-out that Windows and Linux have accumulated. File issues for anything unexpected.

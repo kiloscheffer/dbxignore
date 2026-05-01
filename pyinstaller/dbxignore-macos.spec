@@ -25,7 +25,19 @@ def _analysis():
         # FSEvents is the macOS watchdog backend. PyInstaller's analyzer
         # doesn't see the dynamic import via watchdog's platform-detection
         # layer, so force the bundle.
-        hiddenimports=["watchdog.observers.fsevents"],
+        #
+        # `_cffi_backend` is a top-level C extension that ships alongside
+        # `cffi` (sibling on disk, not a submodule). The macOS xattr backend
+        # imports `xattr` → `cffi` → `_cffi_backend`; the contrib hook for
+        # cffi normally bundles it, but the v0.4.0a1 macOS build shipped
+        # without it ("ModuleNotFoundError: No module named '_cffi_backend'"
+        # on first launch). Listing it explicitly belts-and-suspenders the
+        # contrib hook so a future version drift can't silently re-introduce
+        # the regression.
+        hiddenimports=[
+            "watchdog.observers.fsevents",
+            "_cffi_backend",
+        ],
         hookspath=[],
         hooksconfig={},
         runtime_hooks=[],

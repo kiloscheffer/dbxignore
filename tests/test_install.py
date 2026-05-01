@@ -25,12 +25,51 @@ def test_build_xml_uses_pythonw_when_source_install(tmp_path):
     assert "-m dbxignore daemon" in xml
 
 
-def test_detect_invocation_returns_frozen_mode(monkeypatch):
+def test_detect_invocation_returns_frozen_mode_when_already_dbxignored(monkeypatch, tmp_path):
+    """User invoked `dbxignored.exe install` directly: sys.executable IS the daemon shim."""
+    daemon_exe = tmp_path / "dbxignored.exe"
+    daemon_exe.write_text("")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", r"C:\bin\dbxignored.exe")
+    monkeypatch.setattr(sys, "executable", str(daemon_exe))
     exe, args = install.detect_invocation()
-    assert exe == Path(r"C:\bin\dbxignored.exe")
+    assert exe == daemon_exe
     assert args == ""
+
+
+def test_detect_invocation_finds_dbxignored_sibling_from_dbxignore(monkeypatch, tmp_path):
+    """User invoked `dbxignore.exe install` (frozen): resolve to `dbxignored.exe` sibling.
+
+    Common case — both PyInstaller binaries ship as a paired set, the user runs
+    the long-form CLI for install, and Task Scheduler needs the daemon-shim
+    binary as its `<Command>` invocation target. Mirrors the macOS/Linux path
+    in `tests/test_install_common.py`.
+    """
+    cli_exe = tmp_path / "dbxignore.exe"
+    cli_exe.write_text("")
+    daemon_exe = tmp_path / "dbxignored.exe"
+    daemon_exe.write_text("")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(cli_exe))
+    exe, args = install.detect_invocation()
+    assert exe == daemon_exe
+    assert args == ""
+
+
+def test_detect_invocation_falls_back_to_daemon_subcommand_when_sibling_missing(
+    monkeypatch, tmp_path
+):
+    """No `dbxignored.exe` sibling: invoke ourselves with the `daemon` subcommand.
+
+    Defensive case — PyInstaller specs always emit both binaries, so this
+    fallback is for unusual deployments only.
+    """
+    cli_exe = tmp_path / "dbxignore.exe"
+    cli_exe.write_text("")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(cli_exe))
+    exe, args = install.detect_invocation()
+    assert exe == cli_exe
+    assert args == "daemon"
 
 
 def test_detect_invocation_returns_source_mode(monkeypatch):

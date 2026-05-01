@@ -15,9 +15,23 @@ TASK_NAME = "dbxignore"
 
 
 def detect_invocation() -> tuple[Path, str]:
-    """Return (executable, arguments) to run the daemon in the current install."""
+    """Return (executable, arguments) to run the daemon in the current install.
+
+    Frozen PyInstaller bundle: prefers the `dbxignored.exe` sibling that
+    ships alongside `dbxignore.exe` (both emitted from the same PyInstaller
+    Analysis), falling back to `(sys.executable, "daemon")` only if the
+    sibling is somehow absent. Mirrors the macOS/Linux frozen-branch logic
+    in `install/_common.py:detect_invocation` — see that docstring for the
+    detailed resolution rules and the v0.4 beta-tester rationale.
+    """
     if getattr(sys, "frozen", False):
-        return Path(sys.executable), ""
+        exe = Path(sys.executable)
+        if exe.name == "dbxignored.exe":
+            return exe, ""
+        sibling = exe.parent / "dbxignored.exe"
+        if sibling.exists():
+            return sibling, ""
+        return exe, "daemon"
     exe = Path(sys.executable)
     pythonw = exe.with_name("pythonw.exe")
     return pythonw, "-m dbxignore daemon"

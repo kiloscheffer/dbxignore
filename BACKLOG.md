@@ -660,6 +660,41 @@ Per the project's flake-handling convention (item #14's note: "fix only after re
 
 Touches: `tests/test_daemon_smoke.py` (the failing test); maybe `src/dbxignore/daemon.py` if the diagnosis surfaces a real bug.
 
+## 35. macOS launchd plist + Windows Task Scheduler XML invoke wrong binary on frozen installs
+
+**Severity: HIGH.** On macOS PyInstaller installs the daemon never starts; on Windows PyInstaller installs the same. Latent on Linux installs (which don't ship a frozen binary).
+
+**Symptom.** `dbxignore install` writes a launchd plist (macOS) / Task Scheduler XML (Windows) whose invocation target is the long-form `dbxignore` binary with no subcommand. Service manager execs the binary on every spawn, Click sees the group invoked without subcommand, prints help, exits with status 2, KeepAlive retries on the same loop. The daemon never reaches `daemon_mod.run()`.
+
+The v0.4 macOS beta-tester's `launchctl print gui/501/com.kiloscheffer.dbxignore` 2026-05-01 showed exactly this:
+
+```
+program = /usr/local/bin/dbxignore
+arguments = {
+    /usr/local/bin/dbxignore
+}
+last exit code = 2
+runs = 4
+```
+
+`/usr/local/bin/dbxignore` is the long-form CLI; the daemon shim is `/usr/local/bin/dbxignored` (a sibling binary that ships in the same Mach-O bundle release). The plist invoked the wrong binary.
+
+**Root cause.** `install/_common.py:detect_invocation`'s frozen branch returned `(Path(sys.executable), "")`. When the user runs `dbxignore install`, `sys.executable` is the `dbxignore` binary they invoked, not the `dbxignored` daemon shim. Empty args mean no subcommand to dispatch. Same shape in `install/windows_task.py:detect_invocation`'s frozen branch — Windows PyInstaller installs hit the same bug structurally, even though Andrea's testing was on macOS.
+
+Linux escapes the bug because Linux has no PyInstaller spec — Linux installs always go through the non-frozen branch, which does `shutil.which("dbxignored")` and finds the entry-point shim. That's the architecture-as-designed: the daemon-shim binary IS the service-manager target. The frozen branches were the asymmetric outlier.
+
+**Fix.** Replace the frozen branch with a three-step resolution:
+
+1. If `sys.executable.name` is already `dbxignored` (Linux/macOS) or `dbxignored.exe` (Windows) — user invoked `dbxignored install` directly — return it as-is with empty args.
+2. Else look for a `dbxignored` sibling next to `sys.executable` (common case — user invoked `dbxignore install` from the long-form binary). Both binaries ship as a paired set from the same PyInstaller Analysis, so the sibling is reliably present. Return the sibling with empty args.
+3. Else fall through to `(sys.executable, "daemon")` so the service manager invokes the long-form binary with the `daemon` subcommand. Defensive — the PyInstaller specs always emit both binaries.
+
+Same shape in both `install/_common.py` and `install/windows_task.py`'s frozen branches.
+
+**Status: RESOLVED 2026-05-01 (PR #76).** Fix landed alongside three new tests covering each resolution arm (sibling-already-dbxignored, sibling-found-from-dbxignore, sibling-missing-fallback) on both macOS/Linux and Windows code paths. Total scope: ~50 lines code + ~50 lines tests across `install/_common.py`, `install/windows_task.py`, `tests/test_install_common.py`, `tests/test_install.py`. Andrea retests via v0.4.0a4 — `launchctl print` should now show `program = /usr/local/bin/dbxignored` (the daemon shim, not the long-form CLI), and the daemon should actually start.
+
+Touches: `src/dbxignore/install/_common.py`; `src/dbxignore/install/windows_task.py`; `tests/test_install_common.py`; `tests/test_install.py`.
+
 ---
 
 ## Status
@@ -682,6 +717,7 @@ Nine items. Six are passive (no concrete trigger requires action); item #32 has 
 
 #### 2026-05-01
 
+- **#35** in PR #76 — macOS launchd plist + Windows Task Scheduler XML now invoke the `dbxignored` sibling binary (with empty args) rather than the long-form `dbxignore` binary (which exits with status 2 on no-subcommand). Frozen branches of `_common.detect_invocation` + `windows_task.detect_invocation` now resolve via a three-step "self-as-dbxignored / sibling-search / fallback-to-daemon-subcommand" rule.
 - **#31** in PR #71 — bundle `_cffi_backend` in macOS PyInstaller spec; smoke-test built binaries before upload on both Windows and macOS build legs.
 
 #### 2026-04-26
@@ -731,3 +767,4 @@ How items entered this tracker:
 - **Item 32** added 2026-05-01 from a CLI surface review during the v0.4.0a3 ship (post-PR #71). Three small UX gaps surfaced via a `dbxignored --help` curiosity from the maintainer + the v0.4 beta tester's earlier `dbxignore --version` attempt. All three traced back to the `daemon_main` argv-rewrite shim; consolidated as one item rather than three because the fix collapses to a single ~15-line CLI rewrite.
 - **Item 33** added 2026-05-01 from continued v0.4.0a3 beta-testing on the same macOS machine — once the macOS binary actually launched (post-PR #71), the next layer of testing surfaced that the tester's Dropbox install is in File Provider mode (the modern default) rather than legacy mode, and the macOS xattr backend is hardcoded to the legacy attribute name. Documented `fileproviderctl dump` output + `~/.dropbox/info.json` content from the tester confirmed the mode and narrowed the architectural scope (root discovery is unaffected; only the xattr-backend layer needs work). Companion docs-only PR ships the README disambiguation independently of the architectural decision.
 - **Item 34** added 2026-05-01 from a CI flake observed during PR #74's post-rebase run on `windows-latest`. Same test that prompted item #18 (originally filed 2026-04-24), resolved in PR #40 by widening the `_poll_until` timeout from 3.0s to 5.0s. Filed as a separate item rather than re-opening #18 because the Resolved-section history is reverse-chronological-only and re-opening would muddy that contract; #34's body explicitly references #18's resolution path and prior timeline.
+- **Item 35** added 2026-05-01 from the same v0.4.0a3 macOS beta-test session — `launchctl print` revealed the launchd plist invoked the long-form `dbxignore` binary with no subcommand, hitting Click's "no subcommand → exit 2" arm and never reaching `daemon_mod.run()`. Filed and resolved in the same PR because the fix is small (~50 lines), the regression class is well-bounded (the frozen branches of `detect_invocation` in both `_common.py` and `windows_task.py`), and the tracker entry's value is mostly historical/educational rather than awaiting-action. Linux was unaffected — Linux installs don't ship a frozen binary, so they reached the non-frozen branch which already routed correctly through `shutil.which("dbxignored")`.

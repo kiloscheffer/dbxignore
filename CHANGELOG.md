@@ -5,11 +5,11 @@ All notable changes to dbxignore are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0a2] — 2026-04-27
+## [0.4.0a3] — 2026-05-01
 
-Alpha pre-release for beta-tester validation on real macOS hardware. Supersedes the yanked `0.4.0a1`, which was uploaded to PyPI inadvertently because the prior `publish-pypi` `if:` clause used a SemVer-style hyphen check (`-a`) that doesn't match PEP 440 alphas (`0.4.0a1` has no hyphen). PR #62 added a proper PEP 440 detector via a new `classify-tag` job; pre-release tags now skip `publish-pypi` entirely, and the GitHub Release `prerelease:` flag sources from the same detector. Promotes to `[0.4.0]` once the beta tester signs off on the 10-step checklist from the v0.4 spec § "Beta-test workflow".
+Alpha pre-release for beta-tester validation on real macOS hardware. Supersedes `0.4.0a2`, whose macOS arm64 binary failed at first launch with `ModuleNotFoundError: No module named '_cffi_backend'` — the `pyinstaller-hooks-contrib` `cffi` hook didn't bundle the `_cffi_backend` C extension on that build (top-level sibling of the `cffi` package, slips past PyInstaller's static AST trace). PR #71 lists `_cffi_backend` explicitly in the macOS spec's `hiddenimports` and adds `<binary> --help` smoke tests on both `build` and `build-macos` legs of the release workflow before the artifact upload, so any future analyzer miss in any backend's transitive deps fails CI rather than ships. Linux + Windows binaries unaffected (Linux uses stdlib `os.{get,set}xattr`; Windows uses raw NTFS ADS opens — neither imports `cffi`). Also supersedes the earlier-yanked `0.4.0a1` (the PyPI-publish-on-alpha misfire fixed in PR #62). Promotes to `[0.4.0]` once the beta tester signs off on the 10-step checklist from the v0.4 spec § "Beta-test workflow".
 
-Brief summary of what's landed across PRs #53 – #66:
+Brief summary of what's landed across PRs #53 – #71:
 
 ### Added — macOS support
 
@@ -31,6 +31,11 @@ Brief summary of what's landed across PRs #53 – #66:
 
 - **Per-machine Dropbox installs are now discovered.** `roots.discover()` checks both `%APPDATA%\Dropbox\info.json` (per-user installer) and `%LOCALAPPDATA%\Dropbox\info.json` (per-machine "install for all users") on Windows. Per-machine installs previously surfaced as "No Dropbox roots found" and required `DBXIGNORE_ROOT` as a manual workaround. `_info_json_path()` (singular, returning `Path | None`) refactored to `_info_json_paths()` (plural, returning `list[Path]`) — Windows arm yields up to two candidates in priority order; Linux/macOS arm unchanged. `discover()` iterates and uses the first existing file. Surfaced during v0.4 alpha testing on a per-machine Windows install.
 - **`dbxignore install` now starts the daemon immediately on Windows.** Previously the Task Scheduler entry was registered but only kicked at the next user logon; users saw "Installed scheduled task" but `dbxignore status` reported no daemon until they logged out and back in. `install_task()` now runs `schtasks /Run /TN dbxignore` after `/Create` and treats `/Run` failures as non-fatal WARNINGs (the task is registered and will start at next logon regardless). Aligns Windows with Linux (`systemctl --user enable --now`) and macOS (`launchctl bootstrap` + `RunAtLoad: true`), both of which already started during install.
+
+### Fixed — macOS binary bundling
+
+- **macOS arm64 binary now bundles `_cffi_backend`.** v0.4.0a1 + v0.4.0a2 both shipped a Mach-O binary that failed at first launch with `ModuleNotFoundError: No module named '_cffi_backend'`. The xattr backend's import chain (`_backends/macos_xattr.py` → `xattr` → `cffi` → `_cffi_backend`) reaches a top-level C extension that ships *alongside* the `cffi` package on disk, not as a submodule — PyInstaller's static AST trace doesn't follow the sibling. The contrib hook for cffi normally adds it to hidden imports; on the v0.4.0a1/a2 builds it didn't fire (likely PyInstaller version drift, no version pin in the workflow's `--with pyinstaller` invocation). `pyinstaller/dbxignore-macos.spec` now lists `_cffi_backend` explicitly alongside the existing `watchdog.observers.fsevents` entry. Surfaced by the beta tester on M2 MacBook Air, macOS Tahoe 26.4 (`dbxignore --version`). Linux + Windows binaries unaffected.
+- **Smoke-test step on both `build` and `build-macos` legs of `release.yml`.** After PyInstaller emits and before the artifact-upload step, `<binary> --help` runs the full import chain (the cffi class of regression fires at import time, before click parses argv). Catches the regression class for any future analyzer miss in any backend's transitive deps; the explicit `_cffi_backend` hidden import is the prior bullet's defense for the specific shape, the smoke test is the broader regression net.
 
 ### Documentation
 

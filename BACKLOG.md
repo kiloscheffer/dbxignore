@@ -609,13 +609,46 @@ A v0.4.0a3 ship-time CLI surface review surfaced three small gaps in the user-fa
 
 Touches: `src/dbxignore/cli.py` (`daemon_main` rewrite + `--version` decorator on `main`); maybe a small CLI smoke test under `tests/` confirming `--version` and `dbxignored --help` produce the expected strings.
 
+## 33. macOS File Provider mode unsupported — wrong xattr name written
+
+**Severity: HIGH.** Affects all macOS users on modern Dropbox installs (File Provider has been the default since 2023; modal v0.4 macOS user is on it).
+
+**Symptom.** On macOS, Dropbox now ships in two distinct sync modes:
+
+- **Legacy mode** — Dropbox folder at `~/Dropbox`, ignored files marked via the `com.dropbox.ignored` extended attribute. dbxignore v0.4 supports this.
+- **File Provider mode** — Dropbox folder at `~/Library/CloudStorage/Dropbox/`, ignored files marked via the `com.apple.fileprovider.ignore#P` extended attribute (per [Dropbox's docs](https://help.dropbox.com/sync/ignored-files)). dbxignore v0.4 does NOT support this.
+
+The macOS xattr backend (`src/dbxignore/_backends/macos_xattr.py:29`) hardcodes `ATTR_NAME = "com.dropbox.ignored"`. On a File Provider install, every successful write of that attribute is silently ineffective — Dropbox's File Provider extension doesn't watch for it, and the file gets synced regardless of the marker. The user sees a clean install, no errors in logs, and the daemon happily reconciling rules — but the markers don't actually cause Dropbox to ignore anything. Pure silent-failure mode, exactly the kind v0.4's other defensive arms (`reconcile._reconcile_path`'s OSError fallback, `state._read_at`'s graceful-failure shape) were designed to avoid.
+
+Surfaced 2026-05-01 via v0.4 beta-tester confusion: `dbxignore apply` reported `marked=0 cleared=0 errors=0 duration=0.00s` on a File Provider machine. Two compounding causes — the tester created `.dropboxignore` and `build/` in `~/Dropbox` (the legacy folder, which still exists as a leftover on File Provider installs but isn't the active sync location), AND even with the right folder the xattr name would have been wrong. The first compounding cause is a documentation gap addressed by the docs-only PR shipping alongside this filing; the second is the architectural issue this item tracks.
+
+**What's NOT broken (narrows the architectural scope).** Root discovery works correctly on File Provider installs. `~/.dropbox/info.json` is still written by Dropbox on File Provider mode (presumably for backward compat with tooling that reads it), and the `personal.path` field correctly points at `~/Library/CloudStorage/Dropbox/`. The beta tester's info.json was verified to contain this exact value, so `roots.discover()` already returns the right root on File Provider installs without changes. The fix is bounded to the xattr backend layer, not the discovery layer.
+
+**Fix candidates:**
+
+- **(A) Defer File Provider to a future release; ship v0.4 with a documented limitation.** Update README to call out that File Provider mode is unsupported (already done in the docs PR shipping alongside this filing). Track full File Provider support as the v0.5 (or later) headline feature with its own spec, test matrix, and beta cycle. Lowest-risk path to an honest v0.4 release. Cost: most current macOS users get an "unsupported" message; v0.4's "first macOS release" lands as effectively legacy-mode-only.
+- **(B) Absorb File Provider support into v0.4 before tagging final.** Now-narrower scope (xattr backend layer only): `_backends/macos_xattr.py` gains a `_detect_attr_name()` helper that probes for File Provider mode (presence of `~/Library/CloudStorage/Dropbox/` is the simplest signal; `fileproviderctl dump | grep -q com.getdropbox.dropbox.fileprovider` is more authoritative but requires subprocess overhead at module-load time). Caches the result on first call. The three exported functions (`is_ignored`, `set_ignored`, `clear_ignored`) gain a one-attr-lookup-per-call indirection. Tests grow a `macos_fileprovider_only` marker; existing macOS unit tests parameterize across both modes via fixture. README's per-mode verification instructions stay; the "not yet supported" callout becomes "supported on both modes since v0.4." Estimated scope: ~30-50 lines code, ~50 lines tests, ~10 lines README delta. 1-2 day implementation including beta-tester roundtrip.
+- **(C) Ship v0.4 with the bug, file as critical post-ship.** Worst option — silently produces "everything looks fine" output on File Provider installs while doing nothing useful. Don't pick.
+
+**Open implementation questions** (relevant to (B)):
+
+- Does `xattr.setxattr(path, "com.apple.fileprovider.ignore#P", b"1", symlink=True)` actually take effect, or does the File Provider sandbox model require special entitlements / a different code path? Apple's File Provider framework is more rigid than the legacy xattr API. Needs an end-to-end test on a File Provider machine before (B) can ship — Andrea's machine is the available validation surface.
+- Are there edge cases around stub/placeholder files (File Provider downloads files on-demand by default; an unmaterialized "stub" may behave differently for xattr writes)? Ships with the same beta-test cycle.
+- Does the `#P` suffix attribute need a paired `#N` (per-session, non-persistent) variant for any of the operations we do, or is `#P` alone sufficient? Apple's docs describe the convention but the exact semantics for ignore markers aren't stated explicitly.
+
+**Recommendation:** (A) for v0.4 final; (B) for the next macOS feature release. Reasoning: the v0.4 spec was authored against legacy mode; testing was done against legacy mode; the daemon installer and rules engine were validated against legacy mode. v0.5 (or whatever the next milestone is named) is the right place for File Provider work — separate spec, separate test surface, separate mode-detection logic — rather than rushing it into v0.4's tail end. (B) is genuinely defensible if making v0.4 useful to the modal macOS user matters more than the cycle-time delay; it's a real cost-vs-value call rather than a technical one.
+
+**Status section note:** the docs-only fix shipping alongside this filing (`chore/macos-fileprovider-docs` branch) updates the README to disambiguate the two modes and tells File Provider users to wait for File Provider support. That's an immediate-shipping piece independent of the (A)-vs-(B) decision.
+
+Touches: `src/dbxignore/_backends/macos_xattr.py` (mode detection + per-mode attribute name); `tests/` (new `macos_fileprovider_only` marker + parameterization); `README.md` (per-mode verification instructions, when (B) ships); `CLAUDE.md` (gotchas section gains a File Provider entry).
+
 ---
 
 ## Status
 
 ### Open
 
-Seven items. Six are passive (no concrete trigger requires action); item #32 has one fired trigger (a beta tester typed `dbxignore --version` and got "no such option") but isn't blocking.
+Eight items. Six are passive (no concrete trigger requires action); item #32 has one fired trigger (a beta tester typed `dbxignore --version` and got "no such option") but isn't blocking; item #33 is HIGH severity (affects most macOS users with modern Dropbox installs).
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
@@ -624,6 +657,7 @@ Seven items. Six are passive (no concrete trigger requires action); item #32 has
 - **#29** — Codesigning + notarization for macOS binaries. Smooths Gatekeeper UX but requires $99/yr Apple Developer membership. Awaits concrete pain signal.
 - **#30** — Windows-aware single binary via `AttachConsole(ATTACH_PARENT_PROCESS)`. Collapses `dbxignore.exe` + `dbxignored.exe` to one. Three-context UX tradeoff (terminal / Task Scheduler / double-click) is load-bearing today; ctypes path is the implementation route. Awaits binary-size or build-time pain signal.
 - **#32** — CLI polish: missing `--version`, unreachable `--verbose` from `dbxignored`, and bogus `Usage: dbxignored daemon` in `dbxignored --help`. All three trace to the `daemon_main` argv-rewrite shim; the consolidated fix is replacing the shim with a standalone Click command and adding `@click.version_option` to both. Sequence-dependent on #30 — fix #32 first if both are scheduled. Awaits CLI-touching change to bundle with.
+- **#33** — **HIGH SEVERITY.** macOS File Provider mode unsupported — the macOS xattr backend writes `com.dropbox.ignored`, but File Provider Dropbox (the default since 2023) recognizes `com.apple.fileprovider.ignore#P` instead. Markers silently no-op on File Provider installs. Root discovery is unaffected (Dropbox keeps writing the legacy `info.json` with the new path). Architectural fix is bounded to the xattr backend layer (~30-50 line scope). Scope decision pending: (A) defer to v0.5 with documented limitation [recommended for v0.4 final], or (B) absorb into v0.4 before final tag.
 
 ### Resolved (reverse chronological)
 
@@ -676,3 +710,4 @@ How items entered this tracker:
 - **Item 30** added 2026-04-27 from a v0.4 alpha-test conversation about the rationale for shipping two Windows binaries. The author proposed collapsing them, then walked it back after surfacing the three-context UX tradeoff (terminal / Task Scheduler / double-click) that the duplication addresses. Filed for the eventual `AttachConsole`-based simplification path.
 - **Item 31** added 2026-05-01 from a v0.4.0a1 beta-test failure on macOS arm64 (M2 MacBook Air, Tahoe 26.4) — first time the macOS binary was end-to-end-exercised on a tester's machine. Filed and resolved in the same PR because the regression net (smoke-test built binaries before upload) was the more important half of the fix.
 - **Item 32** added 2026-05-01 from a CLI surface review during the v0.4.0a3 ship (post-PR #71). Three small UX gaps surfaced via a `dbxignored --help` curiosity from the maintainer + the v0.4 beta tester's earlier `dbxignore --version` attempt. All three traced back to the `daemon_main` argv-rewrite shim; consolidated as one item rather than three because the fix collapses to a single ~15-line CLI rewrite.
+- **Item 33** added 2026-05-01 from continued v0.4.0a3 beta-testing on the same macOS machine — once the macOS binary actually launched (post-PR #71), the next layer of testing surfaced that the tester's Dropbox install is in File Provider mode (the modern default) rather than legacy mode, and the macOS xattr backend is hardcoded to the legacy attribute name. Documented `fileproviderctl dump` output + `~/.dropbox/info.json` content from the tester confirmed the mode and narrowed the architectural scope (root discovery is unaffected; only the xattr-backend layer needs work). Companion docs-only PR ships the README disambiguation independently of the architectural decision.

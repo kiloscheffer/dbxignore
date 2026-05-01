@@ -33,6 +33,18 @@ jobs:
         # ephemerally for this run rather than declaring it in pyproject.toml.
         run: uv run --with pyinstaller pyinstaller pyinstaller/dbxignore.spec
 
+      - name: Smoke test Windows binaries
+        # `--help` is enough to fail-fast on missing-bundled-module regressions:
+        # the import chain runs to completion before click parses argv, so any
+        # PyInstaller analyzer miss (the v0.4.0a1 macOS `_cffi_backend` shape)
+        # surfaces here rather than fails-on-first-tester. Bash for parity with
+        # the macOS leg; Git Bash ships on `windows-latest`.
+        shell: bash
+        run: |
+          set -e
+          ./dist/dbxignore.exe --help
+          ./dist/dbxignored.exe --help
+
       - name: Upload dist artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -59,6 +71,18 @@ jobs:
 
       - name: Build macOS binaries
         run: uv run --with pyinstaller pyinstaller pyinstaller/dbxignore-macos.spec
+
+      - name: Smoke test macOS binaries
+        # `--help` exercises the full import chain (cli → markers →
+        # _backends/macos_xattr → xattr → cffi → _cffi_backend) without
+        # starting the daemon. Catches the v0.4.0a1 missing-`_cffi_backend`
+        # regression class before the artifact ships. PyInstaller sets +x on
+        # output binaries, so no chmod needed.
+        shell: bash
+        run: |
+          set -e
+          ./dist/dbxignore --help
+          ./dist/dbxignored --help
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v7

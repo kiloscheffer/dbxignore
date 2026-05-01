@@ -552,7 +552,7 @@ CI didn't catch it because `build-macos` uploaded the artifact without ever exec
 
 Mitigation (broader): smoke-test the built binaries in the release workflow's build legs before the artifact upload. Catches this regression class for both Windows and macOS.
 
-**Status: RESOLVED 2026-05-01 (PR #71).** Two-part fix in the same PR. Part 1: added `_cffi_backend` to `pyinstaller/dbxignore-macos.spec`'s `hiddenimports` list. Part 2 (the broader regression net): added `<binary> --help` smoke tests to both `build` and `build-macos` legs of `.github/workflows/release.yml` after PyInstaller emits and before the artifact upload, so any future analyzer miss in any backend's transitive deps fails CI rather than ships. Cut v0.4.0a2 once merged so the beta tester can retest.
+**Status: RESOLVED 2026-05-01 (PR #71).** Two-part fix in the same PR. Part 1: added `_cffi_backend` to `pyinstaller/dbxignore-macos.spec`'s `hiddenimports` list. Part 2 (the broader regression net): added `<binary> --help` smoke tests to both `build` and `build-macos` legs of `.github/workflows/release.yml` after PyInstaller emits and before the artifact upload, so any future analyzer miss in any backend's transitive deps fails CI rather than ships. Tag-prep was authored against the wrong target version (v0.4.0a2 already existed from PR #63); shipped instead as `v0.4.0a3` so the beta tester can retest.
 
 Touches: `pyinstaller/dbxignore-macos.spec`; `.github/workflows/release.yml`.
 

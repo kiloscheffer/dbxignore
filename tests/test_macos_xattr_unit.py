@@ -214,11 +214,16 @@ def _stage_dropbox_info(home: Path, *paths: str) -> None:
     personal-only account, 2 for personal+business. Calling with more than
     2 paths raises — Dropbox doesn't support more than the two account types.
     """
+    if len(paths) > len(_DROPBOX_ACCOUNT_KEYS):
+        raise ValueError(
+            f"Dropbox info.json supports at most {len(_DROPBOX_ACCOUNT_KEYS)} "
+            f"accounts; got {len(paths)}"
+        )
     info_dir = home / ".dropbox"
     info_dir.mkdir(parents=True, exist_ok=True)
     accounts = {
         key: {"path": p, "host": 1, "is_team": False}
-        for key, p in zip(_DROPBOX_ACCOUNT_KEYS, paths, strict=True)
+        for key, p in zip(_DROPBOX_ACCOUNT_KEYS, paths)
     }
     (info_dir / "info.json").write_text(json.dumps(accounts), encoding="utf-8")
 

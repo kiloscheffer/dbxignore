@@ -80,19 +80,22 @@ Notes:
 
 ## Install (macOS)
 
-dbxignore on macOS supports Dropbox's **legacy sync mode** — Dropbox folder at `~/Dropbox`, ignored files marked via the `com.dropbox.ignored` extended attribute. The daemon registers as a launchd User Agent.
+dbxignore on macOS supports both Dropbox sync modes and auto-detects which one is active:
 
-**File Provider mode is not yet supported.** Modern Dropbox installs (default since 2023) sync via Apple's File Provider extension from `~/Library/CloudStorage/Dropbox/` and recognize a different ignore attribute, `com.apple.fileprovider.ignore#P`, per [Dropbox's docs](https://help.dropbox.com/sync/ignored-files). Setting `com.dropbox.ignored` on a File Provider install has no effect — Dropbox's File Provider extension doesn't watch for it. dbxignore will install and run without errors but won't actually cause Dropbox to ignore anything. File Provider support is tracked for a future release.
+- **Legacy mode** — Dropbox folder at `~/Dropbox`, ignored files marked via the `com.dropbox.ignored` extended attribute. Synced by Dropbox's own daemon.
+- **File Provider mode** — Dropbox folder at `~/Library/CloudStorage/Dropbox/`, ignored files marked via the `com.apple.fileprovider.ignore#P` extended attribute (per [Dropbox's docs](https://help.dropbox.com/sync/ignored-files)). Synced by Apple's File Provider extension; default for installs since 2023.
 
-Check your sync mode before installing:
+The macOS xattr backend detects File Provider mode by the presence of `~/Library/CloudStorage/Dropbox/` at module-load time and selects the matching attribute name. No user action required — the daemon picks the right one automatically. The daemon registers as a launchd User Agent in either case.
+
+If you want to verify your mode manually:
 
 ```bash
 fileproviderctl dump 2>&1 | grep -q "com.getdropbox.dropbox.fileprovider" \
-    && echo "File Provider — not yet supported" \
-    || echo "Legacy — supported"
+    && echo "File Provider mode" \
+    || echo "Legacy mode"
 ```
 
-If you're on legacy mode, continue:
+Install:
 
 ```bash
 pip install dbxignore                # or: uv tool install dbxignore
@@ -139,7 +142,7 @@ Files written:
 
 Notes:
 - A symlink matched by a `.dropboxignore` rule is marked on the **link itself**, not its target. macOS allows xattrs on symlinks; Linux refuses with `EPERM` and emits a WARNING. So on macOS the marker lands silently and successfully — matching the design intent better than the Linux behavior.
-- macOS support is new in v0.4 and ships with legacy-mode Dropbox coverage only — File Provider support is tracked for a future release (see the compatibility note at the top of this section). If you hit anything unexpected on a legacy-mode install, please file an issue.
+- macOS support is new in v0.4 and covers both Dropbox sync modes (legacy and File Provider — auto-detected at module-load time; see the compatibility note at the top of this section). If you hit anything unexpected, please file an issue.
 
 ## Install (.exe)
 
@@ -153,7 +156,7 @@ Notes:
 |----------|-----------------------------------|---------------------------------|--------|
 | Windows 10 / 11 | NTFS Alternate Data Streams | Task Scheduler (user task)      | yes (since v0.1) |
 | Linux (Ubuntu 22.04 / 24.04 + most modern distros with systemd user session) | `user.com.dropbox.ignored` xattr | systemd user unit | yes (since v0.2) |
-| macOS (Apple Silicon; Intel via PyPI) | `com.dropbox.ignored` xattr (legacy Dropbox sync mode only — File Provider tracked for a future release) | launchd User Agent | new in v0.4 — please report issues |
+| macOS (Apple Silicon; Intel via PyPI) | `com.dropbox.ignored` xattr (legacy mode) or `com.apple.fileprovider.ignore#P` (File Provider mode — default since 2023; auto-detected) | launchd User Agent | new in v0.4 — please report issues |
 
 ## `.dropboxignore` syntax
 

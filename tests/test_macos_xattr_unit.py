@@ -9,6 +9,7 @@ real extended attributes.
 from __future__ import annotations
 
 import errno
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -190,8 +191,8 @@ def _fake_pluginkit(stdout: str = "", side_effect: Exception | None = None):
 
     Returns a function suitable for `monkeypatch.setattr("subprocess.run", ...)`.
     If `side_effect` is given, the fake raises it instead of returning a result —
-    used to test the fallback paths (FileNotFoundError on non-macOS hosts,
-    TimeoutExpired on a hung pluginkit).
+    used to test the "unknown" pluginkit state (FileNotFoundError on non-macOS
+    hosts, TimeoutExpired on a hung pluginkit).
     """
     def fake(args, **kwargs):
         if side_effect is not None:
@@ -202,110 +203,254 @@ def _fake_pluginkit(stdout: str = "", side_effect: Exception | None = None):
     return fake
 
 
-# ---- Primary detection path (pluginkit registry query) ----------------------
+def _stage_dropbox_info(home: Path, *paths: str) -> None:
+    """Write a `~/.dropbox/info.json` under `home` listing the given account paths.
 
-
-def test_detected_attr_name_fileprovider_when_pluginkit_lists_extension_default_state(
-    monkeypatch, reset_attr_cache
-):
-    """Default-state pluginkit output (whitespace prefix, no '+' or '-') →
-    File Provider. This is the common case — most users never visit System
-    Settings → Login Items & Extensions, so the extension stays in PluginKit's
-    default-enabled state with no prefix character.
+    Matches the shape Dropbox writes: one top-level key per account
+    (`personal`, `business`), each with a `path` field. Tests use the
+    helper to set up multi-account configurations as needed.
     """
-    fake_stdout = "     com.getdropbox.dropbox.fileprovider(250.4.3245)\n"
-    monkeypatch.setattr("subprocess.run", _fake_pluginkit(stdout=fake_stdout))
+    info_dir = home / ".dropbox"
+    info_dir.mkdir(parents=True, exist_ok=True)
+    accounts = {
+        ("personal" if i == 0 else f"business{i}"): {
+            "path": p, "host": 1, "is_team": False
+        }
+        for i, p in enumerate(paths)
+    }
+    (info_dir / "info.json").write_text(json.dumps(accounts), encoding="utf-8")
+
+
+# ---- Path-primary detection: info.json + pluginkit combination ---------------
+
+
+def test_detected_attr_name_fileprovider_when_path_under_cloudstorage_and_extension_allowed(
+    tmp_path, monkeypatch, reset_attr_cache
+):
+    """The Andrea case: info.json path under ~/Library/CloudStorage/ AND
+    pluginkit shows extension allowed (whitespace prefix) → File Provider.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cloud_storage_dropbox = tmp_path / "Library" / "CloudStorage" / "Dropbox"
+    cloud_storage_dropbox.mkdir(parents=True)
+    _stage_dropbox_info(tmp_path, str(cloud_storage_dropbox))
+    monkeypatch.setattr(
+        "subprocess.run",
+        _fake_pluginkit(stdout="     com.getdropbox.dropbox.fileprovider(250.4.3245)\n"),
+    )
     assert mod._detected_attr_name() == mod.ATTR_FILEPROVIDER
 
 
-def test_detected_attr_name_legacy_when_pluginkit_shows_extension_disabled(
-    monkeypatch, reset_attr_cache
-):
-    """Disabled-state pluginkit output ('-' prefix) → legacy mode.
-
-    User has explicitly disabled the Dropbox File Provider extension via
-    `pluginkit -e ignore` or System Settings. In that state Dropbox falls
-    back to legacy sync (or doesn't sync), so we want the legacy attr.
-    """
-    fake_stdout = "-    com.getdropbox.dropbox.fileprovider(250.4.3245)\n"
-    monkeypatch.setattr("subprocess.run", _fake_pluginkit(stdout=fake_stdout))
-    assert mod._detected_attr_name() == mod.ATTR_LEGACY
-
-
-# ---- Fallback detection path (pluginkit unavailable / errored) --------------
-
-
-def test_detected_attr_name_falls_back_to_path_when_pluginkit_returns_empty(
+def test_detected_attr_name_legacy_when_path_outside_cloudstorage_and_extension_not_registered(
     tmp_path, monkeypatch, reset_attr_cache
 ):
-    """Empty pluginkit output (extension not registered) → path heuristic →
-    legacy if no CloudStorage folder.
+    """Pure legacy install: info.json path is `~/Dropbox`, pluginkit returns
+    no matching extension (Dropbox.app version doesn't ship the FP extension,
+    or app isn't installed) → legacy.
     """
-    monkeypatch.setattr("subprocess.run", _fake_pluginkit(stdout=""))
     monkeypatch.setenv("HOME", str(tmp_path))
-    # Note: NOT creating Library/CloudStorage/Dropbox under tmp_path
+    legacy_dropbox = tmp_path / "Dropbox"
+    legacy_dropbox.mkdir()
+    _stage_dropbox_info(tmp_path, str(legacy_dropbox))
+    monkeypatch.setattr("subprocess.run", _fake_pluginkit(stdout=""))
     assert mod._detected_attr_name() == mod.ATTR_LEGACY
 
 
-def test_detected_attr_name_falls_back_to_path_finds_fileprovider_via_cloudstorage(
+def test_detected_attr_name_legacy_when_extension_installed_but_user_in_legacy_mode(
     tmp_path, monkeypatch, reset_attr_cache
 ):
-    """pluginkit empty + CloudStorage folder exists → File Provider via fallback.
-
-    Covers the case where pluginkit's registry isn't reachable but the
-    canonical default-path File Provider folder is present (e.g., test
-    environments on Linux that ran pluginkit and got empty back).
+    """The bug v0.4.0a4 missed: user has Dropbox.app with FP extension
+    registered (pluginkit allowed) BUT this account is still on legacy mode
+    (info.json path is `~/Dropbox`, NOT under CloudStorage). Pre-fix
+    detection would have wrongly returned File Provider; correct detection
+    follows the path → legacy.
     """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    legacy_dropbox = tmp_path / "Dropbox"
+    legacy_dropbox.mkdir()
+    _stage_dropbox_info(tmp_path, str(legacy_dropbox))
+    monkeypatch.setattr(
+        "subprocess.run",
+        _fake_pluginkit(stdout="     com.getdropbox.dropbox.fileprovider(250.4.3245)\n"),
+    )
+    assert mod._detected_attr_name() == mod.ATTR_LEGACY
+
+
+def test_detected_attr_name_legacy_when_extension_disabled_overrides_path(
+    tmp_path, monkeypatch, reset_attr_cache
+):
+    """Disabled extension wins over path. Even if info.json's path is under
+    CloudStorage (perhaps Dropbox hadn't updated info.json yet after the
+    user disabled the extension), a `-` prefix in pluginkit means File
+    Provider isn't actually running for any account → legacy.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cloud_storage_dropbox = tmp_path / "Library" / "CloudStorage" / "Dropbox"
+    cloud_storage_dropbox.mkdir(parents=True)
+    _stage_dropbox_info(tmp_path, str(cloud_storage_dropbox))
+    monkeypatch.setattr(
+        "subprocess.run",
+        _fake_pluginkit(stdout="-    com.getdropbox.dropbox.fileprovider(250.4.3245)\n"),
+    )
+    assert mod._detected_attr_name() == mod.ATTR_LEGACY
+
+
+def test_detected_attr_name_fileprovider_external_drive(
+    tmp_path, monkeypatch, reset_attr_cache
+):
+    """External-drive File Provider: info.json path is `/Volumes/<Drive>/...`
+    (mounted external drive) and pluginkit shows the extension allowed.
+    Per Dropbox's docs, File Provider supports external drives via an
+    eligibility-gated feature; we treat this case as File Provider mode.
+
+    Uses a literal `/Volumes/MyDrive/Dropbox` path even though the
+    directory doesn't exist on the test runner — `os.path.realpath` returns
+    paths unchanged when intermediate components don't exist, so the
+    `parts[1] == "Volumes"` check still fires correctly.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _stage_dropbox_info(tmp_path, "/Volumes/MyDrive/Dropbox")
+    monkeypatch.setattr(
+        "subprocess.run",
+        _fake_pluginkit(stdout="     com.getdropbox.dropbox.fileprovider(250.4.3245)\n"),
+    )
+    assert mod._detected_attr_name() == mod.ATTR_FILEPROVIDER
+
+
+def test_detected_attr_name_legacy_when_path_elsewhere_and_not_volumes(
+    tmp_path, monkeypatch, reset_attr_cache
+):
+    """Path is neither under CloudStorage nor under /Volumes — even with
+    extension allowed, this is the "legacy with extension installed" case
+    and we want legacy. Pins the narrow scoping of the external-drive
+    branch (must be /Volumes/, not just "anywhere not CloudStorage").
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    custom_legacy = tmp_path / "Documents" / "MyDropbox"
+    custom_legacy.mkdir(parents=True)
+    _stage_dropbox_info(tmp_path, str(custom_legacy))
+    monkeypatch.setattr(
+        "subprocess.run",
+        _fake_pluginkit(stdout="     com.getdropbox.dropbox.fileprovider(250.4.3245)\n"),
+    )
+    assert mod._detected_attr_name() == mod.ATTR_LEGACY
+
+
+def test_detected_attr_name_fileprovider_when_business_account_uses_cloudstorage(
+    tmp_path, monkeypatch, reset_attr_cache
+):
+    """Multi-account: any account with a path under CloudStorage triggers
+    File Provider mode. info.json has both `personal` (legacy ~/Dropbox)
+    and `business` (under CloudStorage) — we follow the File Provider one.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    legacy_dropbox = tmp_path / "Dropbox"
+    legacy_dropbox.mkdir()
+    business_dropbox = tmp_path / "Library" / "CloudStorage" / "Dropbox-Work"
+    business_dropbox.mkdir(parents=True)
+    _stage_dropbox_info(tmp_path, str(legacy_dropbox), str(business_dropbox))
+    monkeypatch.setattr(
+        "subprocess.run",
+        _fake_pluginkit(stdout="     com.getdropbox.dropbox.fileprovider(250.4.3245)\n"),
+    )
+    assert mod._detected_attr_name() == mod.ATTR_FILEPROVIDER
+
+
+# ---- Defensive paths (no info.json / pluginkit unavailable / no HOME) -------
+
+
+def test_detected_attr_name_legacy_when_no_info_json_and_no_extension(
+    tmp_path, monkeypatch, reset_attr_cache
+):
+    """Dropbox not installed at all: no info.json, pluginkit empty → legacy
+    (defensive default; the daemon won't actually be running anyway because
+    `roots.discover()` would have returned empty before any marker call).
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("subprocess.run", _fake_pluginkit(stdout=""))
+    assert mod._detected_attr_name() == mod.ATTR_LEGACY
+
+
+def test_detected_attr_name_legacy_when_pluginkit_unknown_and_no_info_json(
+    tmp_path, monkeypatch, reset_attr_cache
+):
+    """pluginkit errored (test host without the binary, e.g. Linux CI) AND
+    info.json is missing → defensive legacy default.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(
         "subprocess.run",
         _fake_pluginkit(side_effect=FileNotFoundError("pluginkit not found")),
     )
-    cloud_storage = tmp_path / "Library" / "CloudStorage" / "Dropbox"
-    cloud_storage.mkdir(parents=True)
+    assert mod._detected_attr_name() == mod.ATTR_LEGACY
+
+
+def test_detected_attr_name_fileprovider_when_pluginkit_unknown_but_path_under_cloudstorage(
+    tmp_path, monkeypatch, reset_attr_cache
+):
+    """pluginkit unavailable BUT info.json path is under CloudStorage → File
+    Provider. Path is the user-level fact and we trust it without pluginkit
+    when pluginkit can't be queried.
+    """
     monkeypatch.setenv("HOME", str(tmp_path))
+    cloud_storage_dropbox = tmp_path / "Library" / "CloudStorage" / "Dropbox"
+    cloud_storage_dropbox.mkdir(parents=True)
+    _stage_dropbox_info(tmp_path, str(cloud_storage_dropbox))
+    monkeypatch.setattr(
+        "subprocess.run",
+        _fake_pluginkit(side_effect=FileNotFoundError("pluginkit not found")),
+    )
     assert mod._detected_attr_name() == mod.ATTR_FILEPROVIDER
 
 
-def test_detected_attr_name_falls_back_when_pluginkit_times_out(
+def test_detected_attr_name_legacy_when_home_unset(monkeypatch, reset_attr_cache):
+    """No HOME → no info.json, no path-prefix check possible. With pluginkit
+    empty too, defensive legacy default.
+    """
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.setattr("subprocess.run", _fake_pluginkit(stdout=""))
+    assert mod._detected_attr_name() == mod.ATTR_LEGACY
+
+
+def test_detected_attr_name_legacy_when_pluginkit_times_out(
     tmp_path, monkeypatch, reset_attr_cache
 ):
-    """TimeoutExpired (pluginkit hung) → fall through to path heuristic."""
+    """TimeoutExpired (pluginkit hung) returns "unknown" extension state.
+    No info.json + unknown state → defensive legacy default.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(
         "subprocess.run",
         _fake_pluginkit(side_effect=subprocess.TimeoutExpired(cmd="pluginkit", timeout=2)),
     )
-    monkeypatch.setenv("HOME", str(tmp_path))
-    # No CloudStorage folder → legacy via fallback
     assert mod._detected_attr_name() == mod.ATTR_LEGACY
 
 
-def test_detected_attr_name_falls_back_to_legacy_when_home_unset(
-    monkeypatch, reset_attr_cache
+# ---- Caching ----------------------------------------------------------------
+
+
+def test_detected_attr_name_caches_first_result(
+    tmp_path, monkeypatch, reset_attr_cache
 ):
-    """No HOME and pluginkit empty → defensive legacy default."""
-    monkeypatch.setattr("subprocess.run", _fake_pluginkit(stdout=""))
-    monkeypatch.delenv("HOME", raising=False)
-    assert mod._detected_attr_name() == mod.ATTR_LEGACY
+    """First call invokes both `subprocess.run` (pluginkit) and the
+    info.json read; subsequent calls hit the cache.
 
-
-# ---- Caching behavior -------------------------------------------------------
-
-
-def test_detected_attr_name_caches_first_result(monkeypatch, reset_attr_cache):
-    """First call invokes detection; subsequent calls hit the cache.
-
-    Critical for the per-file reconcile loop's performance — the daemon
-    processes thousands of paths per sweep, and re-invoking pluginkit on
-    every marker call would add ~50ms × N to the sweep wall-clock.
+    Critical for per-file reconcile loop performance — the daemon
+    processes thousands of paths per sweep, and re-running detection
+    on every marker call would add ~50ms × N to the sweep wall-clock.
     """
-    call_count = 0
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cloud_storage_dropbox = tmp_path / "Library" / "CloudStorage" / "Dropbox"
+    cloud_storage_dropbox.mkdir(parents=True)
+    _stage_dropbox_info(tmp_path, str(cloud_storage_dropbox))
+
+    pluginkit_calls = 0
 
     def fake_run(args, **kwargs):
-        nonlocal call_count
-        call_count += 1
+        nonlocal pluginkit_calls
+        pluginkit_calls += 1
         return subprocess.CompletedProcess(
-            args=args,
-            returncode=0,
+            args=args, returncode=0,
             stdout="     com.getdropbox.dropbox.fileprovider(250.4.3245)\n",
             stderr="",
         )
@@ -317,7 +462,7 @@ def test_detected_attr_name_caches_first_result(monkeypatch, reset_attr_cache):
     third = mod._detected_attr_name()
 
     assert first == second == third == mod.ATTR_FILEPROVIDER
-    assert call_count == 1, "subprocess.run should only be called once"
+    assert pluginkit_calls == 1, "pluginkit should only be invoked once"
 
 
 # ---- File Provider mode end-to-end ------------------------------------------

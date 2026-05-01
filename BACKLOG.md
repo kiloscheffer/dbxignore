@@ -697,6 +697,28 @@ Same shape in both `install/_common.py` and `install/windows_task.py`'s frozen b
 
 Touches: `src/dbxignore/install/_common.py`; `src/dbxignore/install/windows_task.py`; `tests/test_install_common.py`; `tests/test_install.py`.
 
+## 36. macOS sync-mode detection conflated system-level and user-level signals
+
+**Severity: HIGH.** Affects all macOS users on v0.4.0a4 who have Dropbox.app installed but haven't migrated this account to File Provider — they'd silently get `com.apple.fileprovider.ignore#P` written when Dropbox is actually watching `com.dropbox.ignored` (or vice versa for some edge cases). Same shape of silent-failure bug as item #33; just for a different population.
+
+**Symptom.** v0.4.0a4's `_detected_attr_name()` queried `pluginkit -m -A -i com.getdropbox.dropbox.fileprovider` as the primary signal: if the extension was registered AND not user-disabled, return `ATTR_FILEPROVIDER`. This was wrong because PluginKit registration is a *system-level* fact (does macOS know about `DropboxFileProvider.appex`?), not a *user-level* fact (which mode is *this account* in?). A user with Dropbox.app installed who declined the File Provider migration (or rolled back to legacy via Dropbox's UI) would have an active extension registration AND be syncing in legacy mode from `~/Dropbox/`. Pre-fix detection wrongly returned File Provider for that user; markers got written under the wrong attribute name; Dropbox didn't honor them.
+
+**Root cause framing.** The correct user-level signal lives in `~/.dropbox/info.json`'s `path` field — Dropbox writes the actual configured sync location there, and the location tells us which mode this specific account uses. Apple's File Provider folders normally live under `~/Library/CloudStorage/<vendor>/` (per [Dropbox docs](https://help.dropbox.com/installs/fix-domain-conflict-on-mac)); legacy folders live wherever the user configured them. Path-prefix on `Library/CloudStorage` is the determinant for mode-per-account.
+
+**Fix.** Detection is now **path-primary, pluginkit-disambiguating**:
+
+1. `_read_dropbox_paths_from_info()` reads `~/.dropbox/info.json` (multi-account aware — info.json can list `personal` and `business` keys).
+2. `_pluginkit_extension_state()` returns one of `"allowed"` / `"disabled"` / `"not_registered"` / `"unknown"`.
+3. Combine:
+   - Extension `"disabled"` → legacy regardless of path (user explicitly opted out).
+   - Any account path under `~/Library/CloudStorage/` → File Provider (the common case, and Andrea's case).
+   - Path elsewhere + extension `"allowed"` → File Provider (external-drive eligibility-gated case Dropbox docs mention).
+   - Otherwise → legacy (defensive default — covers no Dropbox installed, pure-legacy without extension, pluginkit unknown without CloudStorage path).
+
+**Status: RESOLVED 2026-05-01 (PR #79).** Path-primary detection landed in `_backends/macos_xattr.py` with two new helpers (`_read_dropbox_paths_from_info`, `_pluginkit_extension_state`). Test surface grew from 7 to 11 tests in `tests/test_macos_xattr_unit.py` covering: Andrea's case (path under CloudStorage + extension allowed), the bug case (extension installed + legacy path → legacy), disabled-extension override, external-drive File Provider, multi-account info.json, and four defensive fallback paths. CLAUDE.md gotcha rewritten to reflect the corrected logic. v0.4.0a5 ships this for Andrea's beta-test.
+
+Touches: `src/dbxignore/_backends/macos_xattr.py`; `tests/test_macos_xattr_unit.py`; `CLAUDE.md`.
+
 ---
 
 ## Status
@@ -718,7 +740,8 @@ Eight items. Six are passive (no concrete trigger requires action); item #32 has
 
 #### 2026-05-01
 
-- **#33** in PR #77 — macOS xattr backend now auto-detects Dropbox sync mode (legacy vs. File Provider) and selects the matching attribute name (`com.dropbox.ignored` vs. `com.apple.fileprovider.ignore#P`). Resolves the silent-failure mode where v0.4.0a3 wrote the wrong attribute on every File Provider install. (B) scope decision: absorbed into v0.4 before final tag.
+- **#36** in PR #79 — macOS sync-mode detection rewritten as path-primary (info.json) with pluginkit-disambiguation. Fixes a v0.4.0a4 bug where users with Dropbox.app installed but declined the File Provider migration got the wrong attribute name written. Ships in v0.4.0a5.
+- **#33** in PR #77 — macOS xattr backend now auto-detects Dropbox sync mode (legacy vs. File Provider) and selects the matching attribute name (`com.dropbox.ignored` vs. `com.apple.fileprovider.ignore#P`). Resolves the silent-failure mode where v0.4.0a3 wrote the wrong attribute on every File Provider install. (B) scope decision: absorbed into v0.4 before final tag. (Detection logic refined in PR #79 — see item #36.)
 - **#35** in PR #76 — macOS launchd plist + Windows Task Scheduler XML now invoke the `dbxignored` sibling binary (with empty args) rather than the long-form `dbxignore` binary (which exits with status 2 on no-subcommand). Frozen branches of `_common.detect_invocation` + `windows_task.detect_invocation` now resolve via a three-step "self-as-dbxignored / sibling-search / fallback-to-daemon-subcommand" rule.
 - **#31** in PR #71 — bundle `_cffi_backend` in macOS PyInstaller spec; smoke-test built binaries before upload on both Windows and macOS build legs.
 
@@ -770,3 +793,4 @@ How items entered this tracker:
 - **Item 33** added 2026-05-01 from continued v0.4.0a3 beta-testing on the same macOS machine — once the macOS binary actually launched (post-PR #71), the next layer of testing surfaced that the tester's Dropbox install is in File Provider mode (the modern default) rather than legacy mode, and the macOS xattr backend is hardcoded to the legacy attribute name. Documented `fileproviderctl dump` output + `~/.dropbox/info.json` content from the tester confirmed the mode and narrowed the architectural scope (root discovery is unaffected; only the xattr-backend layer needs work). Companion docs-only PR ships the README disambiguation independently of the architectural decision.
 - **Item 34** added 2026-05-01 from a CI flake observed during PR #74's post-rebase run on `windows-latest`. Same test that prompted item #18 (originally filed 2026-04-24), resolved in PR #40 by widening the `_poll_until` timeout from 3.0s to 5.0s. Filed as a separate item rather than re-opening #18 because the Resolved-section history is reverse-chronological-only and re-opening would muddy that contract; #34's body explicitly references #18's resolution path and prior timeline.
 - **Item 35** added 2026-05-01 from the same v0.4.0a3 macOS beta-test session — `launchctl print` revealed the launchd plist invoked the long-form `dbxignore` binary with no subcommand, hitting Click's "no subcommand → exit 2" arm and never reaching `daemon_mod.run()`. Filed and resolved in the same PR because the fix is small (~50 lines), the regression class is well-bounded (the frozen branches of `detect_invocation` in both `_common.py` and `windows_task.py`), and the tracker entry's value is mostly historical/educational rather than awaiting-action. Linux was unaffected — Linux installs don't ship a frozen binary, so they reached the non-frozen branch which already routed correctly through `shutil.which("dbxignored")`.
+- **Item 36** added 2026-05-01 immediately after v0.4.0a4 shipped — the maintainer recognized that v0.4.0a4's pluginkit-primary detection conflated the *system-level* signal (is the extension registered?) with the *user-level* signal (which mode is this account in?), and that the user-level fact lives in info.json's `path` field. PluginKit registration says nothing about whether *this user's account* migrated; the path does. Filed and resolved in PR #79; ships in v0.4.0a5 before any beta tester ran v0.4.0a4 in the wild — caught by reasoning about the signal layers, not by a tester report. Detection logic reframed as path-primary with pluginkit-disambiguation; covers the missed case (extension installed + user in legacy mode → legacy) plus the external-drive File Provider case Dropbox docs document.

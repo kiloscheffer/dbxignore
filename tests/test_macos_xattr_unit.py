@@ -227,8 +227,9 @@ def _stage_dropbox_info(home: Path, *paths: str) -> None:
 def test_detected_attr_name_fileprovider_when_path_under_cloudstorage_and_extension_allowed(
     tmp_path, monkeypatch, reset_attr_cache
 ):
-    """The Andrea case: info.json path under ~/Library/CloudStorage/ AND
-    pluginkit shows extension allowed (whitespace prefix) → File Provider.
+    """The default File Provider case: info.json path under
+    ~/Library/CloudStorage/ AND pluginkit shows extension allowed
+    (whitespace prefix) → File Provider.
     """
     monkeypatch.setenv("HOME", str(tmp_path))
     cloud_storage_dropbox = tmp_path / "Library" / "CloudStorage" / "Dropbox"

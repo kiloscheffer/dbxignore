@@ -298,20 +298,42 @@ def test_detected_attr_name_legacy_when_extension_disabled_overrides_path(
 def test_detected_attr_name_fileprovider_external_drive(
     tmp_path, monkeypatch, reset_attr_cache
 ):
-    """External-drive File Provider: info.json path is on a mounted drive
-    (so not under CloudStorage), but pluginkit shows the extension allowed.
+    """External-drive File Provider: info.json path is `/Volumes/<Drive>/...`
+    (mounted external drive) and pluginkit shows the extension allowed.
     Per Dropbox's docs, File Provider supports external drives via an
-    eligibility-gated feature; we should treat this as File Provider mode.
+    eligibility-gated feature; we treat this case as File Provider mode.
+
+    Uses a literal `/Volumes/MyDrive/Dropbox` path even though the
+    directory doesn't exist on the test runner — `os.path.realpath` returns
+    paths unchanged when intermediate components don't exist, so the
+    `parts[1] == "Volumes"` check still fires correctly.
     """
     monkeypatch.setenv("HOME", str(tmp_path))
-    external = tmp_path / "fake_volumes" / "MyDrive" / "Dropbox"
-    external.mkdir(parents=True)
-    _stage_dropbox_info(tmp_path, str(external))
+    _stage_dropbox_info(tmp_path, "/Volumes/MyDrive/Dropbox")
     monkeypatch.setattr(
         "subprocess.run",
         _fake_pluginkit(stdout="     com.getdropbox.dropbox.fileprovider(250.4.3245)\n"),
     )
     assert mod._detected_attr_name() == mod.ATTR_FILEPROVIDER
+
+
+def test_detected_attr_name_legacy_when_path_elsewhere_and_not_volumes(
+    tmp_path, monkeypatch, reset_attr_cache
+):
+    """Path is neither under CloudStorage nor under /Volumes — even with
+    extension allowed, this is the "legacy with extension installed" case
+    and we want legacy. Pins the narrow scoping of the external-drive
+    branch (must be /Volumes/, not just "anywhere not CloudStorage").
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    custom_legacy = tmp_path / "Documents" / "MyDropbox"
+    custom_legacy.mkdir(parents=True)
+    _stage_dropbox_info(tmp_path, str(custom_legacy))
+    monkeypatch.setattr(
+        "subprocess.run",
+        _fake_pluginkit(stdout="     com.getdropbox.dropbox.fileprovider(250.4.3245)\n"),
+    )
+    assert mod._detected_attr_name() == mod.ATTR_LEGACY
 
 
 def test_detected_attr_name_fileprovider_when_business_account_uses_cloudstorage(

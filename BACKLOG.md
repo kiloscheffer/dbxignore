@@ -556,13 +556,66 @@ Mitigation (broader): smoke-test the built binaries in the release workflow's bu
 
 Touches: `pyinstaller/dbxignore-macos.spec`; `.github/workflows/release.yml`.
 
+## 32. CLI polish — three small surface gaps trace to one shim design choice
+
+A v0.4.0a3 ship-time CLI surface review surfaced three small gaps in the user-facing command line. They look unrelated at first glance but share a root cause (the `daemon_main` argv-rewrite shim in `cli.py:365-368`), so they're filed together for a coherent fix.
+
+**Symptom 1 — no `--version` flag.** The v0.4 beta tester typed `dbxignore --version` expecting `0.4.0a1`. Click rejected it ("no such option: --version") and the tester proceeded to other checks. Universal "did the install land the right binary?" pattern; the omission is the only one of the three with a real use-case-from-the-wild trigger so far. `hatch-vcs` already writes `src/dbxignore/_version.py` (per `pyproject.toml:42`), so adding `@click.version_option(package_name="dbxignore")` to the group reads from `importlib.metadata` automatically — one decorator.
+
+**Symptom 2 — `--verbose` is unreachable from `dbxignored`.** `daemon_main` does `sys.argv.insert(1, "daemon")` before calling `main()`, which means `dbxignored --verbose` is parsed as `dbxignore daemon --verbose`. But `--verbose` is on the group, not on the `daemon` subcommand, and Click requires group-level options to appear *before* the subcommand. So the flag is unreachable from the daemon shim entirely; users wanting verbose daemon output must set `DBXIGNORE_LOG_LEVEL=DEBUG` instead. Workaround works but isn't discoverable.
+
+**Symptom 3 — bogus `Usage:` line in `dbxignored --help`.** `dbxignored --help` prints `Usage: dbxignored daemon [OPTIONS]` because Click constructs the usage line from `sys.argv[0]` (the program name as-typed: "dbxignored") plus the command-path it walked to dispatch ("daemon"). The two halves come from different worlds — the user typed only `dbxignored`, the synthetic `daemon` token was injected by the shim. Worse, the literal advertised string `dbxignored daemon` is **not runnable**: the shim prepends another `daemon` token (`['dbxignored', 'daemon', 'daemon']`) and Click rejects with "Got unexpected extra argument (daemon)." The Usage line is advertising a non-runnable invocation.
+
+**Shared root cause.** All three are direct symptoms of the argv-rewrite shim approach to `dbxignored`. The shim was probably written for code reuse — share the `daemon` subcommand body between the long-form (`dbxignore daemon`) and the short shim (`dbxignored`) — but it costs more than it saves: the body is two lines (`from ... import daemon as daemon_mod; daemon_mod.run()`), so the reuse argument is thin, and the shim leaks into argv parsing in three observable ways.
+
+**Fix candidates:**
+
+- **Replace the shim with a standalone `@click.command`** (chosen direction). Define `daemon_main` as its own Click command that shares a small private helper with the existing `daemon` subcommand:
+
+  ```python
+  def _run_daemon() -> None:
+      from dbxignore import daemon as daemon_mod
+      daemon_mod.run()
+
+
+  @main.command()
+  def daemon() -> None:
+      """Run the watcher + hourly sweep daemon (foreground)."""
+      _run_daemon()
+
+
+  @click.command()
+  @click.option("--verbose", "-v", is_flag=True, help="Enable DEBUG-level logging.")
+  @click.version_option(package_name="dbxignore")
+  def daemon_main() -> None:
+      """Run the watcher + hourly sweep daemon (foreground)."""
+      _run_daemon()
+  ```
+
+  Net effect: `dbxignored --help` shows `Usage: dbxignored [OPTIONS]` (no leaked `daemon` token); `dbxignored --verbose` works directly; `dbxignored --version` works via Click's auto-binding to `importlib.metadata`. Add `@click.version_option(package_name="dbxignore")` to the `main` group in the same change so `dbxignore --version` also works.
+
+- **Patch with `prog_name=`.** Click's `main()` accepts a `prog_name` kwarg that overrides the displayed program name in usage lines. `daemon_main` could call `main(prog_name="dbxignored")` to fix `sys.argv[0]` in the help output, but that doesn't elide the `daemon` token (it'd still show `Usage: dbxignored daemon [OPTIONS]`) and doesn't fix the unreachable-`--verbose` issue. Band-Aid for symptom 3 alone; not a real fix. Not chosen.
+
+- **Status quo.** All three issues have workarounds: `dbxignore --help` for the version check, `DBXIGNORE_LOG_LEVEL` for verbose daemon output, and the bogus Usage line is mostly harmless (users either don't notice or shrug). Acceptable but worse than a one-touch rewrite.
+
+**Urgency:** low. The `--version` symptom is the only one with a fired trigger (beta tester); the other two are latent UX papercuts. But the rewrite is small (~15 lines diff) and the three symptoms collapse to one fix, so the cost-to-fix ratio is favorable. Reasonable to bundle with the next CLI-touching change rather than ship as a standalone polish PR.
+
+**Risks if implemented:**
+
+- The shim behavior is referenced by `install/_common.detect_invocation` (which decides whether the daemon is being launched from a frozen binary or an editable Python install). Switching `daemon_main` from "argv shim" to "real command" doesn't change the function name or signature, so `detect_invocation` is unaffected — but verify before merging.
+- `pyproject.toml`'s `[project.scripts].dbxignored = "dbxignore.cli:daemon_main"` keeps working unchanged (Click decorators don't change the function's callability).
+- Tests that monkeypatch around `daemon_main` may break if they depend on the argv-mutation side effect. None observed at file time, but a test sweep is part of the PR.
+- Item #30 (Windows-aware single binary via `AttachConsole`) would, if implemented, eliminate `dbxignored` entirely. Item #32's fix lives inside the two-binary world; if #30 lands first, #32's daemon-shim half is moot — but the `--version` arm of #32 still applies to the surviving `dbxignore` binary. Sequence-dependent: do #32 first if both are scheduled, or fold #32's `--version` arm into #30's surgery if #30 lands first.
+
+Touches: `src/dbxignore/cli.py` (`daemon_main` rewrite + `--version` decorator on `main`); maybe a small CLI smoke test under `tests/` confirming `--version` and `dbxignored --help` produce the expected strings.
+
 ---
 
 ## Status
 
 ### Open
 
-Six items, all passive (no concrete trigger requires action):
+Seven items. Six are passive (no concrete trigger requires action); item #32 has one fired trigger (a beta tester typed `dbxignore --version` and got "no such option") but isn't blocking.
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
@@ -570,6 +623,7 @@ Six items, all passive (no concrete trigger requires action):
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
 - **#29** — Codesigning + notarization for macOS binaries. Smooths Gatekeeper UX but requires $99/yr Apple Developer membership. Awaits concrete pain signal.
 - **#30** — Windows-aware single binary via `AttachConsole(ATTACH_PARENT_PROCESS)`. Collapses `dbxignore.exe` + `dbxignored.exe` to one. Three-context UX tradeoff (terminal / Task Scheduler / double-click) is load-bearing today; ctypes path is the implementation route. Awaits binary-size or build-time pain signal.
+- **#32** — CLI polish: missing `--version`, unreachable `--verbose` from `dbxignored`, and bogus `Usage: dbxignored daemon` in `dbxignored --help`. All three trace to the `daemon_main` argv-rewrite shim; the consolidated fix is replacing the shim with a standalone Click command and adding `@click.version_option` to both. Sequence-dependent on #30 — fix #32 first if both are scheduled. Awaits CLI-touching change to bundle with.
 
 ### Resolved (reverse chronological)
 
@@ -621,3 +675,4 @@ How items entered this tracker:
 - **Items 26-29** added 2026-04-27 from the v0.4 macOS port post-ship. #26 is a preexisting bug surfaced by extraction; #27-29 are deferred macOS-distribution polish (Intel binary, universal2, codesigning) — all noted in the v0.4 spec § "Post-ship backlog candidates" and filed here for visibility.
 - **Item 30** added 2026-04-27 from a v0.4 alpha-test conversation about the rationale for shipping two Windows binaries. The author proposed collapsing them, then walked it back after surfacing the three-context UX tradeoff (terminal / Task Scheduler / double-click) that the duplication addresses. Filed for the eventual `AttachConsole`-based simplification path.
 - **Item 31** added 2026-05-01 from a v0.4.0a1 beta-test failure on macOS arm64 (M2 MacBook Air, Tahoe 26.4) — first time the macOS binary was end-to-end-exercised on a tester's machine. Filed and resolved in the same PR because the regression net (smoke-test built binaries before upload) was the more important half of the fix.
+- **Item 32** added 2026-05-01 from a CLI surface review during the v0.4.0a3 ship (post-PR #71). Three small UX gaps surfaced via a `dbxignored --help` curiosity from the maintainer + the v0.4 beta tester's earlier `dbxignore --version` attempt. All three traced back to the `daemon_main` argv-rewrite shim; consolidated as one item rather than three because the fix collapses to a single ~15-line CLI rewrite.

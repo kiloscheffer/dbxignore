@@ -827,13 +827,226 @@ Surfaced 2026-05-02 in the same `/simplify` pass.
 
 Touches: `src/dbxignore/_backends/macos_xattr.py` (one helper added, two call sites updated).
 
+## 41. `_reconcile_path` write-side `ENOTSUP`/`EOPNOTSUPP` arm returns `None`, diverging from `PermissionError`'s `currently_ignored`
+
+`src/dbxignore/reconcile.py`'s `_reconcile_path` write path has two failure arms that CLAUDE.md asserts should be treated identically:
+
+```python
+except PermissionError as exc:
+    logger.warning(...)
+    report.errors.append((path, f"write: {exc}"))
+    # Write failed: the ADS state is still whatever we read.
+    return currently_ignored          # ← preserves last-known marker state
+except OSError as exc:
+    if exc.errno in (errno.ENOTSUP, errno.EOPNOTSUPP):
+        logger.warning(...)
+        report.errors.append((path, f"unsupported: {exc}"))
+        return None                    # ← discards last-known state
+    raise
+```
+
+CLAUDE.md says: *"catches `OSError(errno.ENOTSUP|EOPNOTSUPP)` from xattr-based backends and treats it the same way as `PermissionError` — log WARNING, append to `Report.errors`, continue the sweep."* The log line and `Report.errors` shape match, but the return value drives subtree pruning in `reconcile_subtree`:
+
+```python
+dirnames[:] = [name for name in dirnames if not _reconcile_path(...)]
+```
+
+A truthy return prunes the directory from the walk. `PermissionError` returns `currently_ignored` (truthy if the directory was already marked) → directory is pruned, walk does not descend. `ENOTSUP` returns `None` (falsy) → directory is *not* pruned, walk descends into a subtree the filesystem can't mark. Per-file `set_ignored` then re-fails with ENOTSUP for every child, spamming WARNING logs across the whole subtree.
+
+Companion to item 21 (RESOLVED PR #45) which set the precedent that ENOTSUP and PermissionError are the same failure class on the read side.
+
+**Fix:** change the ENOTSUP arm's `return None` to `return currently_ignored` so pruning matches `PermissionError`. ~1 line, plus a regression test that simulates ENOTSUP via `FakeMarkers` and asserts the subtree is pruned.
+
+**Urgency:** low. Hits only filesystems that don't support xattrs (FAT32 / tmpfs / older NFS mounts inside a Dropbox folder). Manifests as log-spam rather than a correctness regression in marker state. Worth fixing because the fix is one line and CLAUDE.md is explicit about the contract.
+
+Touches: `src/dbxignore/reconcile.py:113`; new test in `tests/test_reconcile_enotsup.py` or `tests/test_reconcile_edges.py`.
+
+## 42. `_timeouts_from_env()` crashes the daemon at startup if a debounce env var is non-integer
+
+`src/dbxignore/daemon.py:107-111`:
+
+```python
+def _timeouts_from_env() -> dict[EventKind, int]:
+    return {
+        kind: int(os.environ.get(_TIMEOUT_ENV_VARS[kind], str(default)))
+        for kind, default in DEFAULT_TIMEOUTS_MS.items()
+    }
+```
+
+`int()` on a non-numeric string (e.g. `DBXIGNORE_DEBOUNCE_RULES_MS=fast`) raises `ValueError` with no try/except and no fallback. The crash propagates through `daemon.run()` before the watchdog observer or debouncer is started. Under systemd, `Restart=on-failure RestartSec=60s` would loop the failure indefinitely; under Task Scheduler, the task dies on each launch with no entry in `daemon.log` (logging is set up *after* `_timeouts_from_env` runs).
+
+The same module already has a precedent for graceful env-var handling: `DBXIGNORE_LOG_LEVEL` validates against `_VALID_LEVELS`, logs a warning, and falls back to INFO. The debounce-timeout handler is conspicuously missing the equivalent.
+
+**Fix candidates:**
+
+- **Per-key try/except.** Wrap each `int(...)` call, log a warning naming the env var and the offending value, fall back to `default`. Mirrors the log-level handler's shape. ~10 lines.
+- **Single helper `_int_from_env(name, default)`** that wraps parse + warning + fallback. Cleaner if more numeric env vars get added.
+
+**Urgency:** low. Triggered only by user error (typo in env var name's value). Worth filing because (a) the failure mode is loud-and-recurring rather than soft-and-recoverable, (b) the in-module precedent makes the inconsistency stand out, and (c) there are zero tests for `_timeouts_from_env()` despite extensive test coverage of `_configured_logging`.
+
+Touches: `src/dbxignore/daemon.py:107-111`; new test in `tests/test_daemon_logging.py` or a new `test_daemon_timeouts.py`.
+
+## 43. `reconcile_subtree` re-resolves `root` and `subdir` on every call; daemon callers don't pre-resolve
+
+`src/dbxignore/reconcile.py:30-31`:
+
+```python
+def reconcile_subtree(root: Path, subdir: Path, cache: RuleCache) -> Report:
+    start = time.perf_counter()
+    report = Report()
+    root = root.resolve()
+    subdir = subdir.resolve()
+```
+
+CLAUDE.md states: *"Resolve at the CLI/daemon boundary, never inside the cache or markers layer — `Path.resolve()` on Windows is a per-call syscall that dominated sweep wall-clock before."* The CLI path honors this (`cli.apply` pre-resolves at the top of the function). The daemon path does not:
+
+- `daemon._dispatch(event, cache, roots)` passes `event.src_path`-derived paths and `roots` through to `reconcile_subtree` without pre-resolving.
+- `daemon._sweep_once` passes `roots` (from `roots.discover()`, also un-resolved).
+
+On Windows, `Path.resolve()` calls `GetFinalPathNameByHandleW` even for already-absolute paths. The cost is per-event for `_dispatch` (every accepted watchdog event, post-debouncer) and per-sweep for `_sweep_once` (hourly). The hourly cost is negligible; the per-event cost compounds during burst activity (e.g. `git checkout` of a large branch).
+
+Companion to item 5 (RESOLVED PR #34) which removed a `_ancestors_of` resolve at a different layer.
+
+**Fix candidates:**
+
+- **Pre-resolve at the daemon boundary.** Resolve `roots` once in `daemon.run()` before passing to `_sweep_once`/`_dispatch`; resolve `event.src_path` once in `_classify` (which already inspects events). Drop the redundant `.resolve()` calls inside `reconcile_subtree`. Most aligned with CLAUDE.md's stated boundary contract.
+- **Memoize inside reconcile_subtree.** A `@functools.lru_cache`-style guard. Adds state to a stateless function; rejected.
+- **Status quo + comment.** Add a NOTE explaining the redundant resolves are kept defensively in case a future caller forgets. Documents the inconsistency without fixing it.
+
+**Urgency:** low. Per-event cost is small in absolute terms; the precedent (item 5) was about correctness *and* perf, while this is purely perf. Bundle with the next daemon-touching change.
+
+Touches: `src/dbxignore/reconcile.py:30-31`, `src/dbxignore/daemon.py` (`run`, `_dispatch`, `_sweep_once`, `_classify`), possibly tests that pass un-resolved paths.
+
+## 44. `build_task_xml` interpolates `getpass.getuser()` and `exe_path` into XML without escaping
+
+`src/dbxignore/install/windows_task.py:42-92`'s `build_task_xml` builds a Task Scheduler XML document via f-string interpolation:
+
+```python
+user = getpass.getuser()
+return f"""<?xml ...>
+  ...
+      <UserId>{user}</UserId>
+  ...
+      <Command>{exe_path}</Command>
+"""
+```
+
+Neither `user` nor `exe_path` is escaped via `xml.sax.saxutils.escape()`. If either contains `&`, `<`, or `>`, the resulting XML is malformed and `schtasks /Create /XML` rejects it. Verified: `xml.etree.ElementTree.ParseError: not well-formed (invalid token)` on an unescaped `&`.
+
+Realistic worst case: a directory like `C:\Users\Tom & Jerry\` in the install path — uncommon but legal. Windows usernames containing `&` are technically allowed but rare. AD environments with `O'Brien`-style apostrophes are XML-safe but the bug-shape is the same: special chars eaten by the parser.
+
+**Fix:** import `xml.sax.saxutils.escape` and wrap both interpolations:
+```python
+from xml.sax.saxutils import escape
+user = escape(getpass.getuser())
+exe_str = escape(str(exe_path))
+```
+Plus a regression test in `tests/test_install.py` that fuzzes `user` and `exe_path` with `&<>` and asserts `xml.etree.ElementTree.fromstring` succeeds.
+
+**Urgency:** low. Hits only users with special characters in their username or install path; manifests as a confusing `schtasks` error rather than silent corruption. Worth fixing because the failure mode is hard to diagnose ("daemon won't install") and the fix is small.
+
+Touches: `src/dbxignore/install/windows_task.py:40-92`; new regression in `tests/test_install.py`.
+
+## 45. `_applicable` docstring says "Yield" but the function returns a list
+
+`src/dbxignore/rules.py:254-264`:
+
+```python
+def _applicable(
+    self, root: Path, path: Path
+) -> list[tuple[Path, _LoadedRules]]:
+    """Yield (ancestor, loaded_rules) for each applicable .dropboxignore
+    in shallow-to-deep order."""
+    result: list[tuple[Path, _LoadedRules]] = []
+    for ancestor in self._ancestors(root, path):
+        ...
+    return result
+```
+
+The return-type annotation is `list[tuple[Path, _LoadedRules]]` (correct), but the docstring opens with "Yield" — generator language. No `yield` keyword in the function body. A reader scanning the docstring in an IDE tooltip sees the wrong contract.
+
+**Fix:** change "Yield" to "Return" in the docstring. One-word fix.
+
+**Urgency:** very low (cosmetic). Filed for tracker hygiene; bundle with a future `rules.py` touch.
+
+Touches: `src/dbxignore/rules.py:257`.
+
+## 46. `windows_ads.set_ignored` docstring names `reconcile_subtree` as the catcher; should be `reconcile._reconcile_path`
+
+`src/dbxignore/_backends/windows_ads.py:44-50`:
+
+```python
+def set_ignored(path: Path) -> None:
+    """Mark ``path`` as ignored by Dropbox.
+
+    Raises ``FileNotFoundError`` if ``path`` vanished before the write;
+    raises ``PermissionError`` if the stream cannot be written. Callers
+    (notably ``reconcile_subtree``) catch and log both per the design's
+    failure-mode contract.
+    """
+```
+
+The actual catcher is `reconcile._reconcile_path` (`src/dbxignore/reconcile.py:99-114`), not `reconcile_subtree`. The Linux backend (`linux_xattr.py:64-68`) and the macOS backend both correctly cite `reconcile._reconcile_path`. CLAUDE.md also names `reconcile._reconcile_path` as the canonical exception-handling layer. The Windows backend is the lone outlier across three otherwise-symmetric backend modules.
+
+Likely an artifact of pre-extraction wording when the catch-all sat in `reconcile_subtree`; the Linux/macOS backends were written after the extraction and cite the post-refactor location.
+
+**Fix:** change `reconcile_subtree` to `reconcile._reconcile_path` in the docstring. One-word fix.
+
+**Urgency:** very low (cosmetic). Filed for cross-backend doc-symmetry; bundle with a future Windows-backend touch.
+
+Touches: `src/dbxignore/_backends/windows_ads.py:49`.
+
+## 47. `reconcile.py` module docstring describes "ADS markers" — Windows-only term in cross-platform module
+
+`src/dbxignore/reconcile.py:1`:
+
+```python
+"""Reconcile the filesystem's ADS markers with the current rule set."""
+```
+
+ADS = NTFS Alternate Data Streams (Windows-only). The module is fully cross-platform — on Linux/macOS it dispatches to xattr-based backends via `markers.is_ignored`/`set_ignored`/`clear_ignored`. CLAUDE.md describes the marker-set as *"NTFS alternate data streams on Windows; `user.com.dropbox.ignored` xattrs on Linux; `com.dropbox.ignored` xattrs on macOS"*.
+
+The same Windows-flavored phrasing recurs in `_reconcile_path`'s own docstring (line 56: "Reconcile one path's ADS marker") and in inline comments (line 100: "Path vanished before ADS write"). All three predate the v0.2 Linux port and the v0.4 macOS port — missed by both rename sweeps.
+
+**Fix:** s/ADS marker/ignore marker/ in the three locations, or use the more neutral "ignore-marker" terminology already used throughout CLAUDE.md.
+
+**Urgency:** very low (cosmetic, but newly visible to readers approaching the module from the Linux/macOS side). Bundle with items 46 and 48 as a doc-currency mini-sweep.
+
+Touches: `src/dbxignore/reconcile.py:1`, `:56`, `:100`.
+
+## 48. `state.py` module docstring lists Windows + Linux paths but omits macOS
+
+`src/dbxignore/state.py:1-5`:
+
+```python
+"""Persist daemon state under the platform's per-user state directory.
+
+Windows: ``%LOCALAPPDATA%\\dbxignore\\state.json``.
+Linux: ``$XDG_STATE_HOME/dbxignore/state.json`` (fallback ``~/.local/state/...``).
+"""
+```
+
+`user_state_dir()` has a `darwin` branch returning `~/Library/Application Support/dbxignore/`, but the module header documents only two of three platforms. Same shape as item 47 — pre-v0.4 wording missed by the macOS port's doc sweep.
+
+CLAUDE.md's gotchas section explicitly names `state.user_state_dir()` as the *"single source of truth"* for the per-user path; the docstring should match what the function actually returns across all supported platforms.
+
+**Fix:** add a third bullet:
+```
+macOS: ``~/Library/Application Support/dbxignore/state.json``
+       (logs split off to ``~/Library/Logs/dbxignore/`` per Apple's app-data conventions).
+```
+
+**Urgency:** very low (cosmetic). Bundle with items 46-47 as a doc-currency mini-sweep.
+
+Touches: `src/dbxignore/state.py:1-5`.
+
 ---
 
 ## Status
 
 ### Open
 
-Twelve items. Ten are passive (no concrete trigger requires action); item #32 has one fired trigger (a beta tester typed `dbxignore --version` and got "no such option") but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18) and waits for a third recurrence before triggering action.
+Twenty items. Eighteen are passive (no concrete trigger requires action); item #32 has one fired trigger (a beta tester typed `dbxignore --version` and got "no such option") but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18) and waits for a third recurrence before triggering action.
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
@@ -847,6 +1060,14 @@ Twelve items. Ten are passive (no concrete trigger requires action); item #32 ha
 - **#38** — info.json parsing duplicated between `roots.py` and `_backends/macos_xattr.py`. Both modules read `~/.dropbox/info.json` and extract per-account `path` fields with subtly different shapes. Real refactor candidate (~30 lines deduplicated) but the semantic differences (DBXIGNORE_ROOT override, account-type strictness) are intentional. Bundle with the next info.json-touching change.
 - **#39** — `_pluginkit_extension_state()` returns stringly-typed state (`"allowed"`/`"disabled"`/`"not_registered"`/`"unknown"`). Cheap fix is a `Literal[...]` return annotation so type-checkers catch caller-side typos. Single callsite limits blast radius; bundle with a future macos-backend-touching change.
 - **#40** — Dual `paths` for-loops in `_detected_attr_name()` could share a `_first_match` helper. Reviewers disagreed: one proposed extraction, another argued the dual structure correctly documents priority semantics. Filed for the design-tension record; current shape is defensible. Awaits a third predicate (rule-of-three trigger).
+- **#41** — `_reconcile_path` write-side ENOTSUP arm returns `None` instead of `currently_ignored`, breaking subtree pruning on xattr-unsupported filesystems. Companion to item 21 (read-side fix). One-line correctness fix; bundle with next reconcile-touching change.
+- **#42** — `_timeouts_from_env` crashes the daemon if a debounce env var is non-integer (no try/except, no fallback). In-module precedent (`DBXIGNORE_LOG_LEVEL` validation) makes the inconsistency stand out. User-error-triggered; bundle with next daemon-logging touch.
+- **#43** — `reconcile_subtree` re-resolves `root` and `subdir` on every call; daemon callers (`_dispatch`, `_sweep_once`) don't pre-resolve. Companion to item 5 at a different layer; per-event Windows syscall cost. Bundle with next daemon-touching change.
+- **#44** — `build_task_xml` interpolates `getpass.getuser()` and `exe_path` into XML without `xml.sax.saxutils.escape`. Hits users with `&` in install path; manifests as confusing `schtasks` error. Bundle with next install-layer touch.
+- **#45** — `_applicable` docstring says "Yield" but the function returns a list. One-word doc fix.
+- **#46** — `windows_ads.set_ignored` docstring names `reconcile_subtree` as the catcher; the actual catcher (and the term Linux/macOS backends use) is `reconcile._reconcile_path`. One-word doc fix.
+- **#47** — `reconcile.py` module docstring + `_reconcile_path` docstring + one inline comment all say "ADS marker" — Windows-only term in a cross-platform module. Pre-v0.2 wording missed by both Linux and macOS port doc sweeps.
+- **#48** — `state.py` module docstring lists Windows + Linux paths but omits the macOS path that `user_state_dir()` actually returns. Pre-v0.4 wording missed by the macOS port doc sweep. Bundle with #46-47 as a doc-currency mini-sweep.
 
 ### Resolved (reverse chronological)
 
@@ -913,3 +1134,4 @@ How items entered this tracker:
 - **Item 37** added 2026-05-02 from the v0.4.0a5 ship cycle — the proposed-code snippet shared during the detection-design discussion returned a structured `{mode, confidence, reason, ...}` dict; we collapsed to a binary attr-name return for the call-site's needs but kept the diagnostic richness scope (mode + reason at INFO log; mode line in `dbxignore status` on darwin) as a v0.5 follow-up. Filed for the next macos-backend-touching change to bundle with.
 - **Items 38–40** added 2026-05-02 from a `/simplify` review pass on PR #79's path-primary mode-detection code. Three parallel review agents (code-reuse, code-quality, efficiency) flagged opportunities the PR-#85 simplify cleanup deliberately deferred: #38 is the substantive duplication between `roots.py` and `_backends/macos_xattr.py` that wants a shared parsing helper but has real semantic differences blocking a one-line refactor; #39 is the stringly-typed `_pluginkit_extension_state()` return that wants a `Literal[...]` annotation; #40 is the dual-for-loops pattern where the two reviewers disagreed about whether unification helps or hurts clarity. All three are passive code-quality items awaiting a relevant code-touch trigger.
 - **Item #33 validation note** added 2026-05-02 after the beta tester's v0.4.0a5 pass confirmed the File Provider attribute write actually causes Dropbox to stop syncing — closes the three open implementation questions in #33's body that had been left for end-to-end validation. The `Validated 2026-05-02` paragraph now lives inline in #33's body for future readers walking the trail.
+- **Items 41-48** added 2026-05-02 from a whole-codebase local code-review pass against `0e6a285` (eight 75-confidence advisories — below the ≥80 ship-bar but verified-real, filed for backlog). Same shape and provenance as the items 20-23 batch from 2026-04-25. Five parallel reviewer agents (CLAUDE.md adherence, shallow bug scan, git-history regressions, prior PR comments, code-comment-vs-code consistency) → 11 findings → 11 parallel scoring agents → 8 cleared as verified-real, 3 filtered out: a flagged race in `RuleCache._applicable` (already filed as item #23, design-accepted) and a dead `RuntimeError` branch in `_common.detect_invocation` (already filed as item #26) both scored 0 as duplicates; a `pythonw.exe`/`detect_invocation` duplication concern scored 50 as defensible architectural inconsistency. Items #41 (functional ENOTSUP arm asymmetry) and #43 (resolve-at-boundary regression) are the two functional gaps; the remaining six are docstring/comment drift surfaced primarily by the consistency-pass agent.

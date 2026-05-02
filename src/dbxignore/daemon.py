@@ -35,19 +35,43 @@ logger = logging.getLogger(__name__)
 _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
-def _classify(event: Any, roots: list[Path]) -> tuple[EventKind, str, Path] | None:
-    src = Path(event.src_path)
-    root = find_containing(src, roots)
+def _resolve_under_roots(
+    raw_path: str | None, roots: list[Path]
+) -> tuple[Path, Path] | None:
+    """Return ``(root, resolved_path)`` if ``raw_path`` is under a watched root.
+
+    Resolution is deferred until after ``find_containing`` succeeds — the
+    Path.resolve() syscall is the cost item #43 hoisted out of reconcile,
+    so paying it for events outside any root would defeat the win.
+    """
+    if not raw_path:
+        return None
+    p = Path(raw_path)
+    root = find_containing(p, roots)
     if root is None:
         return None
+    return root, p.resolve()
+
+
+def _classify(
+    event: Any, roots: list[Path]
+) -> tuple[EventKind, str, Path, Path] | None:
+    """Classify a watchdog event and return ``(kind, key, root, resolved_src)``.
+
+    ``roots`` MUST already be resolved (see ``_discover_roots`` in cli.py
+    and ``run()`` below). The returned ``resolved_src`` is hoisted out of
+    ``_dispatch`` so downstream consumers don't repeat the syscall.
+    """
+    located = _resolve_under_roots(event.src_path, roots)
+    if located is None:
+        return None
+    root, src = located
     if src.name == IGNORE_FILENAME:
-        # any CRUD on a .dropboxignore is an EventKind.RULES event
-        return EventKind.RULES, str(src).lower(), root
+        return EventKind.RULES, str(src).lower(), root, src
     if event.event_type == "created" and event.is_directory:
-        return EventKind.DIR_CREATE, str(src).lower(), root
+        return EventKind.DIR_CREATE, str(src).lower(), root, src
     if event.event_type in ("created", "moved"):
-        return EventKind.OTHER, str(src).lower(), root
-    # Everything else (modified non-rules file, deleted non-rules file) — skip.
+        return EventKind.OTHER, str(src).lower(), root, src
     return None
 
 
@@ -55,8 +79,7 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
     classification = _classify(event, roots)
     if classification is None:
         return
-    kind, _key, root = classification
-    src = Path(event.src_path)
+    kind, _key, root, src = classification
 
     if kind is EventKind.RULES:
         if event.event_type == "deleted":
@@ -65,13 +88,12 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
         elif event.event_type == "moved":
             cache.remove_file(src)
             reconcile_subtree(root, src.parent, cache)
-            dest = Path(event.dest_path) if event.dest_path else None
-            if dest is not None:
-                dest_root = find_containing(dest, roots)
-                if dest_root is not None:
-                    cache.reload_file(dest)
-                    if (dest_root, dest.parent) != (root, src.parent):
-                        reconcile_subtree(dest_root, dest.parent, cache)
+            dest_located = _resolve_under_roots(event.dest_path, roots)
+            if dest_located is not None:
+                dest_root, dest = dest_located
+                cache.reload_file(dest)
+                if (dest_root, dest.parent) != (root, src.parent):
+                    reconcile_subtree(dest_root, dest.parent, cache)
         else:
             cache.reload_file(src)
             reconcile_subtree(root, src.parent, cache)
@@ -80,10 +102,10 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
     else:
         target = src.parent
         reconcile_subtree(root, target, cache)
-        if event.event_type == "moved" and event.dest_path:
-            dest = Path(event.dest_path)
-            dest_root = find_containing(dest, roots)
-            if dest_root is not None:
+        if event.event_type == "moved":
+            dest_located = _resolve_under_roots(event.dest_path, roots)
+            if dest_located is not None:
+                dest_root, dest = dest_located
                 dest_target = dest if event.is_directory else dest.parent
                 if (dest_root, dest_target) != (root, target):
                     reconcile_subtree(dest_root, dest_target, cache)
@@ -223,7 +245,7 @@ class _WatchdogHandler(FileSystemEventHandler):
         try:
             classification = _classify(event, self._roots)
             if classification is not None:
-                kind, key, _root = classification
+                kind, key, _root, _src = classification
                 self._debouncer.submit(kind, key, event)
         except Exception:  # noqa: BLE001 — watcher must not die
             logger.exception("watchdog handler failed on event %r", event)
@@ -249,7 +271,8 @@ def run(stop_event: threading.Event | None = None) -> None:
             with contextlib.suppress(ValueError, AttributeError):
                 signal.signal(s, _signal_handler)
 
-        configured_roots = roots_module.discover()
+        # Resolve at the daemon boundary; downstream layers must not re-pay.
+        configured_roots = [r.resolve() for r in roots_module.discover()]
         if not configured_roots:
             logger.error("no Dropbox roots discovered; exiting")
             return

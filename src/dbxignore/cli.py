@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 
 
 def _discover_roots() -> list[Path]:
-    """Indirection so tests can monkeypatch root discovery."""
-    return roots.discover()
+    """Resolve roots at the CLI boundary; indirection allows test monkeypatching."""
+    return [r.resolve() for r in roots.discover()]
 
 
 def _format_ignore_file_loc(path: Path, roots: list[Path]) -> str:

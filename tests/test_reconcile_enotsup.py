@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import logging
+from pathlib import Path
 
 from dbxignore import reconcile
 from dbxignore.rules import RuleCache
@@ -102,3 +103,40 @@ def test_enotsup_on_clear_is_reported_not_raised(
 
     assert report.cleared == 0
     assert any(p.resolve() == target.resolve() for p, _ in report.errors)
+
+
+def test_enotsup_on_directory_clear_prunes_subtree(
+    fake_markers, tmp_path, write_file, monkeypatch
+):
+    """A still-marked directory whose clear fails with ENOTSUP must prune.
+
+    The walk-pruning filter treats truthy returns as "ignored, prune".
+    Returning the pre-existing ``currently_ignored`` (True here) keeps
+    descendants out of the walk; returning ``None`` (the bug) descended
+    into them and re-failed for each child.
+    """
+    root = tmp_path
+    marked_dir = root / "marked_dir"
+    marked_dir.mkdir()
+    child_file = write_file(marked_dir / "child.txt")
+    fake_markers.set_ignored(marked_dir)
+    fake_markers.set_ignored(child_file)
+    (root / ".dropboxignore").write_text("", encoding="utf-8")
+
+    clear_attempts: list[Path] = []
+
+    def recording_failing_clear(path):
+        clear_attempts.append(path.resolve())
+        raise OSError(errno.ENOTSUP, "Operation not supported")
+
+    monkeypatch.setattr(fake_markers, "clear_ignored", recording_failing_clear)
+
+    cache = RuleCache()
+    cache.load_root(root)
+    reconcile.reconcile_subtree(root, root, cache)
+
+    assert marked_dir.resolve() in clear_attempts
+    assert child_file.resolve() not in clear_attempts, (
+        "subtree pruning failed: walk descended into the still-marked "
+        "directory and attempted to clear its child"
+    )

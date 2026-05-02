@@ -1040,13 +1040,74 @@ macOS: ``~/Library/Application Support/dbxignore/state.json``
 
 Touches: `src/dbxignore/state.py:1-5`.
 
+## 49. `_require_absolute` duplicated byte-identically across `linux_xattr.py` and `macos_xattr.py`
+
+The two xattr backends each defined an identical helper:
+
+```python
+def _require_absolute(path: Path) -> None:
+    if not path.is_absolute():
+        raise ValueError(f"markers requires an absolute path; got {path!r}")
+```
+
+`linux_xattr.py:36-38` and `macos_xattr.py:244-246` were byte-identical, called from three sites in each module (`is_ignored`, `set_ignored`, `clear_ignored`). The Windows backend (`windows_ads.py`) folds the same check into `_stream_path` because it also has to construct the `\\?\path:streamname` string — different shape, not a dedup candidate.
+
+Surfaced 2026-05-02 in the same `/simplify` whole-codebase review pass that filed items 50-51.
+
+**Fix:** moved to `_backends/__init__.py:require_absolute` (no underscore prefix — the module is the privacy boundary, the name is package-internal). Both xattr backends now `from . import require_absolute as _require_absolute` to keep the local-name `_require_absolute` at all six callsites — zero churn at the call layer.
+
+**Status: RESOLVED 2026-05-02 (PR #89).** Net −10 lines, one source of truth for the validator. All 209 portable + 6 Windows-only tests pass post-change; ruff clean.
+
+Touches: `src/dbxignore/_backends/__init__.py` (new helper, replaces 1-line stub); `src/dbxignore/_backends/linux_xattr.py` (helper deleted, import added); `src/dbxignore/_backends/macos_xattr.py` (helper deleted, import added).
+
+## 50. `windows_task.detect_invocation` partially overlaps `_common.detect_invocation` but diverges in non-frozen branch
+
+`install/windows_task.py:17-37` defines its own `detect_invocation()` rather than importing the shared one from `install/_common.py:16-67`. The two functions:
+
+- **Frozen branch (PyInstaller bundle):** functionally identical. Both prefer the `dbxignored[.exe]` sibling, fall back to `(sys.executable, "daemon")`. The cross-platform `_common.py` already handles Windows via `daemon_name = "dbxignored.exe" if sys.platform == "win32" else "dbxignored"` (line 51).
+- **Non-frozen branch:** genuinely diverges. `_common.py` first tries `shutil.which("dbxignored")` (the `uv tool install` PATH-shim case) and falls back to `python3 -m dbxignore daemon`. `windows_task.py` skips the PATH lookup entirely and goes straight to `pythonw.exe -m dbxignore daemon` — `pythonw.exe` is the windowless Python interpreter, important for a daemon launched by Task Scheduler at logon (no console flash, no orphaned `conhost.exe`). The `_common.py` shape would land `python.exe` (with a console window) on Windows.
+
+So a naive consolidation would regress the Task Scheduler UX. The clean unification path is to teach `_common.py`'s non-frozen branch to prefer `pythonw.exe` over `python.exe` on Windows (or to look up a `dbxignored` PATH shim first on Windows too — currently skipped). Either is reachable but neither is a one-line refactor; both touch behavior that was load-bearing for the v0.1 Windows install layer's first ship and warrant explicit Windows-leg tests.
+
+Surfaced 2026-05-02 in a `/simplify` pass on the whole `src/dbxignore/` package. The reuse-review agent flagged the duplication; verification showed the divergence is real, not accidental.
+
+**Fix candidates:**
+
+- **Extend `_common.detect_invocation` to handle Windows in the non-frozen branch** (preferred path). Add `pythonw.exe` selection on `sys.platform == "win32"`; decide whether to keep or skip the `shutil.which("dbxignored")` lookup (current Windows behavior skips it, so the conservative answer is "skip on Windows"). Then collapse `windows_task.detect_invocation` to `from ._common import detect_invocation`. ~15 lines net deletion plus a Windows-specific test asserting `pythonw.exe` selection.
+- **Status quo.** The duplication is a maintenance footgun (any frozen-branch fix has to be made in two places), but it's not a correctness issue today. Defensible if the Task Scheduler invocation is considered stable enough that the cost of touching it outweighs the dedup.
+
+**Urgency:** low. The frozen-branch logic is what users hit in v0.4 (PyInstaller bundle on Windows); the non-frozen branch is the editable-install developer path. Companion to item #26 (the unreachable `RuntimeError` in `_common.detect_invocation`). Bundle with the next install-layer touch.
+
+Touches: `src/dbxignore/install/_common.py` (Windows branch in non-frozen path); `src/dbxignore/install/windows_task.py` (delete local `detect_invocation`, import from `_common`); new test in `tests/test_install.py` or `tests/test_install_common.py` asserting `pythonw.exe` selection on Windows.
+
+## 51. `install/__init__.py` platform dispatch duplicated across `install_service` and `uninstall_service`
+
+`src/dbxignore/install/__init__.py` has two near-identical 14-line if-elif-else dispatchers (`install_service` and `uninstall_service`), each branching `sys.platform` against `win32` / `linux*` / `darwin` and importing+calling the matching backend's `install_*` / `uninstall_*` function. The two functions differ only in the imported function name and the call.
+
+A `/simplify` quality-review agent (2026-05-02) proposed extracting a `_dispatch_platform_action(action: str) -> Callable` helper that takes `"install"` or `"uninstall"` and returns the matching backend function, eliminating the duplicate branching.
+
+**Counterargument** (chosen direction): the current shape is six trivial blocks (3 platforms × 2 ops), each block is two lines (lazy import + call), and the structure makes it trivial to add a fourth platform — touch one place per op. A factored-out dispatcher would (a) introduce a stringly-typed `action` parameter, (b) couple install and uninstall behind one indirection so a reader has to walk through the helper to see what each op does, and (c) violate the project's "Three similar lines is better than a premature abstraction" rule from CLAUDE.md's `# Doing tasks` section. The duplication is *intentional clarity*, not accidental copy-paste.
+
+This is the same shape as item #40 — filed for the design-tension record so future readers see "this was considered and explicitly rejected" rather than re-discovering the pattern in another `/simplify` pass.
+
+Surfaced 2026-05-02 in the same pass that filed items #49 (resolved in PR #89) and #50.
+
+**Fix candidates:**
+
+- **Status quo** (recommended). Current shape is the right balance for 3 platforms × 2 ops. Re-evaluate if a fourth platform lands or if a third op (e.g. `enable_service` / `disable_service`) is added — at that point the rule-of-three trigger fires and extraction becomes proportionate.
+- **Extract `_dispatch_platform_action(action)`.** Saves ~10 lines but adds a layer of indirection. Defensible if the maintainer prioritizes line-count over branching-structure-clarity.
+
+**Urgency:** very low. Code-quality observation only; current shape is defensible.
+
+Touches: `src/dbxignore/install/__init__.py` (would touch all 14 lines if the extract path is chosen).
+
 ---
 
 ## Status
 
 ### Open
 
-Twenty items. Eighteen are passive (no concrete trigger requires action); item #32 has one fired trigger (a beta tester typed `dbxignore --version` and got "no such option") but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18) and waits for a third recurrence before triggering action.
+Twenty-two items. Twenty are passive (no concrete trigger requires action); item #32 has one fired trigger (a beta tester typed `dbxignore --version` and got "no such option") but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18) and waits for a third recurrence before triggering action.
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
@@ -1068,11 +1129,14 @@ Twenty items. Eighteen are passive (no concrete trigger requires action); item #
 - **#46** — `windows_ads.set_ignored` docstring names `reconcile_subtree` as the catcher; the actual catcher (and the term Linux/macOS backends use) is `reconcile._reconcile_path`. One-word doc fix.
 - **#47** — `reconcile.py` module docstring + `_reconcile_path` docstring + one inline comment all say "ADS marker" — Windows-only term in a cross-platform module. Pre-v0.2 wording missed by both Linux and macOS port doc sweeps.
 - **#48** — `state.py` module docstring lists Windows + Linux paths but omits the macOS path that `user_state_dir()` actually returns. Pre-v0.4 wording missed by the macOS port doc sweep. Bundle with #46-47 as a doc-currency mini-sweep.
+- **#50** — `windows_task.detect_invocation` partially overlaps `_common.detect_invocation` but diverges in the non-frozen branch (Windows uses `pythonw.exe` for windowless Task Scheduler launch and skips `shutil.which("dbxignored")` PATH lookup). Companion to item #26. Bundle with next install-layer touch.
+- **#51** — `install/__init__.py` platform dispatch duplicated across `install_service`/`uninstall_service`. Filed for the design-tension record (precedent: #40); current 6-block shape is defensible vs a factored-out helper that would introduce stringly-typed action coupling.
 
 ### Resolved (reverse chronological)
 
 #### 2026-05-02
 
+- **#49** in PR #89 — extract `_require_absolute` from both xattr backends (`linux_xattr.py`, `macos_xattr.py`) to `_backends/__init__.py:require_absolute`. Two callsite-preserving imports (`from . import require_absolute as _require_absolute`) keep the local-name semantics at all six call sites. Net −10 lines, one source of truth for the validator. Filed-and-resolved in the same PR per project convention.
 - **#33** validated by v0.4.0a5 beta-tester pass — beta tester confirmed Dropbox actually stops syncing the marked folder after `dbxignore apply` on a macOS Tahoe 26.4 / Dropbox 250.4 File Provider install. All three open implementation questions in #33's body resolved affirmatively (no entitlements needed, stub files behave the same, `#P` alone is sufficient). The (B) scope decision pays off — v0.4 ships with full File Provider support rather than a documented legacy-only limitation.
 
 #### 2026-05-01
@@ -1134,4 +1198,5 @@ How items entered this tracker:
 - **Item 37** added 2026-05-02 from the v0.4.0a5 ship cycle — the proposed-code snippet shared during the detection-design discussion returned a structured `{mode, confidence, reason, ...}` dict; we collapsed to a binary attr-name return for the call-site's needs but kept the diagnostic richness scope (mode + reason at INFO log; mode line in `dbxignore status` on darwin) as a v0.5 follow-up. Filed for the next macos-backend-touching change to bundle with.
 - **Items 38–40** added 2026-05-02 from a `/simplify` review pass on PR #79's path-primary mode-detection code. Three parallel review agents (code-reuse, code-quality, efficiency) flagged opportunities the PR-#85 simplify cleanup deliberately deferred: #38 is the substantive duplication between `roots.py` and `_backends/macos_xattr.py` that wants a shared parsing helper but has real semantic differences blocking a one-line refactor; #39 is the stringly-typed `_pluginkit_extension_state()` return that wants a `Literal[...]` annotation; #40 is the dual-for-loops pattern where the two reviewers disagreed about whether unification helps or hurts clarity. All three are passive code-quality items awaiting a relevant code-touch trigger.
 - **Item #33 validation note** added 2026-05-02 after the beta tester's v0.4.0a5 pass confirmed the File Provider attribute write actually causes Dropbox to stop syncing — closes the three open implementation questions in #33's body that had been left for end-to-end validation. The `Validated 2026-05-02` paragraph now lives inline in #33's body for future readers walking the trail.
+- **Items 49–51** added 2026-05-02 from a `/simplify` whole-codebase review pass on `main` (no diff — explicit `the whole codebase` argument). Three parallel agents (reuse, quality, efficiency) ran against `src/dbxignore/` with all twenty open backlog items passed as exclusions to suppress rediscovery. Two solid findings emerged beyond the existing backlog: #49 (a clear duplication, fixed in the same PR) and #50 (a partial overlap that diverges by design in one branch — filed for future install-layer bundling). #51 documents an explicitly-rejected refactor for the design-tension record, mirroring item #40's precedent. Efficiency review found nothing new beyond items already tracked (#41, #43, #45-48).
 - **Items 41-48** added 2026-05-02 from a whole-codebase local code-review pass against `0e6a285` (eight 75-confidence advisories — below the ≥80 ship-bar but verified-real, filed for backlog). Same shape and provenance as the items 20-23 batch from 2026-04-25. Five parallel reviewer agents (CLAUDE.md adherence, shallow bug scan, git-history regressions, prior PR comments, code-comment-vs-code consistency) → 11 findings → 11 parallel scoring agents → 8 cleared as verified-real, 3 filtered out: a flagged race in `RuleCache._applicable` (already filed as item #23, design-accepted) and a dead `RuntimeError` branch in `_common.detect_invocation` (already filed as item #26) both scored 0 as duplicates; a `pythonw.exe`/`detect_invocation` duplication concern scored 50 as defensible architectural inconsistency. Items #41 (functional ENOTSUP arm asymmetry) and #43 (resolve-at-boundary regression) are the two functional gaps; the remaining six are docstring/comment drift surfaced primarily by the consistency-pass agent.

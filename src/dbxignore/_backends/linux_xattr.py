@@ -21,6 +21,8 @@ import logging
 import os
 from pathlib import Path
 
+from . import require_absolute as _require_absolute
+
 logger = logging.getLogger(__name__)
 
 ATTR_NAME = "user.com.dropbox.ignored"
@@ -31,11 +33,6 @@ _MARKER_VALUE = b"1"
 # ENODATA; the set deduplicates naturally. The defensive form stays in
 # case a future Python/platform adds ENOATTR as a distinct value.
 _NO_ATTR_ERRNOS = {errno.ENODATA, getattr(errno, "ENOATTR", errno.ENODATA)}
-
-
-def _require_absolute(path: Path) -> None:
-    if not path.is_absolute():
-        raise ValueError(f"markers requires an absolute path; got {path!r}")
 
 
 def is_ignored(path: Path) -> bool:

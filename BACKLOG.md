@@ -971,6 +971,8 @@ The return-type annotation is `list[tuple[Path, _LoadedRules]]` (correct), but t
 
 Touches: `src/dbxignore/rules.py:257`.
 
+**Status: RESOLVED 2026-05-02 (PR #90).** "Yield" → "Return" in the docstring. One-word fix as filed.
+
 ## 46. `windows_ads.set_ignored` docstring names `reconcile_subtree` as the catcher; should be `reconcile._reconcile_path`
 
 `src/dbxignore/_backends/windows_ads.py:44-50`:
@@ -996,6 +998,8 @@ Likely an artifact of pre-extraction wording when the catch-all sat in `reconcil
 
 Touches: `src/dbxignore/_backends/windows_ads.py:49`.
 
+**Status: RESOLVED 2026-05-02 (PR #90).** `reconcile_subtree` → `reconcile._reconcile_path` in the docstring. Brings the Windows backend into citation-symmetry with `linux_xattr.py` and `macos_xattr.py`.
+
 ## 47. `reconcile.py` module docstring describes "ADS markers" — Windows-only term in cross-platform module
 
 `src/dbxignore/reconcile.py:1`:
@@ -1013,6 +1017,8 @@ The same Windows-flavored phrasing recurs in `_reconcile_path`'s own docstring (
 **Urgency:** very low (cosmetic, but newly visible to readers approaching the module from the Linux/macOS side). Bundle with items 46 and 48 as a doc-currency mini-sweep.
 
 Touches: `src/dbxignore/reconcile.py:1`, `:56`, `:100`.
+
+**Status: RESOLVED 2026-05-02 (PR #90).** s/ADS/marker/ across **five** locations, not the three the item enumerated — the Windows-flavored phrasing also recurred in the `PermissionError` write-side log (line 103: "Permission denied writing ADS on") and in the inline comment two lines below (line 105: "the ADS state is still whatever we read"). The item author's grep matched only "ADS marker" / "ADS write" exact phrases; the broader sweep covered all five. Verified zero "ADS" mentions remaining via `grep -n ADS reconcile.py`. Repeats the lesson from items 21 and 22: a tracker item's prescribed scope can be narrower than the underlying drift — always verify against current code before executing.
 
 ## 48. `state.py` module docstring lists Windows + Linux paths but omits macOS
 
@@ -1039,6 +1045,8 @@ macOS: ``~/Library/Application Support/dbxignore/state.json``
 **Urgency:** very low (cosmetic). Bundle with items 46-47 as a doc-currency mini-sweep.
 
 Touches: `src/dbxignore/state.py:1-5`.
+
+**Status: RESOLVED 2026-05-02 (PR #90).** Added the macOS bullet verbatim from the item's prescribed fix (path + `~/Library/Logs/dbxignore/` log split note). Module docstring now matches the three-platform shape of `user_state_dir()` and `user_log_dir()`.
 
 ## 49. `_require_absolute` duplicated byte-identically across `linux_xattr.py` and `macos_xattr.py`
 
@@ -1107,7 +1115,7 @@ Touches: `src/dbxignore/install/__init__.py` (would touch all 14 lines if the ex
 
 ### Open
 
-Twenty-two items. Twenty are passive (no concrete trigger requires action); item #32 has one fired trigger (a beta tester typed `dbxignore --version` and got "no such option") but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18) and waits for a third recurrence before triggering action.
+Eighteen items. Sixteen are passive (no concrete trigger requires action); item #32 has one fired trigger (a beta tester typed `dbxignore --version` and got "no such option") but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18) and waits for a third recurrence before triggering action.
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
@@ -1125,10 +1133,6 @@ Twenty-two items. Twenty are passive (no concrete trigger requires action); item
 - **#42** — `_timeouts_from_env` crashes the daemon if a debounce env var is non-integer (no try/except, no fallback). In-module precedent (`DBXIGNORE_LOG_LEVEL` validation) makes the inconsistency stand out. User-error-triggered; bundle with next daemon-logging touch.
 - **#43** — `reconcile_subtree` re-resolves `root` and `subdir` on every call; daemon callers (`_dispatch`, `_sweep_once`) don't pre-resolve. Companion to item 5 at a different layer; per-event Windows syscall cost. Bundle with next daemon-touching change.
 - **#44** — `build_task_xml` interpolates `getpass.getuser()` and `exe_path` into XML without `xml.sax.saxutils.escape`. Hits users with `&` in install path; manifests as confusing `schtasks` error. Bundle with next install-layer touch.
-- **#45** — `_applicable` docstring says "Yield" but the function returns a list. One-word doc fix.
-- **#46** — `windows_ads.set_ignored` docstring names `reconcile_subtree` as the catcher; the actual catcher (and the term Linux/macOS backends use) is `reconcile._reconcile_path`. One-word doc fix.
-- **#47** — `reconcile.py` module docstring + `_reconcile_path` docstring + one inline comment all say "ADS marker" — Windows-only term in a cross-platform module. Pre-v0.2 wording missed by both Linux and macOS port doc sweeps.
-- **#48** — `state.py` module docstring lists Windows + Linux paths but omits the macOS path that `user_state_dir()` actually returns. Pre-v0.4 wording missed by the macOS port doc sweep. Bundle with #46-47 as a doc-currency mini-sweep.
 - **#50** — `windows_task.detect_invocation` partially overlaps `_common.detect_invocation` but diverges in the non-frozen branch (Windows uses `pythonw.exe` for windowless Task Scheduler launch and skips `shutil.which("dbxignored")` PATH lookup). Companion to item #26. Bundle with next install-layer touch.
 - **#51** — `install/__init__.py` platform dispatch duplicated across `install_service`/`uninstall_service`. Filed for the design-tension record (precedent: #40); current 6-block shape is defensible vs a factored-out helper that would introduce stringly-typed action coupling.
 
@@ -1136,6 +1140,7 @@ Twenty-two items. Twenty are passive (no concrete trigger requires action); item
 
 #### 2026-05-02
 
+- **#45-48** in PR #90 — doc-currency mini-sweep across four files. #45: `_applicable` docstring "Yield" → "Return" (no generator in body). #46: `windows_ads.set_ignored` docstring catcher reference `reconcile_subtree` → `reconcile._reconcile_path` (matches the Linux/macOS backend wording and the actual code). #47: s/ADS/marker/ across **five** locations in `reconcile.py` (the item enumerated three; the broader sweep also caught two `PermissionError`-arm log/comment lines using "ADS write" / "ADS state"). #48: added the macOS bullet to `state.py`'s module docstring so it matches the three-platform shape of `user_state_dir()`. Zero behavior change; ruff clean.
 - **#49** in PR #89 — extract `_require_absolute` from both xattr backends (`linux_xattr.py`, `macos_xattr.py`) to `_backends/__init__.py:require_absolute`. Two callsite-preserving imports (`from . import require_absolute as _require_absolute`) keep the local-name semantics at all six call sites. Net −10 lines, one source of truth for the validator. Filed-and-resolved in the same PR per project convention.
 - **#33** validated by v0.4.0a5 beta-tester pass — beta tester confirmed Dropbox actually stops syncing the marked folder after `dbxignore apply` on a macOS Tahoe 26.4 / Dropbox 250.4 File Provider install. All three open implementation questions in #33's body resolved affirmatively (no entitlements needed, stub files behave the same, `#P` alone is sufficient). The (B) scope decision pays off — v0.4 ships with full File Provider support rather than a documented legacy-only limitation.
 

@@ -18,8 +18,15 @@ logger = logging.getLogger(__name__)
 
 
 def _discover_roots() -> list[Path]:
-    """Indirection so tests can monkeypatch root discovery."""
-    return roots.discover()
+    """Indirection so tests can monkeypatch root discovery.
+
+    Roots are resolved at this CLI boundary so downstream consumers
+    (`reconcile_subtree`, `markers.is_ignored`, the rule cache) receive
+    absolute, canonicalized paths and never re-pay the per-call
+    `Path.resolve()` syscall (CLAUDE.md "Resolve at the CLI/daemon
+    boundary, never inside the cache or markers layer").
+    """
+    return [r.resolve() for r in roots.discover()]
 
 
 def _format_ignore_file_loc(path: Path, roots: list[Path]) -> str:

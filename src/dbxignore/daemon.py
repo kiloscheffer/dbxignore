@@ -35,18 +35,29 @@ logger = logging.getLogger(__name__)
 _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
-def _classify(event: Any, roots: list[Path]) -> tuple[EventKind, str, Path] | None:
+def _classify(
+    event: Any, roots: list[Path]
+) -> tuple[EventKind, str, Path, Path] | None:
+    """Classify a watchdog event and return ``(kind, key, root, resolved_src)``.
+
+    ``roots`` MUST already be resolved (see ``_discover_roots`` in cli.py and
+    ``run()`` below — both pre-resolve at the daemon/CLI boundary). The
+    returned ``resolved_src`` is the event's ``src_path`` after
+    ``Path.resolve()``, hoisted here so downstream consumers (``_dispatch``,
+    the rule cache, marker I/O) don't repeat the syscall (item #43).
+    """
     src = Path(event.src_path)
     root = find_containing(src, roots)
     if root is None:
         return None
+    src = src.resolve()
     if src.name == IGNORE_FILENAME:
         # any CRUD on a .dropboxignore is an EventKind.RULES event
-        return EventKind.RULES, str(src).lower(), root
+        return EventKind.RULES, str(src).lower(), root, src
     if event.event_type == "created" and event.is_directory:
-        return EventKind.DIR_CREATE, str(src).lower(), root
+        return EventKind.DIR_CREATE, str(src).lower(), root, src
     if event.event_type in ("created", "moved"):
-        return EventKind.OTHER, str(src).lower(), root
+        return EventKind.OTHER, str(src).lower(), root, src
     # Everything else (modified non-rules file, deleted non-rules file) — skip.
     return None
 
@@ -55,8 +66,7 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
     classification = _classify(event, roots)
     if classification is None:
         return
-    kind, _key, root = classification
-    src = Path(event.src_path)
+    kind, _key, root, src = classification
 
     if kind is EventKind.RULES:
         if event.event_type == "deleted":
@@ -65,7 +75,7 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
         elif event.event_type == "moved":
             cache.remove_file(src)
             reconcile_subtree(root, src.parent, cache)
-            dest = Path(event.dest_path) if event.dest_path else None
+            dest = Path(event.dest_path).resolve() if event.dest_path else None
             if dest is not None:
                 dest_root = find_containing(dest, roots)
                 if dest_root is not None:
@@ -81,7 +91,7 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
         target = src.parent
         reconcile_subtree(root, target, cache)
         if event.event_type == "moved" and event.dest_path:
-            dest = Path(event.dest_path)
+            dest = Path(event.dest_path).resolve()
             dest_root = find_containing(dest, roots)
             if dest_root is not None:
                 dest_target = dest if event.is_directory else dest.parent
@@ -223,7 +233,7 @@ class _WatchdogHandler(FileSystemEventHandler):
         try:
             classification = _classify(event, self._roots)
             if classification is not None:
-                kind, key, _root = classification
+                kind, key, _root, _src = classification
                 self._debouncer.submit(kind, key, event)
         except Exception:  # noqa: BLE001 — watcher must not die
             logger.exception("watchdog handler failed on event %r", event)
@@ -249,7 +259,10 @@ def run(stop_event: threading.Event | None = None) -> None:
             with contextlib.suppress(ValueError, AttributeError):
                 signal.signal(s, _signal_handler)
 
-        configured_roots = roots_module.discover()
+        # Resolve at the daemon boundary so reconcile/cache/markers layers
+        # never re-pay the per-call Path.resolve() syscall (item #43, mirrors
+        # cli._discover_roots's pre-resolution at the CLI boundary).
+        configured_roots = [r.resolve() for r in roots_module.discover()]
         if not configured_roots:
             logger.error("no Dropbox roots discovered; exiting")
             return

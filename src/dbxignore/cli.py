@@ -104,6 +104,7 @@ def _process_is_alive(pid: int | None) -> bool:
 
 @click.group()
 @click.option("--verbose", "-v", is_flag=True, help="Enable DEBUG-level logging.")
+@click.version_option(package_name="dbxignore")
 @click.pass_context
 def main(ctx: click.Context, verbose: bool) -> None:
     """Manage hierarchical .dropboxignore rules for Dropbox."""
@@ -282,11 +283,15 @@ def explain(path: Path) -> None:
         click.echo(f"{loc}:{m.line}  {prefix}{raw}{suffix}")
 
 
+def _run_daemon() -> None:
+    from dbxignore import daemon as daemon_mod
+    daemon_mod.run()
+
+
 @main.command()
 def daemon() -> None:
     """Run the watcher + hourly sweep daemon (foreground)."""
-    from dbxignore import daemon as daemon_mod
-    daemon_mod.run()
+    _run_daemon()
 
 
 @main.command()
@@ -362,7 +367,11 @@ def uninstall(purge: bool) -> None:
                 click.echo(f"Removed systemd drop-in directory {removed_dropin}.")
 
 
-def daemon_main() -> None:
-    """Entry point for the dbxignored script shim."""
-    sys.argv.insert(1, "daemon")
-    main()
+@click.command()
+@click.option("--verbose", "-v", is_flag=True, help="Enable DEBUG-level logging.")
+@click.version_option(package_name="dbxignore")
+def daemon_main(verbose: bool) -> None:
+    """Run the dbxignore watcher + hourly sweep daemon (foreground)."""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(level=level, format="%(levelname)s %(name)s: %(message)s")
+    _run_daemon()

@@ -745,13 +745,95 @@ That's enough for self-diagnosis when a user knows to add `-v`, but it's a poor 
 
 Touches: `src/dbxignore/_backends/macos_xattr.py` (new `_detection_reason()` helper); `src/dbxignore/daemon.py` (INFO log at startup); `src/dbxignore/cli.py` (status output line on darwin); `tests/` (small additions covering both surfaces).
 
+## 38. info.json parsing duplicated between `roots.py` and `_backends/macos_xattr.py`
+
+`roots.discover()` and `_backends/macos_xattr._read_dropbox_paths_from_info()` both read `~/.dropbox/info.json`, parse it as JSON, and extract per-account `path` fields. The two implementations differ in superficial ways but encode the same core logic:
+
+- `roots.discover()` (lines 63-110): handles `DBXIGNORE_ROOT` env-var override first, then locates info.json via `_info_json_paths()` (platform-aware), reads + parses, iterates over hardcoded `_ACCOUNT_TYPES = ("personal", "business")`, returns `list[Path]` with WARNING logs on each failure mode.
+- `_backends/macos_xattr._read_dropbox_paths_from_info()` (~25 lines): macOS-only path (`~/.dropbox/info.json` directly), reads + parses, iterates over `data.values()` (looser — accepts any account-type key), returns `list[str]` with silent failure (returns `[]` on any error).
+
+The semantic differences are intentional and load-bearing:
+
+- `roots.discover()` honors `DBXIGNORE_ROOT` because that's the daemon's escape hatch for non-stock Dropbox installs. macos_xattr deliberately bypasses it because the override tells us the daemon's *operational* root, not the user's *configured sync mode* — and mode detection needs the configured path, not the override.
+- `roots.discover()` only knows `personal` + `business` keys; macos_xattr accepts any. If Dropbox ever adds a third account type (rare but possible), `roots.discover()` would silently miss it; macos_xattr would catch it.
+
+Surfaced 2026-05-02 in a `/simplify` pass on PR #79.
+
+**Fix candidates:**
+
+- **Extract a shared `_parse_info_json_paths(info_path: Path) -> list[str]` helper.** Lives in `roots.py` (or a new `_dropbox_info.py` if we want clean separation). Both `roots.discover()` and `_read_dropbox_paths_from_info()` call it. Each caller wraps it with their own error-logging strategy and post-processing. Net: ~30 lines of duplication eliminated, the looser `data.values()` iteration becomes the shared canonical implementation (fixing `roots.discover()`'s missing-future-account-types blind spot for free).
+- **Status quo.** The duplication is small (~25 lines), the semantic differences are real, and the modules' independence is currently a virtue (changes to `roots.py` can't accidentally break mode detection). Acceptable to leave as-is until one or the other needs non-trivial change.
+
+**Recommendation:** extract when next touching either module's info.json handling. No urgency to do it standalone; the cost of the duplication is one-time and bounded.
+
+**Urgency:** low. Pure code-quality refactor; no behavior change for users.
+
+Touches: `src/dbxignore/roots.py`; `src/dbxignore/_backends/macos_xattr.py`; possibly new `src/dbxignore/_dropbox_info.py`; tests for both call sites.
+
+## 39. `_pluginkit_extension_state()` returns stringly-typed state
+
+`_backends/macos_xattr._pluginkit_extension_state()` returns one of four raw strings: `"allowed"` / `"disabled"` / `"not_registered"` / `"unknown"`. The single caller (`_detected_attr_name()`) does `if extension_state == "disabled":` and `if extension_state == "allowed":` comparisons against those literals.
+
+The four-string return type is an enum in everything but type. A typo in either the function (return value) or the caller (comparison string) would silently produce wrong behavior at runtime — the type checker has no way to catch `extension_state == "disablled"` because it's just a string comparison.
+
+Surfaced 2026-05-02 in a `/simplify` pass on PR #79.
+
+**Fix candidates:**
+
+- **`enum.Enum`.** Concrete: `class PluginKitState(Enum): ALLOWED = "allowed"; DISABLED = "disabled"; NOT_REGISTERED = "not_registered"; UNKNOWN = "unknown"`. Caller becomes `if extension_state is PluginKitState.DISABLED:`. Catches typos at type-check time. ~10 lines added, all comparisons updated.
+- **`typing.Literal[...]`.** Lighter-weight: `def _pluginkit_extension_state() -> Literal["allowed", "disabled", "not_registered", "unknown"]:`. The return-type annotation lets mypy/ty/pyright catch caller-side typos but doesn't help with internal typos in the function body. ~1 line annotation change.
+- **Status quo.** Strings are confined to one module with one callsite. The comparison literals are co-located with the function returning them (in the same file). Risk of typo is real but the blast radius is small (single test would catch most cases).
+
+**Recommendation:** `Literal[...]` annotation if anything — the cost is one line and we get type-checker support for caller-side typos. Don't bother with a full enum; the ergonomics gain is small relative to the boilerplate.
+
+**Urgency:** low. Pure code-quality. Single callsite limits blast radius.
+
+Touches: `src/dbxignore/_backends/macos_xattr.py` (one line annotation, plus possibly an enum class if we go that route).
+
+## 40. Dual `paths` for-loops in `_detected_attr_name()` could share a helper
+
+`_detected_attr_name()` has two consecutive for-loops over the `paths` list, each with similar shape: try `os.path.realpath(p)`, catch `OSError`, check a predicate against the result, return `ATTR_FILEPROVIDER` if matched, log the match. The loops differ only in:
+
+- The predicate (`is_relative_to(cloud_storage)` vs. `len(real_parts) >= 3 and real_parts[1] == "Volumes"`).
+- The log message ("Detected File Provider mode: %s under ~/Library/CloudStorage/" vs. "Detected File Provider mode (external drive): %s").
+
+A code-review agent during PR #79's `/simplify` pass proposed extracting `_first_match(paths, predicate, log_msg) -> bool` to dedupe. A second agent argued the dual structure is correct because the two loops encode different *priority levels*: CloudStorage match wins unconditionally (regardless of pluginkit state); `/Volumes` match only fires if `extension_state == "allowed"`. Merging into a single pass would either change priority semantics (a CloudStorage hit on account[1] would lose to a Volumes hit on account[0]) or require carrying a "found Volumes match, hold it" variable — both worse.
+
+The disagreement isn't about whether the code is correct (it is); it's about whether the dual-loop structure is the best way to express the priority semantics, or whether a shared helper called twice (with different predicates) would be clearer.
+
+Surfaced 2026-05-02 in the same `/simplify` pass.
+
+**Fix candidates:**
+
+- **Extract `_first_match(paths, predicate, log_msg) -> bool`** and call it twice in priority order. Concrete shape:
+  ```python
+  def _first_match(paths, predicate, log_msg):
+      for p in paths:
+          try:
+              real = Path(os.path.realpath(p))
+          except OSError:
+              continue
+          if predicate(real):
+              logger.debug(log_msg, p)
+              return True
+      return False
+  ```
+  Then `if _first_match(paths, is_under_cloudstorage, "..."):` returns FP, etc. Preserves priority via the order of the two `if` blocks. Saves ~10 lines of repetition.
+- **Status quo.** The dual structure is verbose but correctly encodes the priority. A future reader can see "CloudStorage check first, Volumes check second" at a glance; with the helper they'd have to read the helper definition + both call sites to understand priority. Argument against extraction is "verbose-but-clear beats terse-but-indirect."
+
+**Recommendation:** keep as-is. The verbose structure correctly documents the priority. A `_first_match` helper would be cleaner if a third predicate ever appeared, but with two it's "rule of three" territory — not yet.
+
+**Urgency:** very low. Code-quality observation only; current shape is defensible.
+
+Touches: `src/dbxignore/_backends/macos_xattr.py` (one helper added, two call sites updated).
+
 ---
 
 ## Status
 
 ### Open
 
-Nine items. Seven are passive (no concrete trigger requires action); item #32 has one fired trigger (a beta tester typed `dbxignore --version` and got "no such option") but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18) and waits for a third recurrence before triggering action.
+Twelve items. Ten are passive (no concrete trigger requires action); item #32 has one fired trigger (a beta tester typed `dbxignore --version` and got "no such option") but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18) and waits for a third recurrence before triggering action.
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
@@ -762,6 +844,9 @@ Nine items. Seven are passive (no concrete trigger requires action); item #32 ha
 - **#32** — CLI polish: missing `--version`, unreachable `--verbose` from `dbxignored`, and bogus `Usage: dbxignored daemon` in `dbxignored --help`. All three trace to the `daemon_main` argv-rewrite shim; the consolidated fix is replacing the shim with a standalone Click command and adding `@click.version_option` to both. Sequence-dependent on #30 — fix #32 first if both are scheduled. Awaits CLI-touching change to bundle with.
 - **#34** — `test_daemon_reacts_to_dropboxignore_and_directory_creation` flaked again 2026-05-01 in PR #74's post-rebase Windows leg, post-PR #40 timeout fix (item #18). Reran the failed leg, second run passed in 27s. Per project policy, single post-resolution recurrence is logged but not actioned; third recurrence triggers either further timeout widening or actual root-cause diagnosis.
 - **#37** — macOS sync-mode detection result observability. Detection writes its result to a debug-level log; surface it at INFO at daemon startup AND in `dbxignore status` output on darwin so users can self-diagnose without `dbxignore -v`. ~30 lines code; awaits next macos-backend-touching change to bundle with.
+- **#38** — info.json parsing duplicated between `roots.py` and `_backends/macos_xattr.py`. Both modules read `~/.dropbox/info.json` and extract per-account `path` fields with subtly different shapes. Real refactor candidate (~30 lines deduplicated) but the semantic differences (DBXIGNORE_ROOT override, account-type strictness) are intentional. Bundle with the next info.json-touching change.
+- **#39** — `_pluginkit_extension_state()` returns stringly-typed state (`"allowed"`/`"disabled"`/`"not_registered"`/`"unknown"`). Cheap fix is a `Literal[...]` return annotation so type-checkers catch caller-side typos. Single callsite limits blast radius; bundle with a future macos-backend-touching change.
+- **#40** — Dual `paths` for-loops in `_detected_attr_name()` could share a `_first_match` helper. Reviewers disagreed: one proposed extraction, another argued the dual structure correctly documents priority semantics. Filed for the design-tension record; current shape is defensible. Awaits a third predicate (rule-of-three trigger).
 
 ### Resolved (reverse chronological)
 
@@ -826,4 +911,5 @@ How items entered this tracker:
 - **Item 35** added 2026-05-01 from the same v0.4.0a3 macOS beta-test session — `launchctl print` revealed the launchd plist invoked the long-form `dbxignore` binary with no subcommand, hitting Click's "no subcommand → exit 2" arm and never reaching `daemon_mod.run()`. Filed and resolved in the same PR because the fix is small (~50 lines), the regression class is well-bounded (the frozen branches of `detect_invocation` in both `_common.py` and `windows_task.py`), and the tracker entry's value is mostly historical/educational rather than awaiting-action. Linux was unaffected — Linux installs don't ship a frozen binary, so they reached the non-frozen branch which already routed correctly through `shutil.which("dbxignored")`.
 - **Item 36** added 2026-05-01 immediately after v0.4.0a4 shipped — the maintainer recognized that v0.4.0a4's pluginkit-primary detection conflated the *system-level* signal (is the extension registered?) with the *user-level* signal (which mode is this account in?), and that the user-level fact lives in info.json's `path` field. PluginKit registration says nothing about whether *this user's account* migrated; the path does. Filed and resolved in PR #79; ships in v0.4.0a5 before any beta tester ran v0.4.0a4 in the wild — caught by reasoning about the signal layers, not by a tester report. Detection logic reframed as path-primary with pluginkit-disambiguation; covers the missed case (extension installed + user in legacy mode → legacy) plus the external-drive File Provider case Dropbox docs document.
 - **Item 37** added 2026-05-02 from the v0.4.0a5 ship cycle — the proposed-code snippet shared during the detection-design discussion returned a structured `{mode, confidence, reason, ...}` dict; we collapsed to a binary attr-name return for the call-site's needs but kept the diagnostic richness scope (mode + reason at INFO log; mode line in `dbxignore status` on darwin) as a v0.5 follow-up. Filed for the next macos-backend-touching change to bundle with.
+- **Items 38–40** added 2026-05-02 from a `/simplify` review pass on PR #79's path-primary mode-detection code. Three parallel review agents (code-reuse, code-quality, efficiency) flagged opportunities the PR-#85 simplify cleanup deliberately deferred: #38 is the substantive duplication between `roots.py` and `_backends/macos_xattr.py` that wants a shared parsing helper but has real semantic differences blocking a one-line refactor; #39 is the stringly-typed `_pluginkit_extension_state()` return that wants a `Literal[...]` annotation; #40 is the dual-for-loops pattern where the two reviewers disagreed about whether unification helps or hurts clarity. All three are passive code-quality items awaiting a relevant code-touch trigger.
 - **Item #33 validation note** added 2026-05-02 after the beta tester's v0.4.0a5 pass confirmed the File Provider attribute write actually causes Dropbox to stop syncing — closes the three open implementation questions in #33's body that had been left for end-to-end validation. The `Validated 2026-05-02` paragraph now lives inline in #33's body for future readers walking the trail.

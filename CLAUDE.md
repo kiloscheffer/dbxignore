@@ -9,8 +9,8 @@ Cross-platform Python utility: keeps Dropbox ignore markers (NTFS alternate data
 - `uv run pytest -m "not windows_only"` — portable subset (what Ubuntu CI runs)
 - `uv run pytest -W error::DeprecationWarning` — local strict mode (not enforced in CI)
 - `uv run ruff check` — lint; rules E, F, I, B, UP, SIM; line length 100
-- `dbxignore <apply|status|list|explain|daemon|install|uninstall>` — CLI console script (`cli:main`). `install` / `uninstall` register / remove the daemon with the platform's user-scoped service manager (Task Scheduler on Windows, systemd user unit on Linux). `uninstall --purge` also clears every ignore marker.
-- `dbxignored` — daemon shim (`cli:daemon_main`), launched by the installed Scheduled Task
+- `dbxignore <apply|status|list|explain|daemon|install|uninstall>` — CLI console script (`cli:main`). `install` / `uninstall` register / remove the daemon with the platform's user-scoped service manager (Task Scheduler on Windows, systemd user unit on Linux, launchd LaunchAgent on macOS). `uninstall --purge` also clears every ignore marker.
+- `dbxignored` — daemon shim (`cli:daemon_main`), launched by the platform's installed service (Scheduled Task / systemd unit / LaunchAgent)
 - `python -m dbxignore <subcommand>` — equivalent to the console script, via `src/dbxignore/__main__.py`. Useful when the wheel isn't installed (e.g. `uv run python -m dbxignore status`).
 
 ## Architecture
@@ -29,7 +29,7 @@ The static conflict detector lives in `rules_conflicts.py` (extracted from `rule
 
 The daemon's watchdog events are classified (`_classify` → `EventKind.{RULES,DIR_CREATE,OTHER}`) and funneled through `Debouncer` before `_dispatch` runs `reconcile_subtree`. `DEFAULT_TIMEOUTS_MS` per kind is overridable via `DBXIGNORE_DEBOUNCE_{RULES,DIRS,OTHER}_MS`.
 
-`install/` is a package with `__init__.py` exposing `install_service()` / `uninstall_service()` dispatchers, plus `windows_task.py` (schtasks XML generation + invocation) and `linux_systemd.py` (writes `~/.config/systemd/user/dbxignore.service`, runs `systemctl --user daemon-reload && enable --now`). `cli.install` / `cli.uninstall` delegate only to the package dispatcher; don't call backend modules directly from the CLI layer.
+`install/` is a package with `__init__.py` exposing `install_service()` / `uninstall_service()` dispatchers, plus `windows_task.py` (schtasks XML generation + invocation), `linux_systemd.py` (writes `~/.config/systemd/user/dbxignore.service`, runs `systemctl --user daemon-reload && enable --now`), and `macos_launchd.py` (writes `~/Library/LaunchAgents/com.kiloscheffer.dbxignore.plist`, bootstraps via `launchctl bootstrap gui/<uid>`). `cli.install` / `cli.uninstall` delegate only to the package dispatcher; don't call backend modules directly from the CLI layer.
 
 ## Gotchas
 
@@ -111,5 +111,6 @@ Specs and plans are kept side-by-side under `docs/superpowers/{specs,plans}/`, n
 - v0.2 Linux port: `specs/2026-04-21-dropboxignore-v0.2-linux.md` + `plans/2026-04-21-dropboxignore-v0.2-linux.md`; followups in `plans/2026-04-21-dropboxignore-v0.2-linux-followups.md`
 - v0.2.1 negation semantics: `specs/2026-04-21-dropboxignore-negation-semantics.md` + `plans/2026-04-22-dropboxignore-negation-semantics.md` (followups originally lived in `plans/2026-04-22-dropboxignore-negation-polish-followups.md`; renamed to `BACKLOG.md` and restructured 2026-04-26 in PR #52 once it had outgrown the negation-polish scope).
 - v0.3 rename + PyPI: `specs/2026-04-23-v0.3-dbxignore-rename.md` + `plans/2026-04-23-v0.3-dbxignore-rename.md`
+- v0.4 macOS port: `specs/2026-04-26-v0.4-macos-design.md` + `plans/2026-04-27-v0.4-macos-implementation.md`
 - **Backlog conventions:** open items, planned work, and resolved-item history live in `BACKLOG.md`. New items append at the bottom (`## <N>. <title>`) with body, fix candidates, urgency, and a `Touches:` file list. Resolved items get an inline `**Status: RESOLVED <date> (PR #<N>).**` marker AND an entry in the bottom `## Status > Resolved` section. The Status section also maintains an at-a-glance Open list and Provenance notes (how items were sourced). Inline-marker convention started ~PR #24 and was retroactively backfilled for older items in PR #41.
 - A tracker item's prescribed fix can be at the wrong layer — verify against current code/docs before executing. Twice-validated: item 21 framed the fix as `_backends/windows_ads.is_ignored` but the right layer was `reconcile._reconcile_path` (covers Linux ENOTSUP-on-read too); item 22 prescribed "rewrite the paragraph" but the README's top-level `## Upgrading from v0.2.x` section already had the correct content, so the fix was deletion. Read the surrounding code or docs before assuming the prescribed fix is right; record the framing correction in the inline RESOLVED marker so future readers see it.

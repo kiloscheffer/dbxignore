@@ -188,7 +188,6 @@ def _detected_attr_name() -> str:
     paths = _read_dropbox_paths_from_info()
     extension_state = _pluginkit_extension_state()
 
-    # Disabled extension → legacy regardless of path.
     if extension_state == "disabled":
         _attr_name_cache = ATTR_LEGACY
         logger.debug(
@@ -196,7 +195,6 @@ def _detected_attr_name() -> str:
         )
         return _attr_name_cache
 
-    # Path under ~/Library/CloudStorage/ → File Provider.
     home = os.environ.get("HOME")
     if home:
         cloud_storage = Path(os.path.realpath(Path(home) / "Library" / "CloudStorage"))
@@ -235,8 +233,6 @@ def _detected_attr_name() -> str:
                 )
                 return _attr_name_cache
 
-    # Defensive default: legacy (covers no-Dropbox-installed, pure-legacy,
-    # and pluginkit-unknown-with-no-CloudStorage-path cases).
     _attr_name_cache = ATTR_LEGACY
     logger.debug(
         "Detected legacy mode (default): paths=%s, extension_state=%s",

@@ -110,7 +110,10 @@ def _reconcile_path(path: Path, cache: RuleCache, report: Report) -> bool | None
                 "Filesystem does not support ignore markers on %s: %s", path, exc
             )
             report.errors.append((path, f"unsupported: {exc}"))
-            return None
+            # Mirror PermissionError's return: preserve last-known marker
+            # state so subtree pruning fires correctly when an already-
+            # marked directory's clear fails (item #41).
+            return currently_ignored
         raise
 
     return currently_ignored

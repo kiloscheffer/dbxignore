@@ -45,6 +45,8 @@ from pathlib import Path
 
 import xattr
 
+from . import require_absolute as _require_absolute
+
 logger = logging.getLogger(__name__)
 
 ATTR_LEGACY = "com.dropbox.ignored"
@@ -239,11 +241,6 @@ def _detected_attr_name() -> str:
         paths, extension_state,
     )
     return _attr_name_cache
-
-
-def _require_absolute(path: Path) -> None:
-    if not path.is_absolute():
-        raise ValueError(f"markers requires an absolute path; got {path!r}")
 
 
 def is_ignored(path: Path) -> bool:

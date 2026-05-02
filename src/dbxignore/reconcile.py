@@ -1,4 +1,4 @@
-"""Reconcile the filesystem's ADS markers with the current rule set."""
+"""Reconcile the filesystem's ignore markers with the current rule set."""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ def reconcile_subtree(root: Path, subdir: Path, cache: RuleCache) -> Report:
 
 
 def _reconcile_path(path: Path, cache: RuleCache, report: Report) -> bool | None:
-    """Reconcile one path's ADS marker with the current rule set.
+    """Reconcile one path's ignore marker with the current rule set.
 
     Returns the path's final ignored state (True/False), or None if it could
     not be determined (read error or vanished path). The return value drives
@@ -97,12 +97,12 @@ def _reconcile_path(path: Path, cache: RuleCache, report: Report) -> bool | None
             report.cleared += 1
             return False
     except FileNotFoundError:
-        logger.debug("Path vanished before ADS write: %s", path)
+        logger.debug("Path vanished before marker write: %s", path)
         return None
     except PermissionError as exc:
-        logger.warning("Permission denied writing ADS on %s: %s", path, exc)
+        logger.warning("Permission denied writing marker on %s: %s", path, exc)
         report.errors.append((path, f"write: {exc}"))
-        # Write failed: the ADS state is still whatever we read.
+        # Write failed: the marker state is still whatever we read.
         return currently_ignored
     except OSError as exc:
         if exc.errno in (errno.ENOTSUP, errno.EOPNOTSUPP):

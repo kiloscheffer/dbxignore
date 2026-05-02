@@ -254,7 +254,7 @@ class RuleCache:
     def _applicable(
         self, root: Path, path: Path
     ) -> list[tuple[Path, _LoadedRules]]:
-        """Yield (ancestor, loaded_rules) for each applicable .dropboxignore
+        """Return (ancestor, loaded_rules) for each applicable .dropboxignore
         in shallow-to-deep order."""
         result: list[tuple[Path, _LoadedRules]] = []
         for ancestor in self._ancestors(root, path):

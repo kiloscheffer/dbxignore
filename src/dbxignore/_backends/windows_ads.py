@@ -46,8 +46,8 @@ def set_ignored(path: Path) -> None:
 
     Raises ``FileNotFoundError`` if ``path`` vanished before the write;
     raises ``PermissionError`` if the stream cannot be written. Callers
-    (notably ``reconcile_subtree``) catch and log both per the design's
-    failure-mode contract.
+    (notably ``reconcile._reconcile_path``) catch and log both per the
+    design's failure-mode contract.
     """
     with open(_stream_path(path), "w", encoding="ascii") as f:
         f.write(_MARKER_VALUE)

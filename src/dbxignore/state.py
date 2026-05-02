@@ -2,6 +2,8 @@
 
 Windows: ``%LOCALAPPDATA%\\dbxignore\\state.json``.
 Linux: ``$XDG_STATE_HOME/dbxignore/state.json`` (fallback ``~/.local/state/...``).
+macOS: ``~/Library/Application Support/dbxignore/state.json``
+       (logs split off to ``~/Library/Logs/dbxignore/`` per Apple's app-data conventions).
 """
 
 from __future__ import annotations

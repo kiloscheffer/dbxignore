@@ -24,11 +24,17 @@ class Report:
 
 
 def reconcile_subtree(root: Path, subdir: Path, cache: RuleCache) -> Report:
+    """Reconcile ``subdir`` under ``root`` with the current rule set.
+
+    Both ``root`` and ``subdir`` MUST be absolute and pre-resolved by the
+    caller — resolution is the CLI/daemon boundary's responsibility (see
+    CLAUDE.md "Resolve at the CLI/daemon boundary, never inside the cache
+    or markers layer"). ``Path.resolve()`` on Windows is a per-call
+    syscall that dominated sweep wall-clock before being hoisted.
+    """
     start = time.perf_counter()
     report = Report()
 
-    root = root.resolve()
-    subdir = subdir.resolve()
     if subdir != root and not subdir.is_relative_to(root):
         raise ValueError(f"subdir {subdir} is not under root {root}")
 

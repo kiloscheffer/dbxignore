@@ -10,7 +10,7 @@ Cross-platform Python utility: keeps Dropbox ignore markers (NTFS alternate data
 - `uv run pytest -W error::DeprecationWarning` — local strict mode (not enforced in CI)
 - `uv run ruff check` — lint; rules E, F, I, B, UP, SIM; line length 100
 - `dbxignore <apply|status|list|explain|daemon|install|uninstall>` — CLI console script (`cli:main`). `install` / `uninstall` register / remove the daemon with the platform's user-scoped service manager (Task Scheduler on Windows, systemd user unit on Linux, launchd LaunchAgent on macOS). `uninstall --purge` also clears every ignore marker.
-- `dbxignored` — daemon shim (`cli:daemon_main`), launched by the platform's installed service (Scheduled Task / systemd unit / LaunchAgent)
+- `dbxignored` — daemon entry point (`cli:daemon_main`, a standalone `@click.command` with its own `--verbose`/`--version`), launched by the platform's installed service (Scheduled Task / systemd unit / LaunchAgent)
 - `python -m dbxignore <subcommand>` — equivalent to the console script, via `src/dbxignore/__main__.py`. Useful when the wheel isn't installed (e.g. `uv run python -m dbxignore status`).
 
 ## Architecture

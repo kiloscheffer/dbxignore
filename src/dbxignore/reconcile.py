@@ -117,8 +117,8 @@ def _reconcile_path(path: Path, cache: RuleCache, report: Report) -> bool | None
             )
             report.errors.append((path, f"unsupported: {exc}"))
             # Mirror PermissionError's return: preserve last-known marker
-            # state so subtree pruning fires correctly when an already-
-            # marked directory's clear fails (item #41).
+            # state so subtree pruning fires when an already-marked
+            # directory's clear fails.
             return currently_ignored
         raise
 

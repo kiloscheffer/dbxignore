@@ -108,21 +108,12 @@ def test_enotsup_on_clear_is_reported_not_raised(
 def test_enotsup_on_directory_clear_prunes_subtree(
     fake_markers, tmp_path, write_file, monkeypatch
 ):
-    """ENOTSUP when clearing an already-marked directory must still prune.
+    """A still-marked directory whose clear fails with ENOTSUP must prune.
 
-    Item #41: the write-side ENOTSUP arm previously returned ``None``,
-    which is falsy → the dirnames-pruning filter (``not _reconcile_path
-    (...)``) kept the directory and the walk descended into a subtree
-    whose marker state we couldn't change. Each child then re-failed
-    with ENOTSUP, spamming the log. The fix returns ``currently_ignored``
-    (matching ``PermissionError``'s behavior) so a still-marked directory
-    correctly prunes its descendants from the walk.
-
-    Setup: pre-mark both a directory and a file inside it; have no rules
-    so reconcile wants to clear both; intercept ``clear_ignored`` so it
-    records each attempt and raises ENOTSUP. Assertion: only the
-    directory's clear is attempted; the child's clear isn't reached
-    because the still-marked directory pruned the walk.
+    The walk-pruning filter treats truthy returns as "ignored, prune".
+    Returning the pre-existing ``currently_ignored`` (True here) keeps
+    descendants out of the walk; returning ``None`` (the bug) descended
+    into them and re-failed for each child.
     """
     root = tmp_path
     marked_dir = root / "marked_dir"

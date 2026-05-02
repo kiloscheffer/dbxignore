@@ -18,14 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def _discover_roots() -> list[Path]:
-    """Indirection so tests can monkeypatch root discovery.
-
-    Roots are resolved at this CLI boundary so downstream consumers
-    (`reconcile_subtree`, `markers.is_ignored`, the rule cache) receive
-    absolute, canonicalized paths and never re-pay the per-call
-    `Path.resolve()` syscall (CLAUDE.md "Resolve at the CLI/daemon
-    boundary, never inside the cache or markers layer").
-    """
+    """Resolve roots at the CLI boundary; indirection allows test monkeypatching."""
     return [r.resolve() for r in roots.discover()]
 
 

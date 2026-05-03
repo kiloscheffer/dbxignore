@@ -1115,13 +1115,82 @@ Surfaced 2026-05-02 in the same pass that filed items #49 (resolved in PR #89) a
 
 Touches: `src/dbxignore/install/__init__.py` (would touch all 14 lines if the extract path is chosen).
 
+## 52. Watchdog `OSError(ENOSPC)` at observer startup surfaces as an opaque traceback
+
+The daemon's call to `observer.start()` (via `Observer().schedule(handler, root, recursive=True)` in `daemon.run`) propagates `OSError(errno.ENOSPC, "inotify watch limit reached")` unhandled when `fs.inotify.max_user_watches` is exhausted. systemd marks the unit failed; the user sees only a Python traceback in `journalctl --user -u dbxignore.service`, with no hint at the kernel-side root cause or remediation.
+
+Default `fs.inotify.max_user_watches` varies across kernels and distros — common values range from 8192 (older kernels, some VPS images) up to 524,288 (Dropbox/VS-Code-recommended setups). On Linux, dbxignore's recursive watch on `~/Dropbox` consumes ~1 watch per directory; for trees larger than the kernel's per-user limit, the daemon crashes immediately at startup. A user without sudo (shared host, locked-down VPS) cannot self-remediate, and even users who can need to know the right sysctl key — currently not documented anywhere in dbxignore.
+
+Surfaced 2026-05-03 during VPS testing (`scripts/manual-test-ubuntu-vps.sh` against a personal Dropbox account). Beta tester observed the failure mode directly: opaque Python traceback in journalctl, daemon unit in `failed` state, no actionable signal until the test script's diagnostic dump surfaced the underlying error line.
+
+**Fix candidates:**
+
+- **Trap and exit cleanly** (preferred). Wrap the observer setup in `daemon.run` in `try/except OSError as exc: if exc.errno == errno.ENOSPC: ...`. Log a WARNING with the literal sysctl commands. Exit with `os.EX_TEMPFAIL` (75) — systemd marks failed but does not loop-restart. ~10 LOC plus a unit test that mocks `Observer.start` to raise ENOSPC and asserts the daemon logs the message and exits 75. Pair with a README §"Linux daemon prerequisites" subsection that lists the sysctl commands as a one-time setup step.
+
+- **Fall back to `PollingObserver`.** Watchdog ships a polling implementation that doesn't use inotify. Daemon would stay functional but at significant CPU cost (polling tens of thousands of dirs at watchdog's default ~1s rate is brutal) and worse latency. Plausible only as a last-resort fallback gated on user opt-in (env var); not a default. Probably worse than failing fast on the trees that actually hit the limit.
+
+**Urgency:** medium-high. Default-config kernels are the failure mode; users without sudo cannot fix it themselves. Companion to items #53 (sweep cost on large trees) and #54 (the deeper "don't watch ignored subtrees" architectural fix). Cheap to ship and immediately better UX.
+
+Touches: `src/dbxignore/daemon.py` (ENOSPC trap around observer setup); new `tests/test_daemon_inotify_enospc.py` (mock observer start, assert clean exit + log); `README.md` (new "Linux daemon prerequisites" subsection citing the sysctl commands).
+
+## 53. `_sweep_once` walks every directory regardless of marker state — expensive on large trees
+
+`reconcile.reconcile_subtree` (called by `daemon._sweep_once`) traverses every directory under each root via `os.walk(followlinks=False)`. On a 27,000-directory personal Dropbox tree the initial sweep took 49.62s on a 2026-era VPS (Ubuntu 24.04, Python 3.14, observed in journalctl 2026-05-03). Cost is dominated by stat() + xattr query per directory, not by the reconcile match logic — many dirs have no rule effects.
+
+Subtree pruning already fires on NEW matches: when `cache.match(dir)` returns True, `_reconcile_path` sets the marker and the walk skips descendants (covered by test 4b in `scripts/manual-test-ubuntu-vps.sh`). What's missing is the steady-state case: when the walk reaches a directory that is ALREADY marked AND `match()` still confirms it should be, descent into descendants is pure waste — no rule change can have happened since the marker was set, no clears are needed.
+
+The correctness risk is the rule-removal case. If a `.dropboxignore` rule that previously matched `cache/` is removed, the marker on `cache/` becomes stale, and descendants need their (also-stale) markers cleared. The current "always descend" policy makes this self-healing on the next sweep. The natural shape of a pruning optimization: rule-change events already force a re-walk of the affected subtree (the `RULES` event triggers `cache.reload_file` + `reconcile_subtree`), so the steady-state sweep can safely prune on "marker present + match confirms" — the invariant holds as long as any rule mutation reaches the marker-bearing subtree's reconcile before the next steady-state sweep, which the watchdog event-driven path already satisfies.
+
+Surfaced 2026-05-03 during VPS testing. The manual test's daemon-startup poll initially timed out at 30s because the user's tree took ~50s to sweep. Test fixed by raising the poll to 180s; the underlying app cost is the real fix.
+
+**Fix candidates:**
+
+- **Skip on marker-present + match-still-positive.** In `reconcile_subtree`'s walk, before recursing into a subdirectory, read its marker xattr. If present AND `cache.match(dir)` still returns True, prune (no descent, no per-descendant cost). If present AND match returns False, descend (rule removed; clear stale markers). If absent, descend (normal walk). Adds one xattr read per directory but eliminates descent into entire ignored subtrees. ~50 LOC plus invariant tests covering the three cases.
+
+- **Track per-subtree rule-changed flag in `RuleCache`.** Maintain a "subtree X has dirty rules" bitmap; sweep prunes if marker present AND subtree clean. More accurate but more state and more failure modes. Probably over-engineering vs. the marker-read approach.
+
+- **Defer.** Initial sweep cost is one-time per daemon launch. Acceptable for users who restart the daemon rarely. The 50s wall-clock is annoying but not blocking.
+
+**Urgency:** medium. Affects users with large Dropbox trees — exactly the personal-account installs that v0.4+ serves once it leaves alpha. Companion to items #52 (UX) and #54 (watch-budget). Bundle with the next daemon-touching change.
+
+Touches: `src/dbxignore/reconcile.py` (`reconcile_subtree` walk: read marker before descent, conditional prune); `tests/test_reconcile_subtree.py` (new tests: prune-on-match, descend-on-rule-removal, descend-on-marker-absent).
+
+## 54. Watchdog observer schedules one inotify watch per directory; doesn't skip ignored subtrees
+
+`daemon.run` passes `recursive=True` to `observer.schedule(handler, root, recursive=True)`. Watchdog's inotify backend adds one watch per directory in the recursive subtree. Marked-ignored subtrees consume watch slots even though dbxignore has nothing to react to inside them — Dropbox isn't syncing them, and any user changes inside e.g. a `node_modules/` shouldn't trigger reconcile.
+
+For a 27,000-dir Dropbox tree this consumes ~27k watch slots out of the per-user `fs.inotify.max_user_watches` budget. Default 8192 is exceeded out of the box (item #52). Bumped to the standard 524,288 it works fine, but ~95% of the budget is allocated to subtrees the daemon doesn't care about — only really matters at much larger scales (~500k+ dirs).
+
+Architectural shape of the fix:
+
+1. Walk the tree at startup (or piggyback on `_sweep_once`'s walk) and identify directories WITHOUT the ignored marker.
+2. For each unmarked directory, call `observer.schedule(handler, dir, recursive=False)` — N independent non-recursive watches instead of one recursive one.
+3. Maintain watch lifecycle: when a directory is newly marked during reconcile, `observer.unschedule` its watch and any descendants. When a directory is unmarked, schedule a new watch and walk it to catch any newly-unmarked descendants.
+4. Handle delete and move events for watched directories — `unschedule` is required to avoid stale-state warnings from watchdog.
+
+Race conditions to design against: a directory event arriving for a path that was just unscheduled; a `.dropboxignore` change firing reconcile mid-walk; the observer's internal handlers seeing events for paths the daemon thinks aren't watched. The `RuleCache._rules` RLock pattern (per CLAUDE.md "If you add cross-root shared state to RuleCache or reconcile, revisit this") is the existing precedent — a similar invariant would have to hold for watch state.
+
+Surfaced 2026-05-03 alongside items #52 and #53. The deepest scalability fix in the trio but also the most invasive — race-condition-prone state machine work that is easy to get subtly wrong.
+
+**Fix candidates:**
+
+- **Per-directory watches with full mark/unmark lifecycle.** The architecture above — ~200+ LOC plus extensive race-condition tests and large-tree perf benchmarks. Worth the cost only if a beta tester actually hits the watch ceiling on a system with `max_user_watches` already raised to 524,288.
+
+- **Per-directory watches without dynamic lifecycle** (simpler subset). Walk once at startup, schedule non-recursive on unmarked dirs, accept that newly-marked dirs continue to consume their watch slot until daemon restart. ~50 LOC. Catches the static-state savings (~80% of the budget) without the lifecycle complexity. Trade-off: a user who marks a 10,000-file dir doesn't see the watch budget recover until daemon restart, AND changes inside a dir that was previously ignored but had its rule removed won't be caught until restart (a real correctness regression vs. status quo).
+
+- **Defer.** Status quo. Items #52 and #53 cover the immediate UX and perf wins; a sysctl bump to 524,288 is sufficient for any plausibly-sized Dropbox account in 2026.
+
+**Urgency:** low. No production hit yet — `max_user_watches=524288` (standard recommendation) is sufficient for any plausibly-sized tree. Defer until a beta tester observes the watch budget exceeded after raising it; until then, the architectural complexity is unjustified.
+
+Touches: `src/dbxignore/daemon.py` (observer setup + new watch-lifecycle helper); `src/dbxignore/reconcile.py` (callback hook for "directory just marked/unmarked"); new `tests/test_daemon_watch_lifecycle.py` (per-dir scheduling, mark/unmark transitions, race scenarios).
+
 ---
 
 ## Status
 
 ### Open
 
-Fifteen items. Fourteen are passive (no concrete trigger requires action); item #34 is a recurrence of an already-resolved flake (item #18) and waits for a third recurrence before triggering action.
+Eighteen items. Sixteen are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18) and waits for a third recurrence before triggering action.
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
@@ -1138,6 +1207,9 @@ Fifteen items. Fourteen are passive (no concrete trigger requires action); item 
 - **#44** — `build_task_xml` interpolates `getpass.getuser()` and `exe_path` into XML without `xml.sax.saxutils.escape`. Hits users with `&` in install path; manifests as confusing `schtasks` error. Bundle with next install-layer touch.
 - **#50** — `windows_task.detect_invocation` partially overlaps `_common.detect_invocation` but diverges in the non-frozen branch (Windows uses `pythonw.exe` for windowless Task Scheduler launch and skips `shutil.which("dbxignored")` PATH lookup). Companion to item #26. Bundle with next install-layer touch.
 - **#51** — `install/__init__.py` platform dispatch duplicated across `install_service`/`uninstall_service`. Filed for the design-tension record (precedent: #40); current 6-block shape is defensible vs a factored-out helper that would introduce stringly-typed action coupling.
+- **#52** — Watchdog `OSError(ENOSPC)` at observer startup surfaces as an opaque journalctl traceback when `fs.inotify.max_user_watches` is exhausted. One fired trigger (2026-05-03 VPS test on a personal Dropbox tree). Cheap fix (~10 LOC trap + clean exit + sysctl-command WARNING) plus README §"Linux daemon prerequisites" addition. Companion to #53/#54.
+- **#53** — `_sweep_once` walks every directory regardless of marker state — measured 49.62s on a 27k-dir tree. Skip-on-(marker-present + match-still-positive) collapses descent into already-ignored subtrees; rule-mutation events already force a re-walk, so the steady-state invariant holds. ~50 LOC. Bundle with the next daemon-touching change.
+- **#54** — Watchdog observer's recursive watch schedules one inotify watch per directory under `~/Dropbox`, including marked-ignored subtrees. Architectural fix (per-directory watches with mark/unmark lifecycle) is ~200 LOC of race-condition-prone state-machine work; deferred until a beta tester hits the watch ceiling on a system with limits already raised.
 
 ### Resolved (reverse chronological)
 

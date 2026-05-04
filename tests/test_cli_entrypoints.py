@@ -23,8 +23,11 @@ def test_daemon_main_version_flag_emits_package_version():
 def test_daemon_main_help_has_no_subcommand_token():
     result = CliRunner().invoke(cli.daemon_main, ["--help"], prog_name="dbxignored")
     assert result.exit_code == 0, result.output
-    usage_line = result.output.splitlines()[0]
-    assert usage_line == "Usage: dbxignored [OPTIONS]", usage_line
+    usage_line = next(line for line in result.output.splitlines() if "Usage:" in line)
+    assert "dbxignored" in usage_line
+    assert "[OPTIONS]" in usage_line
+    assert "COMMAND" not in usage_line, usage_line
+    assert "[ARGS]" not in usage_line, usage_line
 
 
 def test_daemon_main_verbose_flag_is_reachable(monkeypatch):

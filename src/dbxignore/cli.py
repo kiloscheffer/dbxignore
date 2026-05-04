@@ -163,7 +163,62 @@ def _emit_dry_run_lines(would_mark: list[Path], would_clear: list[Path]) -> None
         click.echo(f"would clear: {p}")
 
 
-def _apply_from_gitignore(source: Path, *, dry_run: bool = False) -> None:
+def _confirm_apply(would_mark: int, would_clear: int) -> bool:
+    """Echo the apply confirmation copy and return the user's choice.
+
+    Both directions are footguns: marking a previously-synced path causes
+    Dropbox to remove it from cloud and from every linked device; clearing
+    a marker causes Dropbox to upload the local copy back. Three branches
+    so the wording matches the actual situation.
+    """
+    if would_mark > 0 and would_clear > 0:
+        click.echo(
+            f"This will mark {would_mark} paths and clear "
+            f"{would_clear} existing markers."
+        )
+        click.echo(
+            "Marking removes paths from cloud Dropbox and other linked "
+            "devices (local copies on this device are preserved)."
+        )
+        click.echo(
+            "Clearing causes Dropbox to upload the local copies back to cloud."
+        )
+    elif would_mark > 0:
+        click.echo(f"This will mark {would_mark} paths as ignored.")
+        click.echo(
+            "Dropbox will remove them from cloud Dropbox and from every "
+            "other linked device. Local copies on this device are preserved."
+        )
+    else:
+        click.echo(f"This will clear {would_clear} existing markers.")
+        click.echo("Dropbox will then start syncing previously-ignored paths.")
+    return click.confirm("Continue?")
+
+
+def _run_apply_pass(
+    targets: list[tuple[Path, Path]], cache: RuleCache, *, dry_run: bool
+) -> reconcile.Report:
+    """Run reconcile_subtree across all (root, subdir) targets and aggregate.
+
+    Used by `apply` for both the dry-run pre-walk (driving the confirmation
+    prompt) and the real reconcile pass.
+    """
+    aggregate = reconcile.Report()
+    for r, subdir in targets:
+        rep = reconcile.reconcile_subtree(r, subdir, cache, dry_run=dry_run)
+        aggregate.marked += rep.marked
+        aggregate.cleared += rep.cleared
+        aggregate.errors.extend(rep.errors)
+        aggregate.duration_s += rep.duration_s
+        if dry_run:
+            aggregate.would_mark.extend(rep.would_mark)
+            aggregate.would_clear.extend(rep.would_clear)
+    return aggregate
+
+
+def _apply_from_gitignore(
+    source: Path, *, dry_run: bool = False, yes: bool = False
+) -> None:
     """Run a one-shot reconcile using rules loaded from `source`.
 
     Rules are mounted at `dirname(source).resolve()` and applied only to
@@ -171,6 +226,10 @@ def _apply_from_gitignore(source: Path, *, dry_run: bool = False) -> None:
     participate in this run. Errors from the source file (missing,
     unreadable, invalid syntax) surface as user-facing CLI errors with
     exit code 2.
+
+    Confirmation flow mirrors `apply`: under `--dry-run` or `--yes` no
+    prompt fires; otherwise a dry-run pre-walk decides whether to prompt
+    (skipping the prompt entirely when nothing would change).
     """
     if source.is_dir():
         click.echo(
@@ -200,19 +259,32 @@ def _apply_from_gitignore(source: Path, *, dry_run: bool = False) -> None:
     cache = RuleCache()
     cache.load_external(source, mount_at)
 
-    report = reconcile.reconcile_subtree(mount_at, mount_at, cache, dry_run=dry_run)
     if dry_run:
+        report = reconcile.reconcile_subtree(mount_at, mount_at, cache, dry_run=True)
         _emit_dry_run_lines(report.would_mark, report.would_clear)
         click.echo(
             f"apply --dry-run: would_mark={report.marked} "
             f"would_clear={report.cleared} errors={len(report.errors)} "
             f"duration={report.duration_s:.2f}s (no changes made)"
         )
-    else:
-        click.echo(
-            f"apply: marked={report.marked} cleared={report.cleared} "
-            f"errors={len(report.errors)} duration={report.duration_s:.2f}s"
+        return
+
+    if not yes:
+        preview = reconcile.reconcile_subtree(
+            mount_at, mount_at, cache, dry_run=True
         )
+        if preview.marked == 0 and preview.cleared == 0:
+            click.echo("Nothing to apply (rules already in sync).")
+            return
+        if not _confirm_apply(preview.marked, preview.cleared):
+            click.echo("Aborted.")
+            return
+
+    report = reconcile.reconcile_subtree(mount_at, mount_at, cache, dry_run=False)
+    click.echo(
+        f"apply: marked={report.marked} cleared={report.cleared} "
+        f"errors={len(report.errors)} duration={report.duration_s:.2f}s"
+    )
 
 
 @main.command()
@@ -230,12 +302,25 @@ def _apply_from_gitignore(source: Path, *, dry_run: bool = False) -> None:
     "--dry-run", is_flag=True,
     help="Print what would be marked/cleared without changing anything.",
 )
-def apply(path: Path | None, from_gitignore: Path | None, dry_run: bool) -> None:
+@click.option(
+    "--yes", is_flag=True,
+    help="Skip the confirmation prompt (for scripted use). Without --yes "
+    "and outside --dry-run, apply previews changes and asks before "
+    "mutating any marker — marking a previously-synced path causes "
+    "Dropbox to remove it from cloud and from every linked device.",
+)
+def apply(
+    path: Path | None,
+    from_gitignore: Path | None,
+    dry_run: bool,
+    yes: bool,
+) -> None:
     """Run one reconcile pass (whole Dropbox, or a subtree).
 
     Pass `--from-gitignore <path>` to load rules from a nominated file
     instead of the .dropboxignore files in the tree. Pass `--dry-run` to
     preview what would be marked/cleared without touching any markers.
+    Pass `--yes` to skip the confirmation prompt (scripted use).
     """
     if from_gitignore is not None and path is not None:
         click.echo(
@@ -246,7 +331,7 @@ def apply(path: Path | None, from_gitignore: Path | None, dry_run: bool) -> None
         sys.exit(2)
 
     if from_gitignore is not None:
-        _apply_from_gitignore(from_gitignore, dry_run=dry_run)
+        _apply_from_gitignore(from_gitignore, dry_run=dry_run, yes=yes)
         return
 
     discovered = _discover_roots()
@@ -266,32 +351,30 @@ def apply(path: Path | None, from_gitignore: Path | None, dry_run: bool) -> None
             sys.exit(2)
         targets = [(matched_root, resolved)]
 
-    total_marked = total_cleared = total_errors = 0
-    total_duration = 0.0
-    aggregated_would_mark: list[Path] = []
-    aggregated_would_clear: list[Path] = []
-    for r, subdir in targets:
-        report = reconcile.reconcile_subtree(r, subdir, cache, dry_run=dry_run)
-        total_marked += report.marked
-        total_cleared += report.cleared
-        total_errors += len(report.errors)
-        total_duration += report.duration_s
-        if dry_run:
-            aggregated_would_mark.extend(report.would_mark)
-            aggregated_would_clear.extend(report.would_clear)
-
     if dry_run:
-        _emit_dry_run_lines(aggregated_would_mark, aggregated_would_clear)
+        report = _run_apply_pass(targets, cache, dry_run=True)
+        _emit_dry_run_lines(report.would_mark, report.would_clear)
         click.echo(
-            f"apply --dry-run: would_mark={total_marked} "
-            f"would_clear={total_cleared} errors={total_errors} "
-            f"duration={total_duration:.2f}s (no changes made)"
+            f"apply --dry-run: would_mark={report.marked} "
+            f"would_clear={report.cleared} errors={len(report.errors)} "
+            f"duration={report.duration_s:.2f}s (no changes made)"
         )
-    else:
-        click.echo(
-            f"apply: marked={total_marked} cleared={total_cleared} "
-            f"errors={total_errors} duration={total_duration:.2f}s"
-        )
+        return
+
+    if not yes:
+        preview = _run_apply_pass(targets, cache, dry_run=True)
+        if preview.marked == 0 and preview.cleared == 0:
+            click.echo("Nothing to apply (rules already in sync).")
+            return
+        if not _confirm_apply(preview.marked, preview.cleared):
+            click.echo("Aborted.")
+            return
+
+    report = _run_apply_pass(targets, cache, dry_run=False)
+    click.echo(
+        f"apply: marked={report.marked} cleared={report.cleared} "
+        f"errors={len(report.errors)} duration={report.duration_s:.2f}s"
+    )
 
 
 def _format_summary(

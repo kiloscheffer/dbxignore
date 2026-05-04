@@ -1,16 +1,15 @@
+__editable__*.pth
 __pycache__/
-*.py[cod]
+.claude/
 .pytest_cache/
 .ruff_cache/
-.venv/
-venv/
-build/
-dist/
-*.egg-info/
-src/dbxignore/_version.py
 .uv/
+.venv/
 *.dist-info/
-__editable__*.pth
-
-# Claude Code session state (ScheduleWakeup lock files, etc.)
-.claude/
+*.egg-info/
+*.py[cod]
+build/
+CLAUDE.local.md
+dist/
+src/dbxignore/_version.py
+venv/

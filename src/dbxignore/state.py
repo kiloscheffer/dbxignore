@@ -84,6 +84,15 @@ def write(state: State, path: Path | None = None) -> None:
     # second daemon while the first is still alive (followup item 20).
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(_encode(state), indent=2), encoding="utf-8")
+    # Parse-back guard: a future serializer regression producing malformed JSON
+    # would otherwise be committed by os.replace, and _read_at's JSONDecodeError
+    # arm would silently fall through to "no prior daemon" — same singleton-
+    # bypass mode item 20 already defended (followup item 55).
+    try:
+        json.loads(tmp.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        tmp.unlink(missing_ok=True)
+        raise
     os.replace(tmp, path)
 
 

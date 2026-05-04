@@ -1,3 +1,4 @@
+import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -50,6 +51,22 @@ def test_write_overwrites_stale_tmp(tmp_path):
     (tmp_path / "state.json.tmp").write_text("garbage from crash", encoding="utf-8")
     state.write(state.State(daemon_pid=2), p)
     assert state.read(p).daemon_pid == 2
+    assert not (tmp_path / "state.json.tmp").exists()
+
+
+def test_write_parse_back_rejects_invalid_json(monkeypatch, tmp_path):
+    """A future serializer regression that produces malformed JSON must not
+    reach state.json — parse-back validation should raise and unlink the tmp,
+    leaving any prior state.json untouched."""
+    p = tmp_path / "state.json"
+    state.write(state.State(daemon_pid=1), p)
+    prior = p.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(json, "dumps", lambda *a, **kw: "{not valid json")
+    with pytest.raises(json.JSONDecodeError):
+        state.write(state.State(daemon_pid=2), p)
+
+    assert p.read_text(encoding="utf-8") == prior
     assert not (tmp_path / "state.json.tmp").exists()
 
 

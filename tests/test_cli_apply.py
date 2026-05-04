@@ -12,7 +12,7 @@ def test_apply_marks_matching_paths(tmp_path, fake_markers, monkeypatch):
     monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
 
     runner = CliRunner()
-    result = runner.invoke(cli.main, ["apply"])
+    result = runner.invoke(cli.main, ["apply", "--yes"])
 
     assert result.exit_code == 0, result.output
     assert (tmp_path / "build").resolve() in fake_markers._ignored
@@ -30,7 +30,7 @@ def test_apply_with_path_argument_scopes_reconcile(tmp_path, fake_markers, monke
     monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
 
     runner = CliRunner()
-    result = runner.invoke(cli.main, ["apply", str(tmp_path / "a")])
+    result = runner.invoke(cli.main, ["apply", str(tmp_path / "a"), "--yes"])
 
     assert result.exit_code == 0, result.output
     assert (tmp_path / "a" / "build").resolve() in fake_markers._ignored
@@ -51,7 +51,9 @@ def test_apply_from_gitignore_mounts_at_dirname(tmp_path, fake_markers, monkeypa
     monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
 
     runner = CliRunner()
-    result = runner.invoke(cli.main, ["apply", "--from-gitignore", str(gitignore)])
+    result = runner.invoke(
+        cli.main, ["apply", "--from-gitignore", str(gitignore), "--yes"]
+    )
 
     assert result.exit_code == 0, result.output
     assert (sub / "build").resolve() in fake_markers._ignored
@@ -71,7 +73,9 @@ def test_apply_from_gitignore_ignores_existing_dropboxignore(
     monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
 
     runner = CliRunner()
-    result = runner.invoke(cli.main, ["apply", "--from-gitignore", str(gitignore)])
+    result = runner.invoke(
+        cli.main, ["apply", "--from-gitignore", str(gitignore), "--yes"]
+    )
 
     assert result.exit_code == 0, result.output
     assert (tmp_path / "build").resolve() in fake_markers._ignored
@@ -226,6 +230,142 @@ def test_apply_dry_run_real_apply_still_works_after(tmp_path, fake_markers, monk
     assert dry.exit_code == 0
     assert (tmp_path / "build").resolve() not in fake_markers._ignored
 
-    real = runner.invoke(cli.main, ["apply"])
+    real = runner.invoke(cli.main, ["apply", "--yes"])
     assert real.exit_code == 0
     assert (tmp_path / "build").resolve() in fake_markers._ignored
+
+
+# ---- apply confirmation prompt + --yes (companion to clear's safety) --------
+
+
+def test_apply_confirmation_prompt_aborts_on_no(tmp_path, fake_markers, monkeypatch):
+    """Without --yes, the prompt fires; saying 'n' aborts without marking."""
+    (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+    (tmp_path / "build").mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["apply"], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    # Marker NOT set — the user declined.
+    assert (tmp_path / "build").resolve() not in fake_markers._ignored
+
+
+def test_apply_confirmation_prompt_proceeds_on_yes(tmp_path, fake_markers, monkeypatch):
+    """Without --yes, saying 'y' to the prompt marks the matching paths."""
+    (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+    (tmp_path / "build").mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["apply"], input="y\n")
+
+    assert result.exit_code == 0, result.output
+    assert "marked=1" in result.output
+    assert (tmp_path / "build").resolve() in fake_markers._ignored
+
+
+def test_apply_yes_skips_confirmation_prompt(tmp_path, fake_markers, monkeypatch):
+    """--yes runs without prompting (no input needed); markers get set; the
+    confirmation copy doesn't appear."""
+    (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+    (tmp_path / "build").mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["apply", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert "marked=1" in result.output
+    assert (tmp_path / "build").resolve() in fake_markers._ignored
+    assert "Continue?" not in result.output
+
+
+def test_apply_no_changes_skips_prompt(tmp_path, fake_markers, monkeypatch):
+    """When the dry-run pre-walk finds nothing to mark or clear, exit cleanly
+    without prompting. Caller provides no input — if a prompt fires, the
+    runner aborts and the test fails on a non-zero exit code."""
+    (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+    # No 'build' dir exists; the rule has nothing to match.
+    (tmp_path / "src").mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["apply"])  # no input intentionally
+
+    assert result.exit_code == 0, result.output
+    assert "Continue?" not in result.output
+    assert "Nothing to apply" in result.output
+
+
+def test_apply_clear_only_direction_also_prompts(tmp_path, fake_markers, monkeypatch):
+    """A previously-marked path no longer matched by rules: apply clears it,
+    so the prompt must still fire — clearing causes Dropbox to upload the
+    local copy back to cloud, which is the symmetric footgun."""
+    (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    fake_markers.set_ignored(src_dir)  # stale mark, no longer matching any rule
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["apply"], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    # Mark must still be set — we said no.
+    assert src_dir.resolve() in fake_markers._ignored
+
+
+def test_apply_from_gitignore_yes_skips_prompt(tmp_path, fake_markers, monkeypatch):
+    """--yes works on the --from-gitignore path too."""
+    (tmp_path / "build").mkdir()
+    gitignore = tmp_path / ".gitignore"
+    gitignore.write_text("build/\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.main, ["apply", "--from-gitignore", str(gitignore), "--yes"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Continue?" not in result.output
+    assert (tmp_path / "build").resolve() in fake_markers._ignored
+
+
+def test_apply_from_gitignore_prompt_aborts_on_no(tmp_path, fake_markers, monkeypatch):
+    """The prompt also fires on the --from-gitignore path; 'n' aborts."""
+    (tmp_path / "build").mkdir()
+    gitignore = tmp_path / ".gitignore"
+    gitignore.write_text("build/\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.main, ["apply", "--from-gitignore", str(gitignore)], input="n\n"
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    assert (tmp_path / "build").resolve() not in fake_markers._ignored
+
+
+def test_apply_prompt_mentions_cloud_delete_for_mark_only(
+    tmp_path, fake_markers, monkeypatch
+):
+    """Prompt copy must explicitly call out the cloud-delete consequence for the
+    mark-only direction — that's the footgun the prompt exists to surface."""
+    (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+    (tmp_path / "build").mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["apply"], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    # Substring matches — wording can evolve, but cloud-delete intent must remain.
+    assert "remove" in result.output.lower()
+    assert "cloud" in result.output.lower() or "linked device" in result.output.lower()

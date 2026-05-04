@@ -191,7 +191,7 @@ target/
 | `dbxignore init [PATH]` | Scaffold a starter `.dropboxignore` in `PATH` (or cwd) with a template covering Node.js / Python / Rust / JVM / .NET / frontend frameworks / build outputs / OS detritus. Walks the tree to depth 3 and annotates the header with which marker-bait dirs were detected. See [First-time setup](#first-time-setup). |
 | `dbxignore install` / `uninstall` | Register / remove the daemon with the platform's user-scoped service manager (Task Scheduler on Windows, systemd user unit on Linux). `uninstall --purge` also clears every existing marker, removes local dbxignore state (`state.json`, `daemon.log*`, the state directory), and on Linux removes any systemd drop-in directory. Any stray marker on a `.dropboxignore` file itself is logged at `WARNING` before being cleared. |
 | `dbxignore daemon` | Run the watcher + hourly sweep in the foreground. Usually invoked by Task Scheduler. |
-| `dbxignore apply [PATH]` | One-shot reconcile of the whole Dropbox (or a subtree). Pass `--from-gitignore <path>` to load rules from a `.gitignore` instead of `.dropboxignore` files in the tree. Pass `--dry-run` to preview what would be marked/cleared without changing anything. |
+| `dbxignore apply [PATH]` | One-shot reconcile of the whole Dropbox (or a subtree). Pass `--from-gitignore <path>` to load rules from a `.gitignore` instead of `.dropboxignore` files in the tree. Pass `--dry-run` to preview what would be marked/cleared without changing anything. Prompts before mutating any marker; pass `--yes` to skip — see [Applying rules](#applying-rules). |
 | `dbxignore generate <PATH>` | Translate a `.gitignore` (or any nominated file) to a `.dropboxignore`. `<PATH>` is a file or a directory; default output is `<dir>/.dropboxignore`. Flags: `-o <path>`, `--stdout`, `--force`. |
 | `dbxignore status` | Is the daemon running? Last sweep counts, last error. Pass `--summary` for a stable single-line summary suitable for status-bar widgets — see [Status-bar integration](#status-bar-integration). |
 | `dbxignore clear [PATH]` | Clear every ignore marker under the watched roots (or under `PATH`). Inverse of `apply`. Leaves `.dropboxignore` files and `state.json` untouched — see [Clearing all markers](#clearing-all-markers). |
@@ -210,6 +210,23 @@ dbxignore init --force            # overwrite an existing file
 ```
 
 The header of the generated file lists which marker-bait directories were detected in your tree at depth ≤ 3 (e.g., `# Detected in this tree at depth <= 3: node_modules, __pycache__`). All template patterns are emitted as active rules; the header is the cue for which ones are immediately load-bearing. Edit the file afterward to remove patterns that don't apply to your tree — strong starter is easier to edit-down than a sparse one is to edit-up.
+
+### Applying rules
+
+`dbxignore apply` runs one reconcile pass — the same operation the daemon performs on every `.dropboxignore` save and on its hourly recovery sweep. Useful for forcing a one-shot run without waiting for the daemon (or when no daemon is installed).
+
+```
+dbxignore apply --dry-run         # preview what would be marked/cleared
+dbxignore apply --yes             # skip the confirmation prompt
+dbxignore apply ~/Dropbox/proj    # scope to a subtree
+dbxignore apply --from-gitignore ~/Dropbox/proj/.gitignore --yes
+```
+
+A confirmation prompt fires by default. Marking a previously-synced path causes Dropbox to remove the path from your cloud Dropbox and from every other linked device — local copies on this device are preserved, but the cloud copy and the copies on other devices are gone until the marker is cleared. Clearing a stale marker (a path that was ignored but no longer matches any rule) goes the other direction: Dropbox uploads the local copy back to cloud and re-syncs it everywhere. The prompt summarizes both counts and asks before any marker is mutated. Pass `--yes` for scripted use.
+
+If `apply` finds nothing to mark and nothing to clear (the steady-state case where the daemon has already converged the tree), it exits with `Nothing to apply (rules already in sync).` and skips the prompt.
+
+Unlike `clear`, `apply` does **not** refuse to run while the daemon is alive — the daemon performs the same operation continuously, so racing it is normal usage.
 
 ### Clearing all markers
 
@@ -256,6 +273,7 @@ A polybar module reading the daemon state could grep `state=\S+` for the at-a-gl
 
 ## Behaviour
 
+- **What "ignored" means in Dropbox.** Setting the ignore marker on a file or folder removes it from your cloud Dropbox and from every other linked device. The local copy on the device that set the marker is preserved. Removing the marker (by deleting the matching rule, or running `dbxignore clear`) restores the path to sync — the local copy is uploaded back to Dropbox and propagated to other devices. So `.dropboxignore` is **not** a `.gitignore`-style "leave this file untracked here" rule; it's an instruction to delete the path from cloud sync, with the local copy as the only surviving copy until the marker is cleared.
 - **Source of truth.** `.dropboxignore` files declare what is ignored. Removing a rule unignores the matching paths on the next reconcile. A path marked ignored via Dropbox's right-click menu but not matching any rule will be unignored.
 - **Hybrid trigger.** The daemon reacts to filesystem events in real time *and* runs an hourly safety-net sweep. If the daemon is offline, an initial sweep at the next start catches any drift.
 - **Multi-root.** Personal and Business Dropbox roots are discovered automatically from `%APPDATA%\Dropbox\info.json` (Windows) or `~/.dropbox/info.json` (Linux).
@@ -302,9 +320,11 @@ The destination path is `<dir>/.dropboxignore` by default; use `-o <path>` to re
 **`dbxignore apply --from-gitignore <path>`** runs a one-shot reconcile using rules loaded from `<path>` (without writing a `.dropboxignore`). Rules are mounted at `dirname(<path>)`, which must be under a discovered Dropbox root. Existing `.dropboxignore` files in the tree do not participate in this run.
 
 ```
-dbxignore apply --from-gitignore ~/Dropbox/myproject/.gitignore
+dbxignore apply --from-gitignore ~/Dropbox/myproject/.gitignore --yes
 # apply: marked=12 cleared=0 errors=0 duration=0.34s
 ```
+
+The `--yes` flag skips the confirmation prompt; without it `apply` previews the change set and asks before mutating any marker. See [Applying rules](#applying-rules) for the prompt's exact wording.
 
 ### Semantic divergence between the two files
 

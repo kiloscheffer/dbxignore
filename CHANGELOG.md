@@ -5,6 +5,12 @@ All notable changes to dbxignore are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`state.write()` parse-back validation.** Between writing the temp `state.json.tmp` and `os.replace`-ing it into place, `state.write()` now reads the temp file back and `json.loads`-parses it; on `JSONDecodeError`, the temp is unlinked and the exception re-raised, leaving any prior `state.json` untouched. Closes a latent path where a future serializer regression producing malformed JSON would otherwise reach disk, then `_read_at`'s `JSONDecodeError` arm would silently fall through to "no prior daemon" and bypass `daemon.run`'s singleton check — the same failure mode the v0.3.1 atomic-write change defended from torn JSON.
+
 ## [0.4.0] — 2026-05-02
 
 First release with macOS support. The beta-tester sign-off path (10-step checklist from the v0.4 spec § "Beta-test workflow") completed against `v0.4.0a5` on 2026-05-02; this release promotes that alpha to final without code changes.

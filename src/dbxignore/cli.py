@@ -251,10 +251,63 @@ def apply(path: Path | None, from_gitignore: Path | None) -> None:
     )
 
 
+def _format_summary(
+    state_obj: state.State | None, alive: bool, conflicts_count: int
+) -> str:
+    """Build the stable single-line summary emitted by ``status --summary``.
+
+    Format is part of the public API per SemVer (see README §"Status-bar
+    integration"). Field additions are non-breaking; removals or renames
+    bump MINOR pre-1.0 / MAJOR post-1.0.
+
+        state=running pid=12345 marked=7 cleared=1 errors=0 conflicts=0
+        state=not_running pid=12345 marked=7 cleared=1 errors=0 conflicts=0
+        state=no_state conflicts=0
+
+    State token is `running` (state.json present + daemon process alive),
+    `not_running` (state.json present, no live daemon — pid may be stale),
+    or `no_state` (no state.json — daemon never ran).
+    """
+    if state_obj is None:
+        return f"state=no_state conflicts={conflicts_count}"
+    pid = state_obj.daemon_pid
+    state_token = "running" if (pid is not None and alive) else "not_running"
+    parts = [f"state={state_token}"]
+    if pid is not None:
+        parts.append(f"pid={pid}")
+    parts.append(f"marked={state_obj.last_sweep_marked}")
+    parts.append(f"cleared={state_obj.last_sweep_cleared}")
+    parts.append(f"errors={state_obj.last_sweep_errors}")
+    parts.append(f"conflicts={conflicts_count}")
+    return " ".join(parts)
+
+
 @main.command()
-def status() -> None:
+@click.option(
+    "--summary",
+    is_flag=True,
+    help="Emit a stable single-line summary on stdout suitable for "
+    "status-bar widgets (polybar, tmux, i3blocks, sketchybar).",
+)
+def status(summary: bool) -> None:
     """Show daemon status and last sweep summary."""
     s = state.read()
+
+    # Compute conflicts upfront so summary and human paths share the work.
+    # Skip the rule-cache walk entirely when there are no roots — otherwise
+    # `status` pays for an rglob we don't need.
+    discovered = _discover_roots()
+    conflicts = _load_cache(discovered).conflicts() if discovered else []
+
+    if summary:
+        alive = (
+            s is not None
+            and s.daemon_pid is not None
+            and state.is_daemon_alive(s.daemon_pid)
+        )
+        click.echo(_format_summary(s, alive, len(conflicts)))
+        return
+
     if s is None:
         click.echo("dbxignore: no state file found (daemon never ran).")
     else:
@@ -282,38 +335,31 @@ def status() -> None:
     # macOS sync-mode visibility (followup item 37). Returns None on
     # Windows/Linux where there's no detection step to report — those
     # platforms have a single attribute name fixed at module import.
-    summary = markers.detection_summary()
-    if summary is not None:
-        click.echo(f"sync mode: {summary}")
+    detection = markers.detection_summary()
+    if detection is not None:
+        click.echo(f"sync mode: {detection}")
 
-    # Conflicts section — present only when RuleCache has any.
-    # Skip the rule-cache walk entirely when there are no roots — otherwise
-    # `status` pays for an rglob we don't need.
-    discovered = _discover_roots()
-    if discovered:
-        cache = _load_cache(discovered)
-        conflicts = cache.conflicts()
-        if conflicts:
-            click.echo(f"rule conflicts ({len(conflicts)}):")
-            # Pre-format and column-align so the "masked by" prefix and the
-            # masking pattern land on consistent columns when dropped patterns
-            # vary in length. Pads with f"{s:<width}" — only trailing spaces
-            # are added, so substring-based test asserts continue to match.
-            rows = [
-                (
-                    f"{_format_ignore_file_loc(c.dropped_source, discovered)}:{c.dropped_line}",
-                    c.dropped_pattern,
-                    f"{_format_ignore_file_loc(c.masking_source, discovered)}:{c.masking_line}",
-                    c.masking_pattern,
-                )
-                for c in conflicts
-            ]
-            w_dloc, w_dpat, w_mloc = (max(len(r[i]) for r in rows) for i in (0, 1, 2))
-            for d_loc, d_pat, m_loc, m_pat in rows:
-                click.echo(
-                    f"  {d_loc:<{w_dloc}}  {d_pat:<{w_dpat}}  "
-                    f"masked by {m_loc:<{w_mloc}}  {m_pat}"
-                )
+    if discovered and conflicts:
+        click.echo(f"rule conflicts ({len(conflicts)}):")
+        # Pre-format and column-align so the "masked by" prefix and the
+        # masking pattern land on consistent columns when dropped patterns
+        # vary in length. Pads with f"{s:<width}" — only trailing spaces
+        # are added, so substring-based test asserts continue to match.
+        rows = [
+            (
+                f"{_format_ignore_file_loc(c.dropped_source, discovered)}:{c.dropped_line}",
+                c.dropped_pattern,
+                f"{_format_ignore_file_loc(c.masking_source, discovered)}:{c.masking_line}",
+                c.masking_pattern,
+            )
+            for c in conflicts
+        ]
+        w_dloc, w_dpat, w_mloc = (max(len(r[i]) for r in rows) for i in (0, 1, 2))
+        for d_loc, d_pat, m_loc, m_pat in rows:
+            click.echo(
+                f"  {d_loc:<{w_dloc}}  {d_pat:<{w_dpat}}  "
+                f"masked by {m_loc:<{w_mloc}}  {m_pat}"
+            )
 
 
 @main.command("list")

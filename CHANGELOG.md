@@ -7,6 +7,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **`dbxignore status --summary` emits a stable single-line summary on stdout.** Format is `state=<token> [pid=N] marked=N cleared=N errors=N conflicts=N` with state tokens `running` / `not_running` / `no_state`. Suitable for status-bar widgets (polybar, tmux, i3blocks, sketchybar) and cron-friendly polling — replaces the multi-line human output with a stable contract callers can parse. The format is treated as public API per SemVer: field additions are non-breaking, renames/removals bump MINOR pre-1.0 / MAJOR post-1.0. README §"Status-bar integration" added.
+
 ### Changed
 
 - **`dbxignore status` daemon-liveness check is more accurate and the "not running" message clearer.** New shared helper `state.is_daemon_alive(pid)` verifies BOTH that the PID exists AND that the process at that PID is plausibly a dbxignore daemon (matches `python` or `dbxignored` in the process name). Previously `cli._process_is_alive` did only `psutil.pid_exists` — a recycled PID claimed by an unrelated process registered as "alive" (false positive). The "not running" branch now reads `daemon: not running (last pid=X — state.json may be stale)` instead of just `daemon: not running (pid=X)`, distinguishing a cleanly-stopped daemon from stale state. Internal: `daemon._is_other_live_daemon` deduplicated to delegate to the new helper, with the singleton-check-specific `pid == os.getpid()` self-exclusion preserved.

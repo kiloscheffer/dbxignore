@@ -80,3 +80,30 @@ def test_generate_mutex_stdout_and_o_errors(tmp_path):
 
     assert result.exit_code == 2
     assert "mutually exclusive" in result.output
+
+
+def test_generate_collision_without_force_refuses(tmp_path):
+    source = tmp_path / ".gitignore"
+    source.write_text("new/\n", encoding="utf-8")
+    target = tmp_path / ".dropboxignore"
+    target.write_text("existing/\n", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["generate", str(source)])
+
+    assert result.exit_code == 2
+    assert target.read_text(encoding="utf-8") == "existing/\n"  # unchanged
+    assert "--force" in result.output
+
+
+def test_generate_collision_with_force_overwrites(tmp_path):
+    source = tmp_path / ".gitignore"
+    source.write_text("new/\n", encoding="utf-8")
+    target = tmp_path / ".dropboxignore"
+    target.write_text("existing/\n", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["generate", str(source), "--force"])
+
+    assert result.exit_code == 0, result.output
+    assert target.read_text(encoding="utf-8") == "new/\n"

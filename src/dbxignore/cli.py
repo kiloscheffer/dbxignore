@@ -11,11 +11,13 @@ import sys
 from importlib.resources import files
 from pathlib import Path
 
-import click
+import rich_click as click
 
 from dbxignore import markers, reconcile, roots, rules, state
 from dbxignore.roots import find_containing
 from dbxignore.rules import IGNORE_FILENAME, RuleCache
+
+click.rich_click.TEXT_MARKUP = "markdown"
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +30,7 @@ def _discover_roots() -> list[Path]:
 def _format_ignore_file_loc(path: Path, roots: list[Path]) -> str:
     """Return path relative to the nearest root, or absolute if none matches.
 
-    Used by ``status`` and ``explain`` to show compact source locations for
+    Used by `status` and `explain` to show compact source locations for
     conflicted rules.
     """
     for r in roots:
@@ -56,7 +58,7 @@ def _purge_dir(dir_path: Path, patterns: list[str]) -> None:
 def _purge_local_state() -> None:
     """Delete state.json + daemon.log + rotated backups; rmdir empty dirs.
 
-    Called by ``uninstall --purge`` after the ignore markers are cleared.
+    Called by `uninstall --purge` after the ignore markers are cleared.
     On Windows + Linux, state and log live in the same dir. On macOS, the
     log dir (~/Library/Logs/dbxignore/) is separate from the state dir
     (~/Library/Application Support/dbxignore/), so we clean both.
@@ -82,7 +84,7 @@ def _purge_local_state() -> None:
 def _load_cache(roots: list[Path]) -> RuleCache:
     """Build a RuleCache loaded from every root, with conflict warnings muted.
 
-    The CLI surfaces conflicts via structured stdout (``status``, ``explain``)
+    The CLI surfaces conflicts via structured stdout (`status`, `explain`)
     so the per-mutation WARNING records would be a stderr duplicate.
     """
     cache = RuleCache()
@@ -92,11 +94,11 @@ def _load_cache(roots: list[Path]) -> RuleCache:
 
 
 def _resolve_gitignore_arg(path: Path) -> Path:
-    """Resolve a ``generate`` argument to an actual file.
+    """Resolve a `generate` argument to an actual file.
 
-    Directory → look for ``.gitignore`` inside; file → use as-is. Exits 2
+    Directory → look for `.gitignore` inside; file → use as-is. Exits 2
     with a CLI-formatted stderr message if the resolved path does not exist.
-    Single-caller helper; ``_apply_from_gitignore`` deliberately does its
+    Single-caller helper; `_apply_from_gitignore` deliberately does its
     own (stricter) resolution and does not call this.
     """
     if path.is_dir():
@@ -112,14 +114,14 @@ def _resolve_gitignore_arg(path: Path) -> Path:
 
 
 def _read_and_validate_rule_source(source: Path) -> str:
-    """Read ``source`` as UTF-8 and verify it parses as a pathspec.
+    """Read `source` as UTF-8 and verify it parses as a pathspec.
 
     Returns the raw text on success. Exits with code 2 (and a CLI-formatted
     stderr message) if the file can't be read, isn't valid UTF-8, or
-    contains a pattern the parser rejects. Used by both ``generate`` and
-    ``apply --from-gitignore`` — the two interactive entry points where
+    contains a pattern the parser rejects. Used by both `generate` and
+    `apply --from-gitignore` — the two interactive entry points where
     rule-source failures should surface as user-facing errors rather than
-    being swallowed into log warnings the way ``RuleCache._load_file`` does.
+    being swallowed into log warnings the way `RuleCache._load_file` does.
     """
     try:
         text = source.read_text(encoding="utf-8")
@@ -162,9 +164,9 @@ def _emit_dry_run_lines(would_mark: list[Path], would_clear: list[Path]) -> None
 
 
 def _apply_from_gitignore(source: Path, *, dry_run: bool = False) -> None:
-    """Run a one-shot reconcile using rules loaded from ``source``.
+    """Run a one-shot reconcile using rules loaded from `source`.
 
-    Rules are mounted at ``dirname(source).resolve()`` and applied only to
+    Rules are mounted at `dirname(source).resolve()` and applied only to
     that subtree. Existing .dropboxignore files in the tree do not
     participate in this run. Errors from the source file (missing,
     unreadable, invalid syntax) surface as user-facing CLI errors with
@@ -219,8 +221,8 @@ def _apply_from_gitignore(source: Path, *, dry_run: bool = False) -> None:
     "--from-gitignore", "from_gitignore",
     type=click.Path(exists=False, path_type=Path), default=None,
     help=(
-        "Apply rules loaded from <path> instead of from .dropboxignore "
-        "files in the tree. The directory containing <path> must be under "
+        "Apply rules loaded from `<path>` instead of from .dropboxignore "
+        "files in the tree. The directory containing `<path>` must be under "
         "a discovered Dropbox root. See README §\"Using .gitignore rules\"."
     ),
 )
@@ -231,8 +233,8 @@ def _apply_from_gitignore(source: Path, *, dry_run: bool = False) -> None:
 def apply(path: Path | None, from_gitignore: Path | None, dry_run: bool) -> None:
     """Run one reconcile pass (whole Dropbox, or a subtree).
 
-    Pass ``--from-gitignore <path>`` to load rules from a nominated file
-    instead of the .dropboxignore files in the tree. Pass ``--dry-run`` to
+    Pass `--from-gitignore <path>` to load rules from a nominated file
+    instead of the .dropboxignore files in the tree. Pass `--dry-run` to
     preview what would be marked/cleared without touching any markers.
     """
     if from_gitignore is not None and path is not None:
@@ -295,7 +297,7 @@ def apply(path: Path | None, from_gitignore: Path | None, dry_run: bool) -> None
 def _format_summary(
     state_obj: state.State | None, alive: bool, conflicts_count: int
 ) -> str:
-    """Build the stable single-line summary emitted by ``status --summary``.
+    """Build the stable single-line summary emitted by `status --summary`.
 
     Format is part of the public API per SemVer (see README §"Status-bar
     integration"). Field additions are non-breaking; removals or renames
@@ -399,13 +401,13 @@ def status(summary: bool) -> None:
 
 
 def _walk_marked_paths(target: Path) -> list[Path]:
-    """Walk ``target`` and return every path currently bearing an ignore marker.
+    """Walk `target` and return every path currently bearing an ignore marker.
 
-    Mirrors ``list_ignored``'s pruning: once a directory is found marked,
+    Mirrors `list_ignored`'s pruning: once a directory is found marked,
     don't descend into it (its descendants are inheritance-ignored by
     Dropbox, and dbxignore itself doesn't write redundant child markers
     under a marked parent — the rare case of an individually-marked
-    descendant under a marked parent is left to the next ``apply`` to
+    descendant under a marked parent is left to the next `apply` to
     reconcile, since `clear` with a pruning walk gets the same
     user-visible outcome at vastly lower walk cost on big trees).
     """
@@ -451,15 +453,15 @@ def _walk_marked_paths(target: Path) -> list[Path]:
 def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
     """Clear every Dropbox ignore marker under the watched roots (or under PATH).
 
-    Inverse of ``apply``: where ``apply`` sets every marker the rules
-    dictate, ``clear`` unsets every marker regardless of rules. Leaves
-    ``.dropboxignore`` files and per-user state.json untouched —
-    ``uninstall --purge`` is the heavier verb that also wipes state.
+    Inverse of `apply`: where `apply` sets every marker the rules
+    dictate, `clear` unsets every marker regardless of rules. Leaves
+    `.dropboxignore` files and per-user state.json untouched —
+    `uninstall --purge` is the heavier verb that also wipes state.
 
     Refuses to run if the daemon is alive (the daemon's next sweep would
     re-apply rule-driven markers within seconds for rule-reload events
-    or within an hour for the recovery sweep tick); pass ``--force`` to
-    override. Prompts before clearing unless ``--yes`` is set.
+    or within an hour for the recovery sweep tick); pass `--force` to
+    override. Prompts before clearing unless `--yes` is set.
     """
     s = state.read()
     if not force and state.daemon_is_running(s):
@@ -552,7 +554,7 @@ def explain(path: Path) -> None:
     """Show which .dropboxignore rule (if any) matches the path.
 
     Dropped negations (rules that can't take effect because an ancestor
-    directory is ignored) appear prefixed with ``[dropped]`` and a pointer
+    directory is ignored) appear prefixed with `[dropped]` and a pointer
     to the masking rule. See README §"Negations and Dropbox's ignore
     inheritance" for why.
     """
@@ -624,7 +626,7 @@ def uninstall(purge: bool) -> None:
     """Remove the daemon service.
 
     With --purge, also clear every ignore marker under each discovered
-    Dropbox root, delete ``state.json`` and ``daemon.log*`` from the
+    Dropbox root, delete `state.json` and `daemon.log*` from the
     per-user state directory, remove that directory if it's empty, and
     on Linux remove the systemd drop-in directory if it exists. The goal
     is to leave no dbxignore-authored artifacts on disk.
@@ -682,9 +684,9 @@ _INIT_DETECTION_DIRS = frozenset({
 def _load_default_template() -> str:
     """Read the packaged default.dropboxignore template content.
 
-    Lives at ``src/dbxignore/templates/default.dropboxignore`` and ships
-    via ``importlib.resources`` (no special pyproject.toml package_data
-    config — hatchling's ``packages = ["src/dbxignore"]`` includes the
+    Lives at `src/dbxignore/templates/default.dropboxignore` and ships
+    via `importlib.resources` (no special pyproject.toml package_data
+    config — hatchling's `packages = ["src/dbxignore"]` includes the
     subdir's non-.py files automatically).
     """
     return files("dbxignore.templates").joinpath("default.dropboxignore").read_text(
@@ -693,7 +695,7 @@ def _load_default_template() -> str:
 
 
 def _detect_marker_bait(target: Path, max_depth: int = 3) -> list[str]:
-    """Walk ``target`` to depth ``max_depth`` and return matched dir names.
+    """Walk `target` to depth `max_depth` and return matched dir names.
 
     Detection is purely informational — used to annotate the init output
     header. The file content is always the full template; a header line
@@ -702,8 +704,8 @@ def _detect_marker_bait(target: Path, max_depth: int = 3) -> list[str]:
 
     Pruning rules: don't descend into a dir that itself matched (avoids
     walking into a `node_modules` tree, which is the worst case); and
-    don't descend below ``max_depth - 1`` since children of dirs at that
-    level would be at depth ``max_depth + 1``.
+    don't descend below `max_depth - 1` since children of dirs at that
+    level would be at depth `max_depth + 1`.
     """
     found: set[str] = set()
     target = target.resolve()
@@ -792,7 +794,7 @@ def init(path: Path | None, force: bool, to_stdout: bool) -> None:
 @click.option(
     "-o", "--output", "output",
     type=click.Path(path_type=Path), default=None,
-    help="Write to this path instead of <dir>/.dropboxignore.",
+    help="Write to this path instead of `<dir>/.dropboxignore`.",
 )
 @click.option(
     "--stdout", is_flag=True,
@@ -807,7 +809,7 @@ def generate(path: Path, output: Path | None, stdout: bool, force: bool) -> None
 
     PATH may be a file or a directory. Directory: looks for .gitignore
     inside. File: used as-is regardless of filename. By default the
-    output is written to <dir>/.dropboxignore. See README §"Using
+    output is written to `<dir>/.dropboxignore`. See README §"Using
     .gitignore rules" for the gitignore-vs-dbxignore semantic divergence.
     """
     if output is not None and stdout:

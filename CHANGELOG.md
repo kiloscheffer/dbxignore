@@ -7,6 +7,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- **`dbxignore --help` and per-command help text render with colors, panels, and inline-code highlighting.** Switched the CLI from `click` to `rich-click` (drop-in import alias) with `TEXT_MARKUP = "markdown"`, so single backticks in command/option help text render as colored monospace tokens, sections appear in panels, and option flags are highlighted. Converted the existing rST `` ``foo`` `` literals in `cli.py` docstrings to Markdown `` `foo` `` form (37 sites). Adds `rich-click>=1.8` to dependencies (transitively pulls in `rich`, `markdown-it-py`, `mdurl`, `pygments`).
+
 ### Added
 
 - **`dbxignore apply --dry-run` previews what would be marked/cleared without mutating.** Threads a `dry_run: bool` keyword-only parameter through `reconcile_subtree` → `_reconcile_path`; when set, marker mutations are skipped and the would-be paths are recorded in new `Report.would_mark` / `Report.would_clear` lists. CLI emits per-path `would mark: <p>` / `would clear: <p>` lines (sorted for determinism) followed by an `apply --dry-run: would_mark=N would_clear=N errors=N (no changes made)` summary. Works with the `--from-gitignore <path>` variant. Steady-state daemon sweeps continue to use `dry_run=False` (the default), so the new `Report` lists stay empty and per-sweep memory is unchanged.

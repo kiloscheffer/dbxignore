@@ -193,8 +193,24 @@ target/
 | `dbxignore apply [PATH]` | One-shot reconcile of the whole Dropbox (or a subtree). Pass `--from-gitignore <path>` to load rules from a `.gitignore` instead of `.dropboxignore` files in the tree. |
 | `dbxignore generate <PATH>` | Translate a `.gitignore` (or any nominated file) to a `.dropboxignore`. `<PATH>` is a file or a directory; default output is `<dir>/.dropboxignore`. Flags: `-o <path>`, `--stdout`, `--force`. |
 | `dbxignore status` | Is the daemon running? Last sweep counts, last error. Pass `--summary` for a stable single-line summary suitable for status-bar widgets — see [Status-bar integration](#status-bar-integration). |
+| `dbxignore clear [PATH]` | Clear every ignore marker under the watched roots (or under `PATH`). Inverse of `apply`. Leaves `.dropboxignore` files and `state.json` untouched — see [Clearing all markers](#clearing-all-markers). |
 | `dbxignore list [PATH]` | Print every path currently bearing the ignore marker. |
 | `dbxignore explain PATH` | Which `.dropboxignore` rule (if any) matches the path? |
+
+### Clearing all markers
+
+`dbxignore clear` walks the watched roots and clears every ignore marker, the inverse of `apply`. Useful for staging a manual sync change or testing that Dropbox re-syncs previously-ignored content from the cloud. Unlike `uninstall --purge`, it leaves `.dropboxignore` rule files and `state.json` untouched.
+
+```
+dbxignore clear --dry-run         # preview what would be cleared
+dbxignore clear --yes             # skip the confirmation prompt
+dbxignore clear ~/Dropbox/proj    # scope to a subtree
+dbxignore clear --force --yes     # override daemon-alive guard
+```
+
+`clear` refuses to run when the daemon is alive — the daemon's next sweep would re-apply rule-driven markers within seconds (rule-reload events) or within the hour (recovery sweep tick). Stop the daemon first (`dbxignore uninstall`) or pass `--force` for known short-window tests where you'll restart the daemon yourself.
+
+A confirmation prompt fires by default. After the clear, Dropbox starts syncing previously-ignored paths — for a `node_modules` previously kept out of sync, that's potentially gigabytes of upload, so the prompt is a footgun guard. Pass `--yes` for scripted use.
 
 ### Status-bar integration
 

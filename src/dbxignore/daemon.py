@@ -216,25 +216,16 @@ def _configured_logging() -> Iterator[None]:
 
 
 def _is_other_live_daemon(pid: int | None) -> bool:
+    """Return True if ``pid`` is a live dbxignore daemon, but not us.
+
+    Wraps ``state.is_daemon_alive`` with the singleton-check-specific
+    self-exclusion: when ``daemon.run`` reads its own freshly-written
+    ``state.json``, the recorded PID matches the current process and
+    must NOT count as a "prior daemon" — otherwise startup would refuse.
+    """
     if pid is None or pid == os.getpid():
         return False
-    try:
-        import psutil
-    except ImportError:
-        try:
-            os.kill(pid, 0)
-            return True
-        except (OSError, ProcessLookupError):
-            return False
-    if not psutil.pid_exists(pid):
-        return False
-    try:
-        proc = psutil.Process(pid)
-        name = proc.name().lower()
-        # Frozen PyInstaller build runs as dbxignored.exe; source run as python.
-        return "python" in name or "dbxignored" in name
-    except psutil.Error:
-        return False
+    return state_module.is_daemon_alive(pid)
 
 
 class _WatchdogHandler(FileSystemEventHandler):

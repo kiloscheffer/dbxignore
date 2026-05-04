@@ -135,20 +135,6 @@ def _read_and_validate_rule_source(source: Path) -> str:
     return text
 
 
-def _process_is_alive(pid: int | None) -> bool:
-    if pid is None:
-        return False
-    try:
-        import psutil
-        return psutil.pid_exists(pid)
-    except ImportError:
-        try:
-            os.kill(pid, 0)
-            return True
-        except (OSError, ProcessLookupError):
-            return False
-
-
 @click.group()
 @click.option("--verbose", "-v", is_flag=True, help="Enable DEBUG-level logging.")
 @click.version_option(package_name="dbxignore")
@@ -272,8 +258,14 @@ def status() -> None:
     if s is None:
         click.echo("dbxignore: no state file found (daemon never ran).")
     else:
-        alive = _process_is_alive(s.daemon_pid)
-        click.echo(f"daemon: {'running' if alive else 'not running'} (pid={s.daemon_pid})")
+        if s.daemon_pid is None:
+            click.echo("daemon: not running (no pid recorded)")
+        elif state.is_daemon_alive(s.daemon_pid):
+            click.echo(f"daemon: running (pid={s.daemon_pid})")
+        else:
+            click.echo(
+                f"daemon: not running (last pid={s.daemon_pid} — state.json may be stale)"
+            )
         if s.daemon_started:
             click.echo(f"started: {s.daemon_started.isoformat()}")
         if s.last_sweep:

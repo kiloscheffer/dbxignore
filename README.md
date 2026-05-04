@@ -188,7 +188,7 @@ target/
 
 | Command | Purpose |
 |---|---|
-| `dbxignore init [PATH]` | Scaffold a starter `.dropboxignore` in `PATH` (or cwd) with a comprehensive template covering Node.js / Python / Rust / JVM / .NET / frontend frameworks / build outputs / OS detritus. Walks the tree to depth 3 and annotates the header with which marker-bait dirs were detected. See [First-time setup](#first-time-setup). |
+| `dbxignore init [PATH]` | Scaffold a starter `.dropboxignore` in `PATH` (or cwd) with a template covering Node.js / Python / Rust / JVM / .NET / frontend frameworks / build outputs / OS detritus. Walks the tree to depth 3 and annotates the header with which marker-bait dirs were detected. See [First-time setup](#first-time-setup). |
 | `dbxignore install` / `uninstall` | Register / remove the daemon with the platform's user-scoped service manager (Task Scheduler on Windows, systemd user unit on Linux). `uninstall --purge` also clears every existing marker, removes local dbxignore state (`state.json`, `daemon.log*`, the state directory), and on Linux removes any systemd drop-in directory. Any stray marker on a `.dropboxignore` file itself is logged at `WARNING` before being cleared. |
 | `dbxignore daemon` | Run the watcher + hourly sweep in the foreground. Usually invoked by Task Scheduler. |
 | `dbxignore apply [PATH]` | One-shot reconcile of the whole Dropbox (or a subtree). Pass `--from-gitignore <path>` to load rules from a `.gitignore` instead of `.dropboxignore` files in the tree. Pass `--dry-run` to preview what would be marked/cleared without changing anything. |

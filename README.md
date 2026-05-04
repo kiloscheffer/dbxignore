@@ -190,7 +190,8 @@ target/
 |---|---|
 | `dbxignore install` / `uninstall` | Register / remove the daemon with the platform's user-scoped service manager (Task Scheduler on Windows, systemd user unit on Linux). `uninstall --purge` also clears every existing marker, removes local dbxignore state (`state.json`, `daemon.log*`, the state directory), and on Linux removes any systemd drop-in directory. Any stray marker on a `.dropboxignore` file itself is logged at `WARNING` before being cleared. |
 | `dbxignore daemon` | Run the watcher + hourly sweep in the foreground. Usually invoked by Task Scheduler. |
-| `dbxignore apply [PATH]` | One-shot reconcile of the whole Dropbox (or a subtree). |
+| `dbxignore apply [PATH]` | One-shot reconcile of the whole Dropbox (or a subtree). Pass `--from-gitignore <path>` to load rules from a `.gitignore` instead of `.dropboxignore` files in the tree. |
+| `dbxignore generate <PATH>` | Translate a `.gitignore` (or any nominated file) to a `.dropboxignore`. `<PATH>` is a file or a directory; default output is `<dir>/.dropboxignore`. Flags: `-o <path>`, `--stdout`, `--force`. |
 | `dbxignore status` | Is the daemon running? Last sweep counts, last error. |
 | `dbxignore list [PATH]` | Print every path currently bearing the ignore marker. |
 | `dbxignore explain PATH` | Which `.dropboxignore` rule (if any) matches the path? |
@@ -217,6 +218,47 @@ Negations that don't conflict with an ignored ancestor work normally. For exampl
 Here nothing marks a parent directory as ignored (`*.log` matches files, not dirs), so the negation works — `important.log` gets synced, the other `.log` files don't.
 
 **Limitation.** Detection uses static analysis on the rule's literal path prefix. Negations that begin with a glob (`!**/keep/`, `!*/cache/`) have no literal anchor to analyze and are accepted without conflict-check — if they land under an ignored ancestor at runtime, they silently fail to take effect. If you need guaranteed semantics, prefer negations with a literal prefix.
+
+## Using `.gitignore` rules
+
+A `.gitignore` and a `.dropboxignore` use the same pattern grammar (the same `pathspec` parser handles both). Two CLI verbs let you reuse `.gitignore` rules without hand-copying.
+
+**`dbxignore generate <path>`** writes a `.dropboxignore` derived byte-for-byte from a source file. `<path>` may be a file or a directory; if a directory, `.gitignore` inside it is the source.
+
+```
+dbxignore generate ~/Dropbox/myproject/.gitignore
+# wrote 4 rules to /home/me/Dropbox/myproject/.dropboxignore
+
+dbxignore generate ~/Dropbox/myproject
+# (same — auto-finds .gitignore in the directory)
+
+dbxignore generate ~/Dropbox/myproject/.gitignore --stdout | less
+# previews without writing
+
+dbxignore generate ~/Dropbox/myproject/.gitignore --force
+# overwrites an existing .dropboxignore
+```
+
+The destination path is `<dir>/.dropboxignore` by default; use `-o <path>` to redirect. Without `--force`, an existing `.dropboxignore` at the target is left in place and the command exits non-zero.
+
+**`dbxignore apply --from-gitignore <path>`** runs a one-shot reconcile using rules loaded from `<path>` (without writing a `.dropboxignore`). Rules are mounted at `dirname(<path>)`, which must be under a discovered Dropbox root. Existing `.dropboxignore` files in the tree do not participate in this run.
+
+```
+dbxignore apply --from-gitignore ~/Dropbox/myproject/.gitignore
+# apply: marked=12 cleared=0 errors=0 duration=0.34s
+```
+
+### Semantic divergence between the two files
+
+A `.gitignore` says "git doesn't track this file." A `.dropboxignore` marker tells Dropbox to **stop syncing the path and remove it from cloud sync**. Most rules transfer cleanly (build outputs, dependency caches, IDE state) — but transplanting a `.gitignore` verbatim can mark files for cloud removal that you didn't intend to remove. Review the source file before running `apply --from-gitignore`, or run `generate --stdout` to preview.
+
+### Interaction with the running daemon
+
+If `dbxignored` is running, writing a `.dropboxignore` (whether by `generate`, by hand, or by any other means) triggers a watchdog event. The daemon classifies it as a `RULES` event, debounces, and reconciles the affected root. End state: the markers are written and Dropbox starts removing matched paths from cloud sync. `generate` is therefore not a "preview-only" verb when the daemon is running — use `--stdout` to preview without committing the file.
+
+### Negations
+
+A pattern like `!build/keep/` (re-include a path under an ignored ancestor) is dropped silently; Dropbox's ignored-folder model does not support negation through ignored ancestors. Use `dbxignore explain <path>` to see which rule masked a dropped negation.
 
 ## Configuration
 

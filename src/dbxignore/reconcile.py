@@ -21,9 +21,18 @@ class Report:
     cleared: int = 0
     errors: list[tuple[Path, str]] = field(default_factory=list)
     duration_s: float = 0.0
+    # Populated only in dry-run mode. In normal mode `marked` and `cleared`
+    # count actual mutations; in dry-run mode they count would-have-been
+    # mutations and these lists carry the per-path detail for CLI output.
+    # Steady-state daemon sweeps are always dry_run=False, so these stay
+    # empty and the per-sweep memory footprint is unchanged (followup item 64).
+    would_mark: list[Path] = field(default_factory=list)
+    would_clear: list[Path] = field(default_factory=list)
 
 
-def reconcile_subtree(root: Path, subdir: Path, cache: RuleCache) -> Report:
+def reconcile_subtree(
+    root: Path, subdir: Path, cache: RuleCache, *, dry_run: bool = False
+) -> Report:
     """Reconcile ``subdir`` under ``root`` with the current rule set.
 
     Both ``root`` and ``subdir`` MUST be absolute and pre-resolved by the
@@ -31,6 +40,14 @@ def reconcile_subtree(root: Path, subdir: Path, cache: RuleCache) -> Report:
     CLAUDE.md "Resolve at the CLI/daemon boundary, never inside the cache
     or markers layer"). ``Path.resolve()`` on Windows is a per-call
     syscall that dominated sweep wall-clock before being hoisted.
+
+    When ``dry_run`` is True, marker mutations are skipped: ``markers.set_ignored``
+    and ``markers.clear_ignored`` are NOT called. Subtree pruning still
+    fires based on the would-be ignored state, so the dry-run preview is
+    structurally identical to what a real reconcile would do. Counters
+    (``report.marked`` / ``report.cleared``) reflect *would-have-been*
+    mutations; per-path detail lives in ``report.would_mark`` /
+    ``report.would_clear`` for CLI consumption.
     """
     start = time.perf_counter()
     report = Report()
@@ -39,7 +56,7 @@ def reconcile_subtree(root: Path, subdir: Path, cache: RuleCache) -> Report:
         raise ValueError(f"subdir {subdir} is not under root {root}")
 
     # If subdir itself ends up ignored, don't descend.
-    if _reconcile_path(subdir, cache, report):
+    if _reconcile_path(subdir, cache, report, dry_run=dry_run):
         report.duration_s = time.perf_counter() - start
         return report
 
@@ -49,21 +66,27 @@ def reconcile_subtree(root: Path, subdir: Path, cache: RuleCache) -> Report:
         # the walk (os.walk honors in-place modification of dirnames).
         dirnames[:] = [
             name for name in dirnames
-            if not _reconcile_path(current_path / name, cache, report)
+            if not _reconcile_path(current_path / name, cache, report, dry_run=dry_run)
         ]
         for name in filenames:
-            _reconcile_path(current_path / name, cache, report)
+            _reconcile_path(current_path / name, cache, report, dry_run=dry_run)
 
     report.duration_s = time.perf_counter() - start
     return report
 
 
-def _reconcile_path(path: Path, cache: RuleCache, report: Report) -> bool | None:
+def _reconcile_path(
+    path: Path, cache: RuleCache, report: Report, *, dry_run: bool = False
+) -> bool | None:
     """Reconcile one path's ignore marker with the current rule set.
 
     Returns the path's final ignored state (True/False), or None if it could
     not be determined (read error or vanished path). The return value drives
     subtree pruning in reconcile_subtree.
+
+    When ``dry_run`` is True, the would-be marker mutation is recorded in
+    ``report.would_mark`` / ``report.would_clear`` instead of being applied;
+    the read side still runs (so we can decide what would change).
     """
     try:
         should_ignore = cache.match(path)
@@ -90,7 +113,10 @@ def _reconcile_path(path: Path, cache: RuleCache, report: Report) -> bool | None
 
     try:
         if should_ignore and not currently_ignored:
-            markers.set_ignored(path)
+            if not dry_run:
+                markers.set_ignored(path)
+            else:
+                report.would_mark.append(path)
             report.marked += 1
             return True
         if currently_ignored and not should_ignore:
@@ -99,7 +125,10 @@ def _reconcile_path(path: Path, cache: RuleCache, report: Report) -> bool | None
                     ".dropboxignore at %s was marked ignored; overriding back to synced",
                     path,
                 )
-            markers.clear_ignored(path)
+            if not dry_run:
+                markers.clear_ignored(path)
+            else:
+                report.would_clear.append(path)
             report.cleared += 1
             return False
     except FileNotFoundError:

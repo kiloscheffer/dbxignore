@@ -5,12 +5,13 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
 import click
 
-from dbxignore import markers, reconcile, roots, state
+from dbxignore import markers, reconcile, roots, rules, state
 from dbxignore.roots import find_containing
 from dbxignore.rules import IGNORE_FILENAME, RuleCache
 
@@ -88,6 +89,52 @@ def _load_cache(roots: list[Path]) -> RuleCache:
     return cache
 
 
+def _resolve_gitignore_arg(path: Path) -> Path:
+    """Resolve a ``generate`` argument to an actual file.
+
+    Directory → look for ``.gitignore`` inside; file → use as-is. Exits 2
+    with a CLI-formatted stderr message if the resolved path does not exist.
+    Single-caller helper; ``_apply_from_gitignore`` deliberately does its
+    own (stricter) resolution and does not call this.
+    """
+    if path.is_dir():
+        candidate = path / ".gitignore"
+        if not candidate.exists():
+            click.echo(f"error: no .gitignore in {path}", err=True)
+            sys.exit(2)
+        return candidate
+    if not path.exists():
+        click.echo(f"error: {path} not found", err=True)
+        sys.exit(2)
+    return path
+
+
+def _read_and_validate_rule_source(source: Path) -> str:
+    """Read ``source`` as UTF-8 and verify it parses as a pathspec.
+
+    Returns the raw text on success. Exits with code 2 (and a CLI-formatted
+    stderr message) if the file can't be read, isn't valid UTF-8, or
+    contains a pattern the parser rejects. Used by both ``generate`` and
+    ``apply --from-gitignore`` — the two interactive entry points where
+    rule-source failures should surface as user-facing errors rather than
+    being swallowed into log warnings the way ``RuleCache._load_file`` does.
+    """
+    try:
+        text = source.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        click.echo(f"error: {source} is not valid UTF-8", err=True)
+        sys.exit(2)
+    except OSError as exc:
+        click.echo(f"error: cannot read {source}: {exc.strerror}", err=True)
+        sys.exit(2)
+    try:
+        rules._build_spec(text.splitlines())
+    except (ValueError, TypeError, re.error) as exc:
+        click.echo(f"error: {source} contains invalid pattern: {exc}", err=True)
+        sys.exit(2)
+    return text
+
+
 def _process_is_alive(pid: int | None) -> bool:
     if pid is None:
         return False
@@ -113,10 +160,79 @@ def main(ctx: click.Context, verbose: bool) -> None:
     ctx.ensure_object(dict)
 
 
+def _apply_from_gitignore(source: Path) -> None:
+    """Run a one-shot reconcile using rules loaded from ``source``.
+
+    Rules are mounted at ``dirname(source).resolve()`` and applied only to
+    that subtree. Existing .dropboxignore files in the tree do not
+    participate in this run. Errors from the source file (missing,
+    unreadable, invalid syntax) surface as user-facing CLI errors with
+    exit code 2.
+    """
+    if source.is_dir():
+        click.echo(
+            "error: --from-gitignore requires a file path, not a directory",
+            err=True,
+        )
+        sys.exit(2)
+    if not source.exists():
+        click.echo(f"error: {source} not found", err=True)
+        sys.exit(2)
+
+    discovered = _discover_roots()
+    if not discovered:
+        click.echo("No Dropbox roots found. Is Dropbox installed?", err=True)
+        sys.exit(2)
+
+    mount_at = source.parent.resolve()
+    if find_containing(mount_at, discovered) is None:
+        click.echo(
+            f"error: {source}'s directory {mount_at} is not under any Dropbox root",
+            err=True,
+        )
+        sys.exit(2)
+
+    _read_and_validate_rule_source(source)
+
+    cache = RuleCache()
+    cache.load_external(source, mount_at)
+
+    report = reconcile.reconcile_subtree(mount_at, mount_at, cache)
+    click.echo(
+        f"apply: marked={report.marked} cleared={report.cleared} "
+        f"errors={len(report.errors)} duration={report.duration_s:.2f}s"
+    )
+
+
 @main.command()
 @click.argument("path", required=False, type=click.Path(path_type=Path))
-def apply(path: Path | None) -> None:
-    """Run one reconcile pass (whole Dropbox, or a subtree)."""
+@click.option(
+    "--from-gitignore", "from_gitignore",
+    type=click.Path(exists=False, path_type=Path), default=None,
+    help=(
+        "Apply rules loaded from <path> instead of from .dropboxignore "
+        "files in the tree. The directory containing <path> must be under "
+        "a discovered Dropbox root. See README §\"Using .gitignore rules\"."
+    ),
+)
+def apply(path: Path | None, from_gitignore: Path | None) -> None:
+    """Run one reconcile pass (whole Dropbox, or a subtree).
+
+    Pass ``--from-gitignore <path>`` to load rules from a nominated file
+    instead of the .dropboxignore files in the tree.
+    """
+    if from_gitignore is not None and path is not None:
+        click.echo(
+            "error: --from-gitignore and the positional path argument "
+            "are mutually exclusive",
+            err=True,
+        )
+        sys.exit(2)
+
+    if from_gitignore is not None:
+        _apply_from_gitignore(from_gitignore)
+        return
+
     discovered = _discover_roots()
     if not discovered:
         click.echo("No Dropbox roots found. Is Dropbox installed?", err=True)
@@ -365,6 +481,72 @@ def uninstall(purge: bool) -> None:
             removed_dropin = linux_systemd.remove_dropin_directory()
             if removed_dropin is not None:
                 click.echo(f"Removed systemd drop-in directory {removed_dropin}.")
+
+
+@main.command()
+@click.argument("path", type=click.Path(exists=False, path_type=Path))
+@click.option(
+    "-o", "--output", "output",
+    type=click.Path(path_type=Path), default=None,
+    help="Write to this path instead of <dir>/.dropboxignore.",
+)
+@click.option(
+    "--stdout", is_flag=True,
+    help="Write to stdout instead of a file.",
+)
+@click.option(
+    "--force", is_flag=True,
+    help="Overwrite an existing .dropboxignore at the target location.",
+)
+def generate(path: Path, output: Path | None, stdout: bool, force: bool) -> None:
+    """Translate a .gitignore (or any nominated file) to a .dropboxignore.
+
+    PATH may be a file or a directory. Directory: looks for .gitignore
+    inside. File: used as-is regardless of filename. By default the
+    output is written to <dir>/.dropboxignore. See README §"Using
+    .gitignore rules" for the gitignore-vs-dbxignore semantic divergence.
+    """
+    if output is not None and stdout:
+        click.echo("error: -o and --stdout are mutually exclusive", err=True)
+        sys.exit(2)
+
+    source = _resolve_gitignore_arg(path)
+
+    text = _read_and_validate_rule_source(source)
+    lines = text.splitlines()
+
+    if stdout:
+        click.echo(text, nl=False)
+        return
+
+    target = output if output is not None else (source.parent / IGNORE_FILENAME)
+    if target.exists() and not force:
+        click.echo(
+            f"error: {target} exists; pass --force to overwrite or "
+            "--stdout to preview",
+            err=True,
+        )
+        sys.exit(2)
+    try:
+        target.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        click.echo(f"error: cannot write {target}: {exc.strerror}", err=True)
+        sys.exit(2)
+
+    discovered = _discover_roots()
+    target_resolved = target.resolve()
+    if discovered and find_containing(target_resolved, discovered) is None:
+        click.echo(
+            f"warning: {target} is not under any discovered Dropbox root; "
+            "reconcile will not see it",
+            err=True,
+        )
+
+    rule_count = sum(
+        1 for line in lines
+        if line.strip() and not line.strip().startswith("#")
+    )
+    click.echo(f"wrote {rule_count} rules to {target}")
 
 
 @click.command()

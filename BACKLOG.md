@@ -1184,13 +1184,251 @@ Surfaced 2026-05-03 alongside items #52 and #53. The deepest scalability fix in 
 
 Touches: `src/dbxignore/daemon.py` (observer setup + new watch-lifecycle helper); `src/dbxignore/reconcile.py` (callback hook for "directory just marked/unmarked"); new `tests/test_daemon_watch_lifecycle.py` (per-dir scheduling, mark/unmark transitions, race scenarios).
 
+## 55. `state.write()` does not parse-back validate before atomic replace
+
+`src/dbxignore/state.py:write()` writes `state.json` atomically by serializing to `state.json.tmp` via `path.write_text(json.dumps(...))` and then `os.replace`-ing it into place (per CLAUDE.md's `state.write()` gotcha). There's no validation step between the temp write and the rename. If a future serializer change ever produced malformed JSON, `os.replace` would commit it to disk; the next `state._read_at` would return `None` (per its `JSONDecodeError` arm), and `daemon.run`'s singleton check would read that as "no prior daemon," allowing two concurrent daemons.
+
+A defensive read-back step between `write_text` and `os.replace` — read the temp file, `json.loads` it, raise on failure and unlink the temp — costs one extra read of a small file (typically <1KB) and catches a future serializer regression before it becomes durable.
+
+**Fix candidates:**
+
+- **Add a parse-back validation step in `state.write()`** (preferred). After `tmp.write_text(payload)`, call `json.loads(tmp.read_text())` inside a try/except that unlinks the temp file and re-raises on failure, before the `os.replace`. ~5 LOC. Pair with a test that monkeypatches `json.dumps` to return a known-invalid string and asserts `state.write()` raises without leaving `state.json` modified.
+- **Defer.** No production hit — `json.dumps` on the project's current state shape never produces invalid output. The defense is purely against a future serializer change going subtly wrong. Acceptable to wait for a real failure mode.
+
+**Urgency:** low. Cheap insurance, no observed pain. Bundle with the next state-layer touch.
+
+Touches: `src/dbxignore/state.py` (`write` function: insert parse-back step between `write_text` and `os.replace`); new test in `tests/test_state_*.py` (monkeypatch `json.dumps` to inject invalid output, assert `write` raises before commit).
+
+## 56. No `dbxignore generate` / `apply --from-gitignore` to reuse `.gitignore` rules
+
+**Status: RESOLVED 2026-05-04 (PR #94).**
+
+Users with a populated `.gitignore` who want the same exclusions for Dropbox sync currently have to author a parallel `.dropboxignore` by hand. dbxignore's `pathspec`-based rule engine in `src/dbxignore/rules.py` accepts the same gitignore syntax, so there's no engine-side blocker — the gap is purely at the CLI/file-source layer.
+
+Two related shapes:
+
+1. **`dbxignore generate <path>`** — produce a `.dropboxignore` next to a `.gitignore`, copying the rule lines verbatim. Lets the user diverge afterwards (the `.dropboxignore` becomes the durable rule source).
+2. **`dbxignore apply --from-gitignore <path>`** — load rules from `.gitignore` (or any nominated file) into an in-memory `_LoadedRules` and run reconcile, with no `.dropboxignore` written. One-shot, ephemeral.
+
+`pathspec` already handles negations correctly, so dbxignore can pass `.gitignore` lines through without filtering them — though the user should be warned that negations under ignored ancestors are inert (`_dropped` semantics, see `rules_conflicts.py`). Documentation should also note the semantic divergence between the two ignore models: gitignore rules say "git doesn't track this"; dbxignore rules say "Dropbox should not sync this", which means matched files get *removed from cloud sync*. Users transplanting `.gitignore` rules verbatim need that warning.
+
+**Fix candidates:**
+
+- **Ship both shapes as one feature.** `generate` is a ~30-LOC subcommand; `apply --from-gitignore <p>` reuses the existing apply pipeline with a swapped rule-source. ~80 LOC + tests + README §"Using `.gitignore` rules". Document the divergence-warning in `--help` text.
+- **Ship just `generate`.** Half the value at half the cost — leaves users to `cp .gitignore .dropboxignore` themselves. Defensible if the file-on-disk path is the only one with real demand.
+- **Ship just `apply --from-gitignore`.** Skips file-on-disk creation. Useful for one-off cleanups; doesn't help users who want a durable rule file.
+- **Defer.** No request signal yet. Filed against the day a user asks "why do I have to maintain two ignore files?"
+
+**Urgency:** low-medium. Ergonomic gap; zero pain reports.
+
+Touches: `src/dbxignore/cli.py` (new `generate` command + `--from-gitignore` flag on `apply`); `src/dbxignore/rules.py` (factor `_LoadedRules` construction so it can take an arbitrary source path); new tests in `tests/test_cli_generate.py`; README §"Using `.gitignore` rules".
+
+## 57. `EventKind.DIR_CREATE` events that already match a cached rule wait the full debounce window
+
+`src/dbxignore/daemon.py:_classify` distinguishes `EventKind.{RULES,DIR_CREATE,OTHER}` and the `Debouncer` applies per-kind timeouts (`DEFAULT_TIMEOUTS_MS`). The shape exists because rule reloads benefit from coalescing burst events and bulk OTHER events should batch. There's a third case the current shape doesn't optimize for: a single `DIR_CREATE` event whose path *already matches* a cached rule. For that path, the marker write should land before Dropbox's own watcher sees the directory and starts ingesting its contents — every millisecond of debounce extends the window where Dropbox can upload a child file before the parent's marker is set.
+
+The natural shape: in `_dispatch`, before queueing into `Debouncer`, check `cache.match(resolved_path, is_dir=True)` for a `DIR_CREATE` event. If True, apply the marker synchronously and skip the debouncer. Other event kinds and unmatched DIR_CREATEs go through the existing per-kind debounce. This is per-event-kind bypass, not a global "no debounce" — `RULES` events keep their debounce (they should coalesce), OTHER events keep theirs. Only the matched-create case fast-paths.
+
+Risk: per CLAUDE.md's note on `_applicable`, the cache lookup is lock-free and "between `.get()` calls a debouncer-thread mutation can change which ancestor's rules apply." For `_dispatch`-time matching the risk is that a rule was just deleted and the bypass marks a path that should no longer be marked — caught by the next sweep, but a transient false-positive marker exists in the gap. Acceptable trade if the debounce is the bigger latency sink; the worst-case staleness is bounded by the watchdog event delay, which is exactly what the existing design relies on.
+
+**Fix candidates:**
+
+- **Bypass debouncer for matched DIR_CREATE.** ~30 LOC: in `_dispatch`, branch on `kind == DIR_CREATE and cache.match(resolved_src, is_dir=True)` and call `_reconcile_path` synchronously. Tests: simulate a Create event for a path matching a cached rule, assert marker present immediately (before the debouncer would have fired); stale-rule race test (delete rule, fire Create, assert subsequent sweep clears the transiently-set marker).
+- **Add an env-var to enable the bypass** (`DBXIGNORE_FAST_DIR_CREATE=1`). Conservative rollout — opt-in, observable, removable. No behavior change for existing users.
+- **Defer.** No measured race-window pain reported. Status quo trades latency for transactional correctness in the cache-lookup, which is defensible.
+
+**Urgency:** low until measured. Bundle with the next daemon-touching change if it lands; otherwise defer until a user reports the create-race symptom (a child file syncs before the parent's marker arrives).
+
+Touches: `src/dbxignore/daemon.py` (`_dispatch`: bypass arm); `tests/test_daemon_dispatch.py` (matched-create-fast-path test, stale-rule-race test); CLAUDE.md daemon section (document the bypass + the transient-mismarked-path trade-off).
+
+## 58. `_pluginkit_extension_state() == "unknown"` arm in `_detected_attr_name()` falls through to legacy attribute
+
+`src/dbxignore/_backends/macos_xattr.py:_detected_attr_name()` resolves the marker name via path-primary (info.json) + pluginkit-disambiguating logic per CLAUDE.md's macOS section. When `_pluginkit_extension_state()` returns `"unknown"` (subprocess error, missing `pluginkit` binary, hung query — the test-host case in the existing tests), the current logic falls back to legacy `com.dropbox.ignored`. On a File-Provider-mode user where detection misfires for environmental reasons, the legacy attribute is silently no-op and Dropbox keeps syncing the marked path.
+
+Two failure shapes converge here: (a) detection-uncertainty due to environmental issues (genuinely don't know which mode), and (b) detection-incorrectness due to a bug in the path/pluginkit logic. Today both fall through to legacy. A defensive fallback for case (a): when detection genuinely returns unknown, write both `com.dropbox.ignored` AND `com.apple.fileprovider.ignore#P`. The active sync stack reads its own; the inactive one ignores the stray attribute. Trade-off: a stray attribute on disk vs. a silent no-op for users on File Provider whose detection misfires. The user-visible outcome is correctly ignored either way; the cost is metadata cleanliness.
+
+This is *only* the "unknown" path — the well-understood path-detection arms keep their current single-attribute-write behavior because they're definitive.
+
+**Fix candidates:**
+
+- **Write both attributes when `_pluginkit_extension_state() == "unknown"`** (preferred). Modify `_detected_attr_name()` to return a sentinel (`"both"` or a tuple) for the unknown arm; `set_ignored`/`is_ignored`/`clear_ignored` branch on the sentinel and iterate both attrs. ~20 LOC + a test that mocks `_pluginkit_extension_state` to return `"unknown"` and asserts both attributes are written. Pair with a CLAUDE.md addition documenting the always-write-both-on-unknown rule and citing the metadata-stray vs. silent-failure trade.
+- **Surface a WARNING when detection returns unknown** (companion). Current behavior is silent; users have no signal that their setup is in the uncertain branch. INFO/WARNING log at first detection cycle, deduplicated. Pairs with item #37 (sync-mode result observability).
+- **Defer.** No reported pain — the current "unknown → legacy" arm fires only on test hosts and edge environments. Acceptable until a user reports the silent-no-op symptom.
+
+**Urgency:** low. Speculative defensive coding, no observed user hit. Bundle with the next macOS-backend touch (item #37 already pending).
+
+Touches: `src/dbxignore/_backends/macos_xattr.py` (`_detected_attr_name`: sentinel for unknown; `set_ignored`/`is_ignored`/`clear_ignored`: branch on sentinel); `tests/test_macos_xattr_unit.py` (mock `_pluginkit_extension_state` to `"unknown"`, assert dual-attribute write); CLAUDE.md macOS section (document the unknown-arm behavior).
+
+## 59. `dbxignore status` doesn't report daemon liveness
+
+`src/dbxignore/cli.py:status` prints rule-evaluation summary (configured roots, marker counts, conflicts) but says nothing about whether the daemon is currently running. To check liveness today, users read `daemon.log` or query the platform service manager (`schtasks /Query`, `systemctl --user status`, `launchctl list`). `state.json` already records the daemon PID atomically per `state.write()`; a signal-0 (POSIX) or `tasklist /FI "PID eq …"` (Windows) check would give a definitive liveness answer in O(1).
+
+The piece is small, the UX gap is concrete: a user running `dbxignore status` after `dbxignore install` could see at a glance whether the service started successfully.
+
+**Fix candidates:**
+
+- **Add a daemon-status block to the `status` output.** ~30 LOC: read `state.json`, check the recorded PID via `os.kill(pid, 0)` on POSIX or `subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True)` on Windows. Print one of "running (PID X)" / "not running" / "stale state.json (PID X recorded but process gone)". Test by writing a fake `state.json` and monkeypatching `os.kill` / `subprocess.run`.
+- **Defer.** Users can use platform service tools; not a critical gap.
+
+**Urgency:** low-medium. UX shortfall, not a bug. Bundle with the next CLI-touching change.
+
+Touches: `src/dbxignore/cli.py` (`status` command: append daemon-liveness block); `src/dbxignore/state.py` (helper for "is recorded PID alive?" if not already present); `tests/test_cli_status.py` (running / not-running / stale-PID cases).
+
+## 60. `dbxignore status` has no machine-readable single-line summary
+
+`dbxignore status` prints multi-line human output. Users wanting to wire dbxignore into a status-bar widget (polybar / tmux right-status / i3blocks / sketchybar) currently have to grep/awk it themselves, which is fragile across releases. A `--summary` flag emitting a stable one-line representation to stderr — e.g., `<roots> roots, <ignored> ignored, <conflicts> conflicts, daemon=<state>` — would give status-bar tooling a contract to parse. Single-line output is also cron-friendly: redirect stdout to `/dev/null`, capture stderr, alert on changes.
+
+**Fix candidates:**
+
+- **Add `dbxignore status --summary`** producing a fixed-format single line on stderr. ~15 LOC plus a test that asserts the format string. Document the format under a README §"Status integrations" subsection. Treat the format as part of the public API for SemVer purposes (changes bump MINOR pre-1.0, MAJOR post-1.0).
+- **Add `dbxignore status --json`** for fully-structured machine consumption. More flexible but invites maintenance churn (every status field change is a JSON-schema change). The single-line `--summary` is the cheaper contract.
+- **Defer.** No reported pain.
+
+**Urgency:** low. Polish, not a gap. Bundle with the next CLI-touching change.
+
+Touches: `src/dbxignore/cli.py` (`status` command: `--summary` flag, stable-format emission); `tests/test_cli_status.py` (`--summary` format assertion); README §"Status integrations" subsection.
+
+## 61. No verb to clear all markers without removing rule files or per-user state
+
+`dbxignore uninstall --purge` (in `src/dbxignore/cli.py`) clears every marker and deletes per-user state. There's no intermediate verb that says "clear all markers under the watched roots, but keep `.dropboxignore` files and `state.json` in place." A user who wants to temporarily unsync everything (e.g., to stage a manual sync change, or to test that Dropbox re-syncs from cloud as expected) has to choose between the heavy `--purge` (loses the rule files and state) and a manual recursive `xattr -d` / `Remove-Item -Stream` walk.
+
+The natural verb shape: `dbxignore clear` — walks each watched root, clears every marker, exits. Leaves `.dropboxignore` and `state.json` untouched. Symmetric inverse of `dbxignore apply` against the existing rules: `apply` sets every marker the rules dictate; `clear` unsets every marker.
+
+**Fix candidates:**
+
+- **Add `dbxignore clear`** (preferred). ~40 LOC: walk roots via existing `reconcile_subtree` infrastructure but with a "force unset all" rule predicate. Pair with a `--dry-run` flag that prints what would be cleared. Tests: mark some files, run clear, assert all clean; verify `.dropboxignore` files untouched; verify state.json untouched.
+- **Add `dbxignore apply --reset` / `--invert`** as a flag on the existing apply command. Slightly less discoverable but reuses more code.
+- **Defer.** Users can `dbxignore uninstall --purge && reauthor .dropboxignore`. Workaround exists; verb is a polish.
+
+**Urgency:** low. Adds a discoverable middle-ground operation; no current pain.
+
+Touches: `src/dbxignore/cli.py` (new `clear` command); `src/dbxignore/reconcile.py` (potentially: a "clear-all" mode of `reconcile_subtree` that ignores rules and just unsets markers); `tests/test_cli_clear.py`; README §"CLI reference".
+
+## 62. `dbxignore apply --recent N` for cron-driven incremental sweeps
+
+`daemon._sweep_once` and `cli.apply` call `reconcile_subtree`, which walks every directory under each root via `os.walk`. For a 27k-dir tree this is the 49.62s cost item #53 already documents under "skip-on-(marker-present + match-still-positive)". A complementary perf path for cron-driven users: limit a given sweep to directories with `mtime` newer than a horizon. `--recent N` (minutes) or `--since <timestamp>` filters the walk to recently-mutated subtrees. For a user running `dbxignore apply --recent 5` from a 5-minute cron, the walk skips ~99% of an unchanged tree.
+
+Caveat: `mtime` granularity. A directory's `mtime` updates when an immediate child is added or removed, but not when a grandchild changes. So `--recent N` catches *structural* changes (new dir, removed dir, new top-level file in a dir) but misses content changes inside untouched directory frames. For dbxignore's use case (rule-driven marker reconciliation, where rules apply at the directory level), structural-change tracking is what matters — content changes don't change which subtree should be marked. Document the caveat in `--help` and README so users with content-change-driven workflows know the recovery sweep is the right place for them.
+
+**Fix candidates:**
+
+- **Add `dbxignore apply --recent N`** (`N` in minutes) that filters `reconcile_subtree`'s walk to dirs with `mtime` newer than `now - N min`. ~30 LOC plus a test that creates a tree, touches one subdir, runs `apply --recent 1`, asserts only that subdir was reconciled. Document the mtime-granularity caveat.
+- **Generalize as `dbxignore apply --since <ISO8601>`** for absolute-timestamp use. Marginally more flexible; `--recent N` covers the common case. Could ship both behind one flag (autodetect by string format).
+- **Per-event-kind incremental sweep in the daemon** — separate scope; defer.
+- **Defer.** Users with large trees can already mitigate via item #53's marker-present pruning. `--recent` is a complementary user-controlled mode, not strictly necessary.
+
+**Urgency:** low. Bundles naturally with item #53's `reconcile_subtree` work.
+
+Touches: `src/dbxignore/cli.py` (new `--recent` / `--since` flags on `apply`); `src/dbxignore/reconcile.py` (`reconcile_subtree`: optional `mtime_horizon` parameter, walk-filter); `tests/test_reconcile_subtree.py` (mtime-filtered walk test); `--help` text + README.
+
+## 63. No `dbxignore init` to scaffold a starter `.dropboxignore`
+
+A user running `dbxignore` for the first time on a Dropbox folder containing a development tree authors `.dropboxignore` from scratch. The most common patterns (`node_modules/`, `__pycache__/`, `.venv/`, `target/`, `build/`, `dist/`, `.pytest_cache/`, `.ruff_cache/`) are common across the dev-in-Dropbox use case but currently have to be copy-pasted from documentation or memory.
+
+A `dbxignore init [<path>]` subcommand could:
+
+1. Detect an existing `.dropboxignore` and refuse to overwrite (or merge with `--force`).
+2. Walk the target dir for marker-bait directories — `node_modules/`, `__pycache__/`, `.venv/`, `target/` — and seed a starter file with one rule per detected pattern, plus comments noting which directories triggered each.
+3. Optionally include a curated default set even when nothing is detected (`build/`, `dist/`, `.pytest_cache/`, `.ruff_cache/`) so the file isn't empty.
+
+The walk should be capped at a shallow depth (e.g., 3) so `init` doesn't recurse into existing `node_modules` chains.
+
+**Fix candidates:**
+
+- **Ship `dbxignore init` with detection + curated defaults** (preferred). ~80 LOC: subcommand, detection scan capped at depth 3, template emission. Tests: scaffold against a synthetic tree, assert generated file content matches expected; assert refuse-to-overwrite without `--force`.
+- **Ship `dbxignore init --no-scan`** (curated defaults only). Simpler; no detection latency. Worse first-run UX.
+- **Ship a packaged template only** (no subcommand), documented as `cp <pkg-data-path>/default.dropboxignore .dropboxignore`. Passive; no auto-detection.
+- **Defer.** No demand signal.
+
+**Urgency:** low. Quality-of-life feature, no observed pain.
+
+Touches: `src/dbxignore/cli.py` (new `init` command); new `src/dbxignore/templates/default.dropboxignore` (curated default rules); detection helper (could go in `cli.py` or a new `init.py`); `tests/test_cli_init.py`; `pyproject.toml` (add template dir to package data); README §"First-time setup".
+
+## 64. `dbxignore daemon` has no `--dry-run` preview mode
+
+`dbxignore apply --dry-run` prints what *would* be marked/cleared and exits without mutating. `dbxignore daemon` has no equivalent — it always starts the watchdog observer and applies markers. A user evaluating "what would the daemon do over the next 5 minutes if I started it?" has no way to check without committing.
+
+A `dbxignore daemon --dry-run` mode would:
+
+- Run the initial sweep in dry-run, printing intended marker mutations.
+- Keep the watcher running but route every reconcile call through the dry-run path (print, don't mutate).
+- Exit on Ctrl-C as normal.
+
+This is a parity feature with `apply --dry-run`, useful for new users who want to see daemon behavior without commitment.
+
+**Fix candidates:**
+
+- **Add `dbxignore daemon --dry-run`** (preferred). ~30 LOC: thread a `dry_run` bool through `daemon.run`, `_sweep_once`, `_dispatch`, `_reconcile_path`. The dry-run path likely already exists in reconcile (apply uses it); the daemon would just need to plumb it through and ensure all mutation paths respect it. Tests: start a dry-run daemon against a fake tree, fire a Create event, assert the matcher was called but no marker was set.
+- **Document an existing `DBXIGNORE_DRY_RUN=1` env var** if one exists; otherwise this is the only path.
+- **Defer.** Users can read `apply --dry-run` output and trust the daemon to do the same.
+
+**Urgency:** low. Polish, no correctness gap.
+
+Touches: `src/dbxignore/daemon.py` (`run`, `_sweep_once`, `_dispatch`: thread `dry_run`); `src/dbxignore/reconcile.py` (verify `reconcile_subtree` already accepts dry-run; if not, add); `tests/test_daemon_dispatch.py`.
+
+## 65. No Windows Explorer right-click context-menu integration
+
+dbxignore is CLI-and-daemon only on Windows; users wanting to ignore a single folder ad-hoc must `dbxignore apply` from a terminal or update `.dropboxignore` and wait for the daemon to react. A right-click context-menu verb in Explorer ("Ignore from Dropbox", "Un-ignore from Dropbox") would close that gap. Windows shell-extension verbs registered under `HKEY_CLASSES_ROOT\Directory\shell\…\command` (or per-user equivalents under `HKEY_CURRENT_USER\Software\Classes\…`) are a no-DLL way to add custom Explorer actions, calling out to a tool with `%1` substituted.
+
+The shape worth shipping:
+
+- An optional install arm: `dbxignore install --shell-integration` writes per-user registry keys (per-user avoids UAC), invoking `dbxignore.exe ignore "%1"` and `dbxignore.exe clear "%1"` (or whatever verbs land per items #61).
+- An `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()` results — generated at install time, not a substring match on path strings (substring filters match false positives on any folder named "Dropbox" anywhere on disk).
+- A symmetric uninstall arm: `dbxignore uninstall --shell-integration`.
+
+Routing the actual marker write through `dbxignore.exe` rather than re-implementing the ADS write inline in the registry value gets the `\\?\` long-path correctness of `_backends/windows_ads.py` for free.
+
+**Fix candidates:**
+
+- **Ship `dbxignore install --shell-integration`** as an optional install arm. ~150 LOC: registry-write helper, `AppliesTo` filter from `roots.discover()`, both ignore and unignore verbs, uninstall companion. Tests on Windows-only legs: assert registry keys present after install, assert correct invocation string, assert per-user-vs-per-machine path selection mirrors `_info_json_paths()` precedent. Add `tests/test_install_windows_shell.py` with `windows_only` marker.
+- **Ship a static `.reg` file** in `docs/windows-shell-integration.reg` for users to download and double-click. Cheap, less correct (icon path will be wrong for some installs, `AppliesTo` substring filter is unsound).
+- **Defer.** Headless CLI is enough for most users; this is power-user UX.
+
+**Urgency:** very low. Feature gap; no demand signal.
+
+Touches: `src/dbxignore/install/windows_shell.py` (new module); `src/dbxignore/install/__init__.py` (optional dispatcher hook); `src/dbxignore/cli.py` (`install --shell-integration` flag, `uninstall --shell-integration`); new `tests/test_install_windows_shell.py` (windows_only); README §"Windows Explorer integration".
+
+## 66. `dbxignore generate` skips out-of-root warning when no Dropbox roots are discovered
+
+`src/dbxignore/cli.py`'s `generate` command emits a stderr warning when the resolved target sits outside any discovered Dropbox root — but the guard is `if discovered and find_containing(target_resolved, discovered) is None:`. When `_discover_roots()` returns `[]` (no `info.json`, `DBXIGNORE_ROOT` unset, Dropbox not installed), the entire warning branch is short-circuited away. The user gets no signal that the produced `.dropboxignore` will not be observed by reconcile or the daemon. Empty-roots is the degenerate case of "all roots are somewhere else"; the warning's whole purpose ("your file won't be observed") applies even harder when no roots exist at all.
+
+The spec error matrix (PR #94's spec at `docs/superpowers/specs/2026-05-04-gitignore-import.md`) lists "target outside all Dropbox roots → exit 0 + stderr warning" but doesn't have an explicit "no-roots" row, so the current code is not strictly spec-incorrect — just inconsistent with the warning's stated rationale.
+
+**Fix candidates:**
+
+- **Drop the `if discovered and ...` guard, keep the inner check.** When `discovered` is `[]`, `find_containing` returns `None` for any path, so the warning fires with the same wording. Single-line change.
+- **Tailor the message for the no-roots case.** Distinguish "outside all roots" from "no roots discovered at all" with a different stderr line (e.g. `warning: no Dropbox roots discovered; reconcile will not see <target>`). More informative; one extra branch.
+- **Defer.** Users running `generate` on a machine without Dropbox arguably know there's no Dropbox. The asymmetry with `apply` (which exits 2 on no-roots) is intentional — `generate` is documented as not requiring Dropbox.
+
+**Urgency:** low. Cosmetic-leaning; the user could be confused by the silence but the file IS produced correctly.
+
+Touches: `src/dbxignore/cli.py` (`generate` body — adjust the out-of-root warning guard); `tests/test_cli_generate.py` (extend `test_generate_target_outside_roots_warns_but_writes` or add a `test_generate_no_roots_still_warns`).
+
+## 67. `apply --from-gitignore` does not suppress conflict warnings to stderr
+
+In PR #92's `_load_cache` extraction (commit `a6fb74b`), every CLI command was routed through a helper that calls `RuleCache.load_root(..., log_warnings=False)` to suppress per-mutation conflict WARNINGs that would be a stderr duplicate of the structured stdout (`status` already prints conflict rows in a column-aligned table; the per-mutation log line is noise).
+
+PR #94's `_apply_from_gitignore` bypasses `_load_cache` (for good reason — it constructs a fresh single-rule-source cache rather than discovering rules from the tree) but calls `cache.load_external(source, mount_at)` with the default `log_warnings=True`. If the user's gitignore contains a conflicted negation (e.g. `build/` + `!build/keep/`), the WARNING fires to stderr — inconsistent with the regular `apply` path, which suppresses it.
+
+The damage is "stderr noise that the regular `apply` path does not produce." Not a functional defect; not visible unless the user redirects stderr or the test suite asserts against `caplog`.
+
+**Fix candidates:**
+
+- **Pass `log_warnings=False` explicitly.** One-line change in `_apply_from_gitignore`: `cache.load_external(source, mount_at, log_warnings=False)`. Restores stderr parity with `apply`.
+- **Make `log_warnings=False` the default.** Cache-layer methods would all become quiet by default; daemon callers (which DO want the warnings logged) would have to pass `log_warnings=True`. Larger ripple; not worth the inversion for one new caller.
+- **Defer.** No user-visible bug; only matters for stderr-watching scripts.
+
+**Urgency:** low. Behavioral inconsistency, not a defect.
+
+Touches: `src/dbxignore/cli.py` (`_apply_from_gitignore` — add `log_warnings=False` arg). Optional regression test in `tests/test_cli_apply.py` (assert no stderr WARNING from a conflict-bearing gitignore via `caplog`).
+
 ---
 
 ## Status
 
 ### Open
 
-Eighteen items. Sixteen are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18) and waits for a third recurrence before triggering action.
+Thirty items. Twenty-eight are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18) and waits for a third recurrence before triggering action.
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
@@ -1210,8 +1448,24 @@ Eighteen items. Sixteen are passive (no concrete trigger requires action); item 
 - **#52** — Watchdog `OSError(ENOSPC)` at observer startup surfaces as an opaque journalctl traceback when `fs.inotify.max_user_watches` is exhausted. One fired trigger (2026-05-03 VPS test on a personal Dropbox tree). Cheap fix (~10 LOC trap + clean exit + sysctl-command WARNING) plus README §"Linux daemon prerequisites" addition. Companion to #53/#54.
 - **#53** — `_sweep_once` walks every directory regardless of marker state — measured 49.62s on a 27k-dir tree. Skip-on-(marker-present + match-still-positive) collapses descent into already-ignored subtrees; rule-mutation events already force a re-walk, so the steady-state invariant holds. ~50 LOC. Bundle with the next daemon-touching change.
 - **#54** — Watchdog observer's recursive watch schedules one inotify watch per directory under `~/Dropbox`, including marked-ignored subtrees. Architectural fix (per-directory watches with mark/unmark lifecycle) is ~200 LOC of race-condition-prone state-machine work; deferred until a beta tester hits the watch ceiling on a system with limits already raised.
+- **#55** — `state.write()` writes via `path.write_text()` then `os.replace`s, with no parse-back validation between. A future serializer regression producing malformed JSON would land on disk; the next `state._read_at` returns `None` (per its `JSONDecodeError` arm), which the daemon singleton check reads as "no prior daemon," allowing two concurrent daemons. ~5 LOC defensive read-back insert. Bundle with the next state-layer touch.
+- **#57** — `EventKind.DIR_CREATE` events whose path matches a cached rule wait the full per-kind debounce window. Every millisecond delays the marker write past the moment Dropbox sees the directory and starts ingesting children. Per-event-kind debouncer-bypass for matched DIR_CREATE only — `RULES` events still coalesce, OTHER still batches. ~30 LOC. Trade-off: transient false-positive marker if a rule was just deleted (caught by next sweep).
+- **#58** — `_pluginkit_extension_state() == "unknown"` arm in `_backends/macos_xattr.py:_detected_attr_name()` falls through to legacy `com.dropbox.ignored`. On File-Provider users where detection misfires for environmental reasons (subprocess error, missing `pluginkit` binary), the legacy attribute is silently no-op and Dropbox keeps syncing. Always-write-both fallback for the unknown arm only — well-understood arms keep single-attribute write. ~20 LOC. Bundle with item #37.
+- **#59** — `dbxignore status` doesn't report daemon liveness. PID is in `state.json`; `os.kill(pid, 0)` (POSIX) or `tasklist /FI` (Windows) check would surface running / not running / stale-PID. ~30 LOC + tests. Bundle with the next CLI-touching change.
+- **#60** — `dbxignore status` has no machine-readable single-line summary. Status-bar tooling (polybar / tmux / i3blocks / sketchybar) currently has to grep multi-line human output, which is fragile across releases. `--summary` flag emitting a stable-format single line on stderr. ~15 LOC + tests + README §.
+- **#61** — No verb to clear all markers without removing rule files or per-user state. `uninstall --purge` is too coarse (deletes state); manual `xattr -d` walk is impractical. `dbxignore clear` walks roots via existing reconcile infrastructure with a "force unset" mode. ~40 LOC + tests.
+- **#62** — `dbxignore apply --recent N` for cron-driven incremental sweeps. Filters reconcile-subtree walk to dirs with `mtime` newer than the horizon; for cron at 5-minute cadence on a 27k-dir tree this skips ~99% of unchanged subtrees. Companion to item #53; mtime-granularity caveat applies (catches structural changes, not grandchild content).
+- **#63** — `dbxignore init` to scaffold a starter `.dropboxignore` with detection of common dev directories (`node_modules` / `__pycache__` / `.venv` / `target` / `build` / `dist` / `.pytest_cache` / `.ruff_cache`). Walk capped at depth 3 to avoid scanning into existing `node_modules`; emit one rule per detected pattern + a curated default set. ~80 LOC + packaged template at `src/dbxignore/templates/default.dropboxignore` + tests.
+- **#64** — `dbxignore daemon --dry-run` for previewing daemon behavior without committing markers. Threads `dry_run` bool through `daemon.run`, `_sweep_once`, `_dispatch`. Parity with `apply --dry-run`. ~30 LOC + tests.
+- **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall.
+- **#66** — `dbxignore generate` skips its out-of-root warning when `_discover_roots()` returns `[]`. The `if discovered and ...` short-circuit defeats the warning's "your file won't be observed" purpose precisely when no roots exist at all. One-line guard fix.
+- **#67** — `apply --from-gitignore` does not pass `log_warnings=False` to `RuleCache.load_external`, so conflict WARNINGs land on stderr — inconsistent with the regular `apply` path that routes through `_load_cache` (PR #92's `a6fb74b` extracted that helper specifically to suppress per-mutation conflict WARNINGs). One-line fix.
 
 ### Resolved (reverse chronological)
+
+#### 2026-05-04
+
+- **#56** in PR #94 — adds `dbxignore generate <path>` (file-or-dir source; flags `-o`, `--stdout`, `--force`) and `dbxignore apply --from-gitignore <path>` (one-shot reconcile, rules mount at `dirname(<path>)`, existing `.dropboxignore` files in tree don't participate). New `RuleCache.load_external(source, mount_at)` is the shared seam; its docstring warns against mixing with `load_root` on the same mount because `_load_if_changed`'s stat-key would shadow. Both verbs share a `_read_and_validate_rule_source` helper for parse-before-write / parse-before-reconcile (extracted as a post-review refactor commit). README §"Using `.gitignore` rules" added. 19 new tests (3 `load_external` unit + 11 generate + 5 `apply --from-gitignore`). Filed-and-resolved in the same PR (filing was part of the items 55-65 batch in the working tree at PR-creation time).
 
 #### 2026-05-02
 
@@ -1282,3 +1536,5 @@ How items entered this tracker:
 - **Item #33 validation note** added 2026-05-02 after the beta tester's v0.4.0a5 pass confirmed the File Provider attribute write actually causes Dropbox to stop syncing — closes the three open implementation questions in #33's body that had been left for end-to-end validation. The `Validated 2026-05-02` paragraph now lives inline in #33's body for future readers walking the trail.
 - **Items 49–51** added 2026-05-02 from a `/simplify` whole-codebase review pass on `main` (no diff — explicit `the whole codebase` argument). Three parallel agents (reuse, quality, efficiency) ran against `src/dbxignore/` with all twenty open backlog items passed as exclusions to suppress rediscovery. Two solid findings emerged beyond the existing backlog: #49 (a clear duplication, fixed in the same PR) and #50 (a partial overlap that diverges by design in one branch — filed for future install-layer bundling). #51 documents an explicitly-rejected refactor for the design-tension record, mirroring item #40's precedent. Efficiency review found nothing new beyond items already tracked (#41, #43, #45-48).
 - **Items 41-48** added 2026-05-02 from a whole-codebase local code-review pass against `0e6a285` (eight 75-confidence advisories — below the ≥80 ship-bar but verified-real, filed for backlog). Same shape and provenance as the items 20-23 batch from 2026-04-25. Five parallel reviewer agents (CLAUDE.md adherence, shallow bug scan, git-history regressions, prior PR comments, code-comment-vs-code consistency) → 11 findings → 11 parallel scoring agents → 8 cleared as verified-real, 3 filtered out: a flagged race in `RuleCache._applicable` (already filed as item #23, design-accepted) and a dead `RuntimeError` branch in `_common.detect_invocation` (already filed as item #26) both scored 0 as duplicates; a `pythonw.exe`/`detect_invocation` duplication concern scored 50 as defensible architectural inconsistency. Items #41 (functional ENOTSUP arm asymmetry) and #43 (resolve-at-boundary regression) are the two functional gaps; the remaining six are docstring/comment drift surfaced primarily by the consistency-pass agent.
+- **Items 55-65** added 2026-05-04 from a design-review pass over the daemon, CLI, install, rules, and macOS-backend layers. Eleven items spanning defensive-coding gaps (#55, #58), ergonomic feature gaps (#56, #59-#64), one perf optimization companion to item #53 (#62), and one Windows UX feature (#65). All filed at low or low-medium urgency — no fired triggers; bundle each with the next code-touch in its respective layer.
+- **Items 66-67** added 2026-05-04 from a `/code-review` pass over PR #94 itself. Five parallel reviewer agents (CLAUDE.md adherence, shallow bug scan, git-history regressions, prior PR comments, code-comment-vs-code consistency) → 8 findings → 8 parallel scoring agents → both items came in at score 75, one shy of the ≥80 ship-bar but verified-real, filed for backlog. Same shape as the items 41-48 batch from 2026-05-02. Both are one-line behavioral consistency tweaks; bundle with the next CLI-touching change.

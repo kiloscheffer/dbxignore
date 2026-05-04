@@ -386,7 +386,16 @@ def uninstall(purge: bool) -> None:
 
 @main.command()
 @click.argument("path", type=click.Path(exists=False, path_type=Path))
-def generate(path: Path) -> None:
+@click.option(
+    "-o", "--output", "output",
+    type=click.Path(path_type=Path), default=None,
+    help="Write to this path instead of <dir>/.dropboxignore.",
+)
+@click.option(
+    "--stdout", is_flag=True,
+    help="Write to stdout instead of a file.",
+)
+def generate(path: Path, output: Path | None, stdout: bool) -> None:
     """Translate a .gitignore (or any nominated file) to a .dropboxignore.
 
     PATH may be a file or a directory. Directory: looks for .gitignore
@@ -394,6 +403,10 @@ def generate(path: Path) -> None:
     output is written to <dir>/.dropboxignore. See README §"Using
     .gitignore rules" for the gitignore-vs-dbxignore semantic divergence.
     """
+    if output is not None and stdout:
+        click.echo("error: -o and --stdout are mutually exclusive", err=True)
+        sys.exit(2)
+
     try:
         source = _resolve_gitignore_arg(path)
     except click.UsageError as exc:
@@ -403,7 +416,11 @@ def generate(path: Path) -> None:
     text = source.read_text(encoding="utf-8")
     lines = text.splitlines()
 
-    target = source.parent / IGNORE_FILENAME
+    if stdout:
+        click.echo(text, nl=False)
+        return
+
+    target = output if output is not None else (source.parent / IGNORE_FILENAME)
     target.write_text(text, encoding="utf-8")
 
     rule_count = sum(

@@ -40,3 +40,43 @@ def test_generate_non_gitignore_filename_works(tmp_path):
 
     assert result.exit_code == 0, result.output
     assert (tmp_path / ".dropboxignore").exists()
+
+
+def test_generate_stdout_writes_no_file(tmp_path):
+    source = tmp_path / ".gitignore"
+    source.write_text("node_modules/\n", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["generate", str(source), "--stdout"])
+
+    assert result.exit_code == 0, result.output
+    assert "node_modules/" in result.output
+    assert not (tmp_path / ".dropboxignore").exists()
+
+
+def test_generate_output_path_redirects(tmp_path):
+    source = tmp_path / ".gitignore"
+    source.write_text("target/\n", encoding="utf-8")
+    custom = tmp_path / "custom" / ".dropboxignore"
+    custom.parent.mkdir()
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["generate", str(source), "-o", str(custom)])
+
+    assert result.exit_code == 0, result.output
+    assert custom.read_text(encoding="utf-8") == "target/\n"
+    assert not (tmp_path / ".dropboxignore").exists()
+
+
+def test_generate_mutex_stdout_and_o_errors(tmp_path):
+    source = tmp_path / ".gitignore"
+    source.write_text("*.tmp\n", encoding="utf-8")
+    bogus_out = tmp_path / "out"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.main, ["generate", str(source), "-o", str(bogus_out), "--stdout"]
+    )
+
+    assert result.exit_code == 2
+    assert "mutually exclusive" in result.output

@@ -5,6 +5,7 @@ from __future__ import annotations
 from click.testing import CliRunner
 
 from dbxignore import cli
+from dbxignore import rules as rules_module
 
 
 def test_generate_file_arg_writes_sibling(tmp_path):
@@ -107,3 +108,50 @@ def test_generate_collision_with_force_overwrites(tmp_path):
 
     assert result.exit_code == 0, result.output
     assert target.read_text(encoding="utf-8") == "new/\n"
+
+
+def test_generate_invalid_pattern_writes_nothing(tmp_path, monkeypatch):
+    """If the parser rejects the source, the target file is not created."""
+    source = tmp_path / ".gitignore"
+    source.write_text("anything\n", encoding="utf-8")
+
+    def fail_build(_lines):
+        raise ValueError("test-induced parse failure")
+
+    monkeypatch.setattr(rules_module, "_build_spec", fail_build)
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["generate", str(source)])
+
+    assert result.exit_code == 2
+    assert not (tmp_path / ".dropboxignore").exists()
+    assert "invalid pattern" in result.output
+
+
+def test_generate_missing_source_errors(tmp_path):
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.main, ["generate", str(tmp_path / "nonexistent.gitignore")]
+    )
+
+    assert result.exit_code == 2
+    assert "not found" in result.output
+
+
+def test_generate_target_outside_roots_warns_but_writes(tmp_path, monkeypatch):
+    """Resolved target outside any Dropbox root → stderr warning, write proceeds."""
+    inside = tmp_path / "dropbox"
+    inside.mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [inside])
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    source = outside / ".gitignore"
+    source.write_text("build/\n", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["generate", str(source)])
+
+    assert result.exit_code == 0, result.output
+    assert (outside / ".dropboxignore").exists()
+    assert "not under any discovered Dropbox root" in result.output

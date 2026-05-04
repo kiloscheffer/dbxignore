@@ -148,16 +148,16 @@ def main(ctx: click.Context, verbose: bool) -> None:
     ctx.ensure_object(dict)
 
 
-def _emit_dry_run_lines(report: reconcile.Report) -> None:
+def _emit_dry_run_lines(would_mark: list[Path], would_clear: list[Path]) -> None:
     """Print the per-path `would mark` / `would clear` preview lines.
 
     Stable ordering: marks first, then clears, each in path-string order so
     the output is deterministic across platforms (matters for tests + diffing
     successive dry-runs as the user iterates on rules).
     """
-    for p in sorted(report.would_mark, key=str):
+    for p in sorted(would_mark, key=str):
         click.echo(f"would mark: {p}")
-    for p in sorted(report.would_clear, key=str):
+    for p in sorted(would_clear, key=str):
         click.echo(f"would clear: {p}")
 
 
@@ -200,7 +200,7 @@ def _apply_from_gitignore(source: Path, *, dry_run: bool = False) -> None:
 
     report = reconcile.reconcile_subtree(mount_at, mount_at, cache, dry_run=dry_run)
     if dry_run:
-        _emit_dry_run_lines(report)
+        _emit_dry_run_lines(report.would_mark, report.would_clear)
         click.echo(
             f"apply --dry-run: would_mark={report.marked} "
             f"would_clear={report.cleared} errors={len(report.errors)} "
@@ -279,10 +279,7 @@ def apply(path: Path | None, from_gitignore: Path | None, dry_run: bool) -> None
             aggregated_would_clear.extend(report.would_clear)
 
     if dry_run:
-        for p in sorted(aggregated_would_mark, key=str):
-            click.echo(f"would mark: {p}")
-        for p in sorted(aggregated_would_clear, key=str):
-            click.echo(f"would clear: {p}")
+        _emit_dry_run_lines(aggregated_would_mark, aggregated_would_clear)
         click.echo(
             f"apply --dry-run: would_mark={total_marked} "
             f"would_clear={total_cleared} errors={total_errors} "
@@ -344,12 +341,7 @@ def status(summary: bool) -> None:
     conflicts = _load_cache(discovered).conflicts() if discovered else []
 
     if summary:
-        alive = (
-            s is not None
-            and s.daemon_pid is not None
-            and state.is_daemon_alive(s.daemon_pid)
-        )
-        click.echo(_format_summary(s, alive, len(conflicts)))
+        click.echo(_format_summary(s, state.daemon_is_running(s), len(conflicts)))
         return
 
     if s is None:
@@ -470,12 +462,7 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
     override. Prompts before clearing unless ``--yes`` is set.
     """
     s = state.read()
-    if (
-        not force
-        and s is not None
-        and s.daemon_pid is not None
-        and state.is_daemon_alive(s.daemon_pid)
-    ):
+    if not force and state.daemon_is_running(s):
         click.echo(
             f"error: daemon is running (pid={s.daemon_pid}). "
             f"The next sweep would re-apply markers.",
@@ -555,26 +542,8 @@ def list_ignored(path: Path | None) -> None:
         targets = [target]
 
     for target in targets:
-        for current, dirnames, filenames in os.walk(target, followlinks=False):
-            current_path = Path(current)
-            kept_dirs: list[str] = []
-            for name in dirnames:
-                p = current_path / name
-                try:
-                    if markers.is_ignored(p):
-                        click.echo(str(p))
-                    else:
-                        kept_dirs.append(name)
-                except OSError:
-                    kept_dirs.append(name)
-            dirnames[:] = kept_dirs
-            for name in filenames:
-                p = current_path / name
-                try:
-                    if markers.is_ignored(p):
-                        click.echo(str(p))
-                except OSError:
-                    continue
+        for p in _walk_marked_paths(target):
+            click.echo(str(p))
 
 
 @main.command()

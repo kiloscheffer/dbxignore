@@ -88,6 +88,23 @@ def _load_cache(roots: list[Path]) -> RuleCache:
     return cache
 
 
+def _resolve_gitignore_arg(path: Path) -> Path:
+    """Resolve a generate/--from-gitignore argument to an actual file.
+
+    Directory → look for ``.gitignore`` inside; file → use as-is. Raises
+    ``click.UsageError`` (exit 2) with a CLI-formatted message if the
+    resolved path does not exist.
+    """
+    if path.is_dir():
+        candidate = path / ".gitignore"
+        if not candidate.exists():
+            raise click.UsageError(f"no .gitignore in {path}")
+        return candidate
+    if not path.exists():
+        raise click.UsageError(f"{path} not found")
+    return path
+
+
 def _process_is_alive(pid: int | None) -> bool:
     if pid is None:
         return False
@@ -365,6 +382,35 @@ def uninstall(purge: bool) -> None:
             removed_dropin = linux_systemd.remove_dropin_directory()
             if removed_dropin is not None:
                 click.echo(f"Removed systemd drop-in directory {removed_dropin}.")
+
+
+@main.command()
+@click.argument("path", type=click.Path(exists=False, path_type=Path))
+def generate(path: Path) -> None:
+    """Translate a .gitignore (or any nominated file) to a .dropboxignore.
+
+    PATH may be a file or a directory. Directory: looks for .gitignore
+    inside. File: used as-is regardless of filename. By default the
+    output is written to <dir>/.dropboxignore. See README §"Using
+    .gitignore rules" for the gitignore-vs-dbxignore semantic divergence.
+    """
+    try:
+        source = _resolve_gitignore_arg(path)
+    except click.UsageError as exc:
+        click.echo(f"error: {exc.message}", err=True)
+        sys.exit(2)
+
+    text = source.read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    target = source.parent / IGNORE_FILENAME
+    target.write_text(text, encoding="utf-8")
+
+    rule_count = sum(
+        1 for line in lines
+        if line.strip() and not line.strip().startswith("#")
+    )
+    click.echo(f"wrote {rule_count} rules to {target}")
 
 
 @click.command()

@@ -131,10 +131,90 @@ def main(ctx: click.Context, verbose: bool) -> None:
     ctx.ensure_object(dict)
 
 
+def _apply_from_gitignore(source: Path) -> None:
+    """Run a one-shot reconcile using rules loaded from ``source``.
+
+    Rules are mounted at ``dirname(source).resolve()`` and applied only to
+    that subtree. Existing .dropboxignore files in the tree do not
+    participate in this run. Errors from the source file (missing,
+    unreadable, invalid syntax) surface as user-facing CLI errors with
+    exit code 2.
+    """
+    if source.is_dir():
+        click.echo(
+            "error: --from-gitignore requires a file path, not a directory",
+            err=True,
+        )
+        sys.exit(2)
+    if not source.exists():
+        click.echo(f"error: {source} not found", err=True)
+        sys.exit(2)
+
+    discovered = _discover_roots()
+    if not discovered:
+        click.echo("No Dropbox roots found. Is Dropbox installed?", err=True)
+        sys.exit(2)
+
+    mount_at = source.parent.resolve()
+    if find_containing(mount_at, discovered) is None:
+        click.echo(
+            f"error: {source}'s directory {mount_at} is not under any Dropbox root",
+            err=True,
+        )
+        sys.exit(2)
+
+    # Validate the source can be read + parsed BEFORE running reconcile.
+    # load_external swallows OSError/parse failures into log warnings;
+    # users running an interactive command want failures to surface here.
+    try:
+        text = source.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        click.echo(f"error: {source} is not valid UTF-8", err=True)
+        sys.exit(2)
+    except OSError as exc:
+        click.echo(f"error: cannot read {source}: {exc.strerror}", err=True)
+        sys.exit(2)
+    try:
+        rules._build_spec(text.splitlines())
+    except (ValueError, TypeError, re.error) as exc:
+        click.echo(f"error: {source} contains invalid pattern: {exc}", err=True)
+        sys.exit(2)
+
+    cache = RuleCache()
+    cache.load_external(source, mount_at)
+
+    report = reconcile.reconcile_subtree(mount_at, mount_at, cache)
+    click.echo(
+        f"apply: marked={report.marked} cleared={report.cleared} "
+        f"errors={len(report.errors)} duration={report.duration_s:.2f}s"
+    )
+
+
 @main.command()
 @click.argument("path", required=False, type=click.Path(path_type=Path))
-def apply(path: Path | None) -> None:
+@click.option(
+    "--from-gitignore", "from_gitignore",
+    type=click.Path(exists=False, path_type=Path), default=None,
+    help=(
+        "Apply rules loaded from <path> instead of from .dropboxignore "
+        "files in the tree. The directory containing <path> must be under "
+        "a discovered Dropbox root. See README §\"Using .gitignore rules\"."
+    ),
+)
+def apply(path: Path | None, from_gitignore: Path | None) -> None:
     """Run one reconcile pass (whole Dropbox, or a subtree)."""
+    if from_gitignore is not None and path is not None:
+        click.echo(
+            "error: --from-gitignore and the positional path argument "
+            "are mutually exclusive",
+            err=True,
+        )
+        sys.exit(2)
+
+    if from_gitignore is not None:
+        _apply_from_gitignore(from_gitignore)
+        return
+
     discovered = _discover_roots()
     if not discovered:
         click.echo("No Dropbox roots found. Is Dropbox installed?", err=True)

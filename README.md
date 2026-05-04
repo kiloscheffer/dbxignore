@@ -188,6 +188,7 @@ target/
 
 | Command | Purpose |
 |---|---|
+| `dbxignore init [PATH]` | Scaffold a starter `.dropboxignore` in `PATH` (or cwd) with a comprehensive template covering Node.js / Python / Rust / JVM / .NET / frontend frameworks / build outputs / OS detritus. Walks the tree to depth 3 and annotates the header with which marker-bait dirs were detected. See [First-time setup](#first-time-setup). |
 | `dbxignore install` / `uninstall` | Register / remove the daemon with the platform's user-scoped service manager (Task Scheduler on Windows, systemd user unit on Linux). `uninstall --purge` also clears every existing marker, removes local dbxignore state (`state.json`, `daemon.log*`, the state directory), and on Linux removes any systemd drop-in directory. Any stray marker on a `.dropboxignore` file itself is logged at `WARNING` before being cleared. |
 | `dbxignore daemon` | Run the watcher + hourly sweep in the foreground. Usually invoked by Task Scheduler. |
 | `dbxignore apply [PATH]` | One-shot reconcile of the whole Dropbox (or a subtree). Pass `--from-gitignore <path>` to load rules from a `.gitignore` instead of `.dropboxignore` files in the tree. |
@@ -196,6 +197,19 @@ target/
 | `dbxignore clear [PATH]` | Clear every ignore marker under the watched roots (or under `PATH`). Inverse of `apply`. Leaves `.dropboxignore` files and `state.json` untouched — see [Clearing all markers](#clearing-all-markers). |
 | `dbxignore list [PATH]` | Print every path currently bearing the ignore marker. |
 | `dbxignore explain PATH` | Which `.dropboxignore` rule (if any) matches the path? |
+
+### First-time setup
+
+`dbxignore init [PATH]` writes a starter `.dropboxignore` into `PATH` (or the current directory). The packaged template covers common dev artifacts across ecosystems — Node.js (`node_modules`, npm/yarn/pnpm caches and logs), Python (virtualenvs, bytecode, tool caches), Rust (`target/`), JVM (`.gradle/`), .NET (`bin/`, `obj/`), frontend frameworks (`.next/`, `.nuxt/`, `.svelte-kit/`, `.turbo/`, etc.), generic build/dist outputs, and OS detritus (`.DS_Store`, `Thumbs.db`, vim swap files).
+
+```
+dbxignore init                    # writes ./.dropboxignore
+dbxignore init ~/Dropbox/proj     # writes ~/Dropbox/proj/.dropboxignore
+dbxignore init --stdout           # preview without writing
+dbxignore init --force            # overwrite an existing file
+```
+
+The header of the generated file lists which marker-bait directories were detected in your tree at depth ≤ 3 (e.g., `# Detected in this tree at depth <= 3: node_modules, __pycache__`). All template patterns are emitted as active rules; the header is the cue for which ones are immediately load-bearing. Edit the file afterward to remove patterns that don't apply to your tree — strong starter is easier to edit-down than a sparse one is to edit-up.
 
 ### Clearing all markers
 

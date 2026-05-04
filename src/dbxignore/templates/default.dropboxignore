@@ -1,0 +1,77 @@
+# Defaults for a developer's Dropbox root. Gitignore syntax via pathspec —
+# entries without a leading `/` match the named path at any depth.
+
+# === Node.js ===
+# Hands-down the worst offender for Dropbox sync: tens of thousands of small
+# files, churn on every install, and frequent file-conflict errors across
+# machines. Always reproducible from package.json + lockfile.
+node_modules/
+.npm/
+.pnpm-store/
+.yarn/cache/
+.yarn/install-state.gz
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# === Python ===
+# Virtual environments — per-machine binaries; useless to sync.
+.venv/
+venv/
+env/
+# Bytecode + tool caches — regenerated automatically.
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+*.egg-info/
+.coverage
+htmlcov/
+
+# === Rust ===
+target/
+
+# === Go ===
+# Vendor dirs sometimes; usually opt-in. Uncomment if you commit modules.
+# vendor/
+
+# === JVM (Java/Kotlin/Scala) ===
+.gradle/
+# Maven/Gradle build dirs — covered by the generic `build/` below.
+
+# === .NET ===
+bin/
+obj/
+
+# === Generic build / dist output ===
+# Most build systems use one of these names; keep them generic so new
+# tooling Just Works without per-tool additions.
+build/
+dist/
+out/
+
+# === Frontend frameworks ===
+.next/
+.nuxt/
+.svelte-kit/
+.turbo/
+.vercel/
+.netlify/
+.parcel-cache/
+.eslintcache
+
+# === IDE / editor state ===
+# .DS_Store and Thumbs.db are pure FS detritus — never useful to sync.
+.DS_Store
+Thumbs.db
+# Vim swap files (per-session, never useful).
+.*.swp
+.*.swo
+
+# === Generic catch-alls ===
+.cache/

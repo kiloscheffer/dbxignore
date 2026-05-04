@@ -216,7 +216,11 @@ def _apply_from_gitignore(source: Path) -> None:
     ),
 )
 def apply(path: Path | None, from_gitignore: Path | None) -> None:
-    """Run one reconcile pass (whole Dropbox, or a subtree)."""
+    """Run one reconcile pass (whole Dropbox, or a subtree).
+
+    Pass ``--from-gitignore <path>`` to load rules from a nominated file
+    instead of the .dropboxignore files in the tree.
+    """
     if from_gitignore is not None and path is not None:
         click.echo(
             "error: --from-gitignore and the positional path argument "

@@ -119,3 +119,113 @@ def test_apply_from_gitignore_directory_arg_errors(tmp_path, monkeypatch):
 
     assert result.exit_code == 2
     assert "file path, not a directory" in result.output
+
+
+# ---- apply --dry-run (followup item 64) -------------------------------------
+
+
+def test_apply_dry_run_does_not_mutate_markers(tmp_path, fake_markers, monkeypatch):
+    """--dry-run reads rules and stat results but never calls set/clear_ignored."""
+    (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+    (tmp_path / "build").mkdir()
+    (tmp_path / "src").mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["apply", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    # No marker mutations on disk.
+    assert (tmp_path / "build").resolve() not in fake_markers._ignored
+    assert (tmp_path / "src").resolve() not in fake_markers._ignored
+
+
+def test_apply_dry_run_prints_would_mark_lines(tmp_path, fake_markers, monkeypatch):
+    """--dry-run output lists every path that would have been marked."""
+    (tmp_path / ".dropboxignore").write_text("build/\n*.tmp\n", encoding="utf-8")
+    (tmp_path / "build").mkdir()
+    (tmp_path / "scratch.tmp").touch()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["apply", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert "would mark:" in result.output
+    assert "build" in result.output
+    assert "scratch.tmp" in result.output
+
+
+def test_apply_dry_run_prints_would_clear_lines(tmp_path, fake_markers, monkeypatch):
+    """When a path is marked but no longer matches any rule, --dry-run reports
+    it as a would-clear (mirroring the real apply behavior)."""
+    # Pre-mark a path that the rules will say should NOT be ignored.
+    (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    fake_markers.set_ignored(src_dir)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["apply", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert "would clear:" in result.output
+    assert "src" in result.output
+    # Mark still on disk — it's a dry-run.
+    assert src_dir.resolve() in fake_markers._ignored
+
+
+def test_apply_dry_run_summary_uses_would_prefix(tmp_path, fake_markers, monkeypatch):
+    """Summary line distinguishes dry-run from a real apply (would_mark vs marked)."""
+    (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+    (tmp_path / "build").mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["apply", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert "apply --dry-run:" in result.output
+    assert "would_mark=1" in result.output
+    assert "no changes made" in result.output
+    # The non-dry-run summary token must NOT appear (would be confusing).
+    # `marked=` is a substring of `would_mark=`, so check for the start-of-token version.
+    assert "apply: marked=" not in result.output
+
+
+def test_apply_dry_run_with_from_gitignore_does_not_mutate(tmp_path, fake_markers, monkeypatch):
+    """--from-gitignore + --dry-run combine: same one-shot rule-load path,
+    same no-mutation guarantee."""
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+    gitignore = tmp_path / ".gitignore"
+    gitignore.write_text("build/\n", encoding="utf-8")
+    (tmp_path / "build").mkdir()
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.main, ["apply", "--from-gitignore", str(gitignore), "--dry-run"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "apply --dry-run:" in result.output
+    assert "would mark:" in result.output
+    assert (tmp_path / "build").resolve() not in fake_markers._ignored
+
+
+def test_apply_dry_run_real_apply_still_works_after(tmp_path, fake_markers, monkeypatch):
+    """A dry-run preview followed by a real apply mutates as expected — the
+    dry-run path doesn't leave any stateful residue that would skew the real
+    run's behavior."""
+    (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+    (tmp_path / "build").mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    runner = CliRunner()
+    dry = runner.invoke(cli.main, ["apply", "--dry-run"])
+    assert dry.exit_code == 0
+    assert (tmp_path / "build").resolve() not in fake_markers._ignored
+
+    real = runner.invoke(cli.main, ["apply"])
+    assert real.exit_code == 0
+    assert (tmp_path / "build").resolve() in fake_markers._ignored

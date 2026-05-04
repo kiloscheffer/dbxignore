@@ -148,7 +148,20 @@ def main(ctx: click.Context, verbose: bool) -> None:
     ctx.ensure_object(dict)
 
 
-def _apply_from_gitignore(source: Path) -> None:
+def _emit_dry_run_lines(report: reconcile.Report) -> None:
+    """Print the per-path `would mark` / `would clear` preview lines.
+
+    Stable ordering: marks first, then clears, each in path-string order so
+    the output is deterministic across platforms (matters for tests + diffing
+    successive dry-runs as the user iterates on rules).
+    """
+    for p in sorted(report.would_mark, key=str):
+        click.echo(f"would mark: {p}")
+    for p in sorted(report.would_clear, key=str):
+        click.echo(f"would clear: {p}")
+
+
+def _apply_from_gitignore(source: Path, *, dry_run: bool = False) -> None:
     """Run a one-shot reconcile using rules loaded from ``source``.
 
     Rules are mounted at ``dirname(source).resolve()`` and applied only to
@@ -185,11 +198,19 @@ def _apply_from_gitignore(source: Path) -> None:
     cache = RuleCache()
     cache.load_external(source, mount_at)
 
-    report = reconcile.reconcile_subtree(mount_at, mount_at, cache)
-    click.echo(
-        f"apply: marked={report.marked} cleared={report.cleared} "
-        f"errors={len(report.errors)} duration={report.duration_s:.2f}s"
-    )
+    report = reconcile.reconcile_subtree(mount_at, mount_at, cache, dry_run=dry_run)
+    if dry_run:
+        _emit_dry_run_lines(report)
+        click.echo(
+            f"apply --dry-run: would_mark={report.marked} "
+            f"would_clear={report.cleared} errors={len(report.errors)} "
+            f"duration={report.duration_s:.2f}s (no changes made)"
+        )
+    else:
+        click.echo(
+            f"apply: marked={report.marked} cleared={report.cleared} "
+            f"errors={len(report.errors)} duration={report.duration_s:.2f}s"
+        )
 
 
 @main.command()
@@ -203,11 +224,16 @@ def _apply_from_gitignore(source: Path) -> None:
         "a discovered Dropbox root. See README §\"Using .gitignore rules\"."
     ),
 )
-def apply(path: Path | None, from_gitignore: Path | None) -> None:
+@click.option(
+    "--dry-run", is_flag=True,
+    help="Print what would be marked/cleared without changing anything.",
+)
+def apply(path: Path | None, from_gitignore: Path | None, dry_run: bool) -> None:
     """Run one reconcile pass (whole Dropbox, or a subtree).
 
     Pass ``--from-gitignore <path>`` to load rules from a nominated file
-    instead of the .dropboxignore files in the tree.
+    instead of the .dropboxignore files in the tree. Pass ``--dry-run`` to
+    preview what would be marked/cleared without touching any markers.
     """
     if from_gitignore is not None and path is not None:
         click.echo(
@@ -218,7 +244,7 @@ def apply(path: Path | None, from_gitignore: Path | None) -> None:
         sys.exit(2)
 
     if from_gitignore is not None:
-        _apply_from_gitignore(from_gitignore)
+        _apply_from_gitignore(from_gitignore, dry_run=dry_run)
         return
 
     discovered = _discover_roots()
@@ -240,17 +266,33 @@ def apply(path: Path | None, from_gitignore: Path | None) -> None:
 
     total_marked = total_cleared = total_errors = 0
     total_duration = 0.0
+    aggregated_would_mark: list[Path] = []
+    aggregated_would_clear: list[Path] = []
     for r, subdir in targets:
-        report = reconcile.reconcile_subtree(r, subdir, cache)
+        report = reconcile.reconcile_subtree(r, subdir, cache, dry_run=dry_run)
         total_marked += report.marked
         total_cleared += report.cleared
         total_errors += len(report.errors)
         total_duration += report.duration_s
+        if dry_run:
+            aggregated_would_mark.extend(report.would_mark)
+            aggregated_would_clear.extend(report.would_clear)
 
-    click.echo(
-        f"apply: marked={total_marked} cleared={total_cleared} "
-        f"errors={total_errors} duration={total_duration:.2f}s"
-    )
+    if dry_run:
+        for p in sorted(aggregated_would_mark, key=str):
+            click.echo(f"would mark: {p}")
+        for p in sorted(aggregated_would_clear, key=str):
+            click.echo(f"would clear: {p}")
+        click.echo(
+            f"apply --dry-run: would_mark={total_marked} "
+            f"would_clear={total_cleared} errors={total_errors} "
+            f"duration={total_duration:.2f}s (no changes made)"
+        )
+    else:
+        click.echo(
+            f"apply: marked={total_marked} cleared={total_cleared} "
+            f"errors={total_errors} duration={total_duration:.2f}s"
+        )
 
 
 def _format_summary(

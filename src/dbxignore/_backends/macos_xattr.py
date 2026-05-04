@@ -59,13 +59,22 @@ _DROPBOX_FILEPROVIDER_BUNDLE_ID = "com.getdropbox.dropbox.fileprovider"
 # tests run), falling back to the raw value.
 _NO_ATTR_ERRNO = getattr(errno, "ENOATTR", 93)
 
-# Cache of the detected attribute name so the per-file reconcile loop
-# doesn't re-invoke `pluginkit` on every marker call. Module-local; reset
-# to None for tests, or to re-detect after the user changes Dropbox sync
-# modes (which itself requires a daemon restart — the cache outlives one
-# daemon process by design, and the daemon's own restart semantics handle
-# re-detection).
-_attr_name_cache: str | None = None
+# Cache of the detected (attr_names, summary) tuple so the per-file reconcile
+# loop doesn't re-invoke `pluginkit` on every marker call. Module-local; reset
+# to None for tests, or to re-detect after the user changes Dropbox sync modes
+# (which itself requires a daemon restart — the cache outlives one daemon
+# process by design, and the daemon's own restart semantics handle re-detection).
+#
+# The cached tuple is `(attr_names, summary)`:
+#   attr_names: 1- or 2-element list. Single name in the decisive cases
+#     (legacy vs. File Provider). Two names ([ATTR_LEGACY, ATTR_FILEPROVIDER])
+#     in the genuinely-uncertain case where pluginkit is unavailable AND
+#     info.json gave no decisive path signal — see `_detect()` below for
+#     the always-write-both rationale (followup item 58).
+#   summary: human-readable "<mode>: <reason>" string surfaced via
+#     `detection_summary()` to the daemon's INFO log at startup and to
+#     `dbxignore status` on darwin (followup item 37).
+_decision_cache: tuple[list[str], str] | None = None
 
 
 def _read_dropbox_paths_from_info() -> list[str]:
@@ -142,8 +151,8 @@ def _pluginkit_extension_state() -> str:
     return "allowed"
 
 
-def _detected_attr_name() -> str:
-    """Return the xattr name Dropbox watches on this system.
+def _detect() -> tuple[list[str], str]:
+    """Return ``(attr_names, summary)`` for the active Dropbox sync mode.
 
     Detection is **path-primary, pluginkit-disambiguating**:
 
@@ -166,10 +175,17 @@ def _detected_attr_name() -> str:
          drive).  Dropbox supports File Provider on mounted external
          drives via an eligibility-gated feature; the sync folder is on
          ``/Volumes/...`` but the framework handles it.
-       - **Otherwise** → legacy.  Defensive default for: no info.json
-         (Dropbox not installed); info.json paths all outside CloudStorage
-         and extension not_registered (pure legacy install); pluginkit
-         unknown and no path-existence fallback signal.
+       - **Pluginkit unknown + no decisive path signal** → both attributes.
+         Genuinely uncertain: pluginkit is unavailable (subprocess error,
+         missing binary, hung query) and info.json gave no path under
+         CloudStorage or /Volumes.  Write both ``com.dropbox.ignored`` and
+         ``com.apple.fileprovider.ignore#P`` so whichever sync stack
+         actually reads its own attribute name finds it; the other stack
+         simply ignores the stray attribute (followup item 58).
+       - **Otherwise** → legacy.  Confident default when extension is
+         not_registered (pure legacy install) or allowed but no path is
+         under CloudStorage / /Volumes (legacy install with the extension
+         ambient on disk).
 
     Why path-primary rather than pluginkit-primary: PluginKit registration
     is a *system-level* fact (does macOS know about ``DropboxFileProvider.appex``?).
@@ -181,21 +197,23 @@ def _detected_attr_name() -> str:
     Cached on first call.  The race between concurrent first-callers
     under the daemon's ``ThreadPoolExecutor`` is benign — both compute
     the same value from the same on-disk + registry state, and Python's
-    GIL makes the string assignment to the cache atomic.
+    GIL makes the tuple assignment to the cache atomic.
     """
-    global _attr_name_cache
-    if _attr_name_cache is not None:
-        return _attr_name_cache
+    global _decision_cache
+    if _decision_cache is not None:
+        return _decision_cache
 
     paths = _read_dropbox_paths_from_info()
     extension_state = _pluginkit_extension_state()
 
     if extension_state == "disabled":
-        _attr_name_cache = ATTR_LEGACY
-        logger.debug(
-            "Detected legacy mode: File Provider extension explicitly disabled"
+        result = (
+            [ATTR_LEGACY],
+            "legacy: File Provider extension explicitly disabled",
         )
-        return _attr_name_cache
+        _decision_cache = result
+        logger.debug("Sync mode detection: %s", result[1])
+        return result
 
     home = os.environ.get("HOME")
     if home:
@@ -203,12 +221,13 @@ def _detected_attr_name() -> str:
         for p in paths:
             try:
                 if Path(os.path.realpath(p)).is_relative_to(cloud_storage):
-                    _attr_name_cache = ATTR_FILEPROVIDER
-                    logger.debug(
-                        "Detected File Provider mode: %s under ~/Library/CloudStorage/",
-                        p,
+                    result = (
+                        [ATTR_FILEPROVIDER],
+                        f"file_provider: path under ~/Library/CloudStorage/ ({p})",
                     )
-                    return _attr_name_cache
+                    _decision_cache = result
+                    logger.debug("Sync mode detection: %s", result[1])
+                    return result
             except OSError:
                 # realpath / is_relative_to syscall failure on a path entry —
                 # skip and try the next one.
@@ -229,71 +248,127 @@ def _detected_attr_name() -> str:
             except OSError:
                 continue
             if len(real_parts) >= 3 and real_parts[1] == "Volumes":
-                _attr_name_cache = ATTR_FILEPROVIDER
-                logger.debug(
-                    "Detected File Provider mode (external drive): %s", p
+                result = (
+                    [ATTR_FILEPROVIDER],
+                    f"file_provider: external drive ({p})",
                 )
-                return _attr_name_cache
+                _decision_cache = result
+                logger.debug("Sync mode detection: %s", result[1])
+                return result
 
-    _attr_name_cache = ATTR_LEGACY
-    logger.debug(
-        "Detected legacy mode (default): paths=%s, extension_state=%s",
-        paths, extension_state,
+    if extension_state == "unknown":
+        result = (
+            [ATTR_LEGACY, ATTR_FILEPROVIDER],
+            "both: pluginkit unavailable; writing both attributes defensively",
+        )
+        _decision_cache = result
+        logger.debug("Sync mode detection: %s", result[1])
+        return result
+
+    result = (
+        [ATTR_LEGACY],
+        f"legacy: default (paths={paths}, extension_state={extension_state})",
     )
-    return _attr_name_cache
+    _decision_cache = result
+    logger.debug("Sync mode detection: %s", result[1])
+    return result
+
+
+def _detected_attr_names() -> list[str]:
+    """Return the list of xattr names to read/write/clear on this system.
+
+    Single-element list in decisive cases (legacy or File Provider). Two
+    elements ([legacy, File Provider]) in the genuinely-uncertain case —
+    see ``_detect()`` for when each shape applies.
+    """
+    return _detect()[0]
+
+
+def _detected_attr_name() -> str:
+    """Return the *first* xattr name from `_detected_attr_names()`.
+
+    Back-compat shim for tests written when detection always produced one
+    name. Production callers (``is_ignored``/``set_ignored``/``clear_ignored``)
+    iterate ``_detected_attr_names()``.
+    """
+    return _detected_attr_names()[0]
+
+
+def detection_summary() -> str:
+    """Human-readable summary of the sync mode decision: ``<mode>: <reason>``.
+
+    Surfaced at INFO log at daemon startup and in ``dbxignore status`` on
+    darwin (followup item 37).  Caches with ``_detect()`` — calling once
+    per process is enough.
+    """
+    return _detect()[1]
 
 
 def is_ignored(path: Path) -> bool:
     """Return True if ``path`` bears a non-empty Dropbox-ignore xattr.
 
-    Reads whichever attribute name Dropbox is watching on this host
-    (legacy or File Provider — auto-detected).  ``path`` must be
-    absolute (``ValueError`` otherwise).  Returns False when the xattr
-    is absent (ENOATTR).  Raises ``FileNotFoundError`` if the path
-    itself does not exist (ENOENT).
+    Reads whichever attribute name(s) Dropbox is watching on this host —
+    auto-detected via `_detected_attr_names()`. In single-attr cases reads
+    one name; in the dual-attr case reads both and returns True on the
+    first non-empty hit.  ``path`` must be absolute (``ValueError``
+    otherwise).  Returns False when no detected attribute is set on the
+    path.  Raises ``FileNotFoundError`` if the path itself does not exist
+    (ENOENT).
     """
     _require_absolute(path)
-    try:
-        value = xattr.getxattr(str(path), _detected_attr_name(), symlink=True)
-    except OSError as exc:
-        if exc.errno == _NO_ATTR_ERRNO:
-            return False
-        if exc.errno == errno.ENOENT:
-            raise FileNotFoundError(str(path)) from exc
-        raise
-    return bool(value)
+    for name in _detected_attr_names():
+        try:
+            value = xattr.getxattr(str(path), name, symlink=True)
+        except OSError as exc:
+            if exc.errno == _NO_ATTR_ERRNO:
+                continue
+            if exc.errno == errno.ENOENT:
+                raise FileNotFoundError(str(path)) from exc
+            raise
+        if value:
+            return True
+    return False
 
 
 def set_ignored(path: Path) -> None:
     """Mark ``path`` as ignored by Dropbox.
 
-    Writes whichever attribute name Dropbox is watching on this host
-    (legacy or File Provider — auto-detected).  ``path`` must be
-    absolute (``ValueError`` otherwise).  On macOS, the NOFOLLOW path
+    Writes whichever attribute name(s) Dropbox is watching on this host —
+    auto-detected via `_detected_attr_names()`.  ``path`` must be absolute
+    (``ValueError`` otherwise).  On macOS, the NOFOLLOW path
     (``symlink=True`` on the xattr wrapper) allows marking symlinks
     directly — unlike Linux where the kernel raises ``EPERM``.
+
+    In the dual-attr case (pluginkit unavailable + no decisive path
+    signal — see `_detect()`), writes both names; if the first call
+    succeeds and the second raises, the partial state propagates with
+    the second's exception, mirroring the single-attr contract that
+    set_ignored is either fully successful or raises.
     """
     _require_absolute(path)
-    xattr.setxattr(str(path), _detected_attr_name(), _MARKER_VALUE, symlink=True)
+    for name in _detected_attr_names():
+        xattr.setxattr(str(path), name, _MARKER_VALUE, symlink=True)
 
 
 def clear_ignored(path: Path) -> None:
     """Remove the Dropbox ignore marker from ``path`` (no-op if absent or gone).
 
-    Removes whichever attribute name Dropbox is watching on this host
-    (legacy or File Provider — auto-detected).  ``path`` must be
-    absolute (``ValueError`` otherwise).  Absent xattr (ENOATTR) or
-    missing path (ENOENT) debug-logs and returns.  Other ``OSError``
-    subclasses propagate.
+    Removes whichever attribute name(s) Dropbox is watching on this host —
+    auto-detected via `_detected_attr_names()`.  ``path`` must be absolute
+    (``ValueError`` otherwise).  Per-attribute ENOATTR is a no-op (xattr
+    was simply not set).  Path-level ENOENT short-circuits the loop —
+    once the path is gone, no further removexattr calls would succeed.
+    Other ``OSError`` subclasses propagate.
     """
     _require_absolute(path)
-    try:
-        xattr.removexattr(str(path), _detected_attr_name(), symlink=True)
-    except OSError as exc:
-        if exc.errno == _NO_ATTR_ERRNO:
-            logger.debug("clear_ignored: xattr absent on %s", path)
-            return
-        if exc.errno == errno.ENOENT:
-            logger.debug("clear_ignored: path gone: %s", path)
-            return
-        raise
+    for name in _detected_attr_names():
+        try:
+            xattr.removexattr(str(path), name, symlink=True)
+        except OSError as exc:
+            if exc.errno == _NO_ATTR_ERRNO:
+                logger.debug("clear_ignored: xattr %s absent on %s", name, path)
+                continue
+            if exc.errno == errno.ENOENT:
+                logger.debug("clear_ignored: path gone: %s", path)
+                return
+            raise

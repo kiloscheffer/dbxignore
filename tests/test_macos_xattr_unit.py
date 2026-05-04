@@ -86,7 +86,24 @@ def test_is_ignored_rejects_relative_path():
 # ---- set_ignored ------------------------------------------------------------
 
 
-def test_set_ignored_calls_setxattr_with_correct_args(tmp_path, monkeypatch):
+@pytest.fixture
+def legacy_mode(monkeypatch):
+    """Force `_detected_attr_names()` to return [ATTR_LEGACY] for one test.
+
+    Pins the single-attr legacy-write behavior regardless of the host's
+    pluginkit availability. Without this, Linux test runners (no
+    pluginkit binary → `_pluginkit_extension_state()` returns "unknown")
+    would land in the dual-attr mode and break ``assert_called_once_with``
+    invariants in tests that pre-date item 58.
+    """
+    monkeypatch.setattr(
+        mod, "_decision_cache", ([mod.ATTR_LEGACY], "legacy: test override")
+    )
+    yield
+    monkeypatch.setattr(mod, "_decision_cache", None)
+
+
+def test_set_ignored_calls_setxattr_with_correct_args(tmp_path, monkeypatch, legacy_mode):
     """set_ignored calls xattr.setxattr with the detected attr name and _MARKER_VALUE."""
     p = tmp_path / "file.txt"
     p.touch()
@@ -96,7 +113,7 @@ def test_set_ignored_calls_setxattr_with_correct_args(tmp_path, monkeypatch):
     mod.set_ignored(p)
 
     mock_setxattr.assert_called_once_with(
-        str(p), mod._detected_attr_name(), mod._MARKER_VALUE, symlink=True
+        str(p), mod.ATTR_LEGACY, mod._MARKER_VALUE, symlink=True
     )
 
 
@@ -120,7 +137,7 @@ def test_set_ignored_rejects_relative_path():
 # ---- clear_ignored ----------------------------------------------------------
 
 
-def test_clear_ignored_calls_removexattr_with_correct_args(tmp_path, monkeypatch):
+def test_clear_ignored_calls_removexattr_with_correct_args(tmp_path, monkeypatch, legacy_mode):
     """clear_ignored calls xattr.removexattr with the detected attr name and symlink=True."""
     p = tmp_path / "file.txt"
     p.touch()
@@ -130,7 +147,7 @@ def test_clear_ignored_calls_removexattr_with_correct_args(tmp_path, monkeypatch
     mod.clear_ignored(p)
 
     mock_removexattr.assert_called_once_with(
-        str(p), mod._detected_attr_name(), symlink=True
+        str(p), mod.ATTR_LEGACY, symlink=True
     )
 
 
@@ -175,15 +192,15 @@ def test_clear_ignored_rejects_relative_path():
 
 @pytest.fixture
 def reset_attr_cache(monkeypatch):
-    """Reset `_attr_name_cache` to None for each test so detection re-runs.
+    """Reset `_decision_cache` to None for each test so detection re-runs.
 
-    Without this, the first test to call `_detected_attr_name()` would
-    populate the cache, and subsequent tests would see whatever value
-    that test happened to monkeypatch — order-dependent flakiness.
+    Without this, the first test to call `_detect()` would populate the
+    cache, and subsequent tests would see whatever value that test
+    happened to monkeypatch — order-dependent flakiness.
     """
-    monkeypatch.setattr(mod, "_attr_name_cache", None)
+    monkeypatch.setattr(mod, "_decision_cache", None)
     yield
-    monkeypatch.setattr(mod, "_attr_name_cache", None)
+    monkeypatch.setattr(mod, "_decision_cache", None)
 
 
 def _fake_pluginkit(stdout: str = "", side_effect: Exception | None = None):
@@ -379,18 +396,21 @@ def test_detected_attr_name_legacy_when_no_info_json_and_no_extension(
     assert mod._detected_attr_name() == mod.ATTR_LEGACY
 
 
-def test_detected_attr_name_legacy_when_pluginkit_unknown_and_no_info_json(
+def test_detected_attr_names_writes_both_when_pluginkit_unknown_and_no_info_json(
     tmp_path, monkeypatch, reset_attr_cache
 ):
     """pluginkit errored (test host without the binary, e.g. Linux CI) AND
-    info.json is missing → defensive legacy default.
+    info.json is missing → uncertain. Dual-attribute defensive write
+    (followup item 58): the active sync stack reads its own attribute,
+    the inactive one ignores the stray, and the user-visible "Dropbox
+    stops syncing the marked path" outcome holds either way.
     """
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(
         "subprocess.run",
         _fake_pluginkit(side_effect=FileNotFoundError("pluginkit not found")),
     )
-    assert mod._detected_attr_name() == mod.ATTR_LEGACY
+    assert mod._detected_attr_names() == [mod.ATTR_LEGACY, mod.ATTR_FILEPROVIDER]
 
 
 def test_detected_attr_name_fileprovider_when_pluginkit_unknown_but_path_under_cloudstorage(
@@ -420,18 +440,18 @@ def test_detected_attr_name_legacy_when_home_unset(monkeypatch, reset_attr_cache
     assert mod._detected_attr_name() == mod.ATTR_LEGACY
 
 
-def test_detected_attr_name_legacy_when_pluginkit_times_out(
+def test_detected_attr_names_writes_both_when_pluginkit_times_out(
     tmp_path, monkeypatch, reset_attr_cache
 ):
     """TimeoutExpired (pluginkit hung) returns "unknown" extension state.
-    No info.json + unknown state → defensive legacy default.
+    No info.json + unknown state → dual-attribute defensive write.
     """
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(
         "subprocess.run",
         _fake_pluginkit(side_effect=subprocess.TimeoutExpired(cmd="pluginkit", timeout=2)),
     )
-    assert mod._detected_attr_name() == mod.ATTR_LEGACY
+    assert mod._detected_attr_names() == [mod.ATTR_LEGACY, mod.ATTR_FILEPROVIDER]
 
 
 # ---- Caching ----------------------------------------------------------------
@@ -478,16 +498,35 @@ def test_detected_attr_name_caches_first_result(
 
 @pytest.fixture
 def fileprovider_mode(monkeypatch):
-    """Force `_detected_attr_name()` to return ATTR_FILEPROVIDER for one test.
+    """Force `_detected_attr_names()` to return [ATTR_FILEPROVIDER] for one test.
 
     Sets the cache directly so the tests don't depend on filesystem state —
     cleaner than constructing the full ~/Library/CloudStorage/Dropbox path
     via tmp_path. Each test in this section asserts the xattr backend
     routes the correct attribute name through to the underlying xattr call.
     """
-    monkeypatch.setattr(mod, "_attr_name_cache", mod.ATTR_FILEPROVIDER)
+    monkeypatch.setattr(
+        mod, "_decision_cache", ([mod.ATTR_FILEPROVIDER], "file_provider: test override")
+    )
     yield
-    monkeypatch.setattr(mod, "_attr_name_cache", None)
+    monkeypatch.setattr(mod, "_decision_cache", None)
+
+
+@pytest.fixture
+def both_mode(monkeypatch):
+    """Force `_detected_attr_names()` to return both attrs for one test.
+
+    Models the genuinely-uncertain case (followup item 58): pluginkit
+    unavailable AND no decisive info.json signal. The backend writes
+    BOTH com.dropbox.ignored AND com.apple.fileprovider.ignore#P.
+    """
+    monkeypatch.setattr(
+        mod,
+        "_decision_cache",
+        ([mod.ATTR_LEGACY, mod.ATTR_FILEPROVIDER], "both: test override"),
+    )
+    yield
+    monkeypatch.setattr(mod, "_decision_cache", None)
 
 
 def test_is_ignored_uses_fileprovider_attr_in_fileprovider_mode(
@@ -534,3 +573,121 @@ def test_clear_ignored_removes_fileprovider_attr_in_fileprovider_mode(
     mock_removexattr.assert_called_once_with(
         str(p), mod.ATTR_FILEPROVIDER, symlink=True
     )
+
+
+# ---- Dual-attribute (both-mode) end-to-end ----------------------------------
+# Followup item 58: when pluginkit is unavailable AND info.json gave no
+# decisive path signal, write BOTH attribute names so whichever sync stack
+# is actually active reads its own and the inactive one ignores the stray.
+
+
+def test_set_ignored_writes_both_attrs_in_both_mode(tmp_path, monkeypatch, both_mode):
+    """In both-mode, set_ignored issues two setxattr calls — one per attr."""
+    p = tmp_path / "file.txt"
+    p.touch()
+
+    mock_setxattr = MagicMock()
+    monkeypatch.setattr(xattr, "setxattr", mock_setxattr)
+    mod.set_ignored(p)
+
+    assert mock_setxattr.call_count == 2
+    called_names = [call.args[1] for call in mock_setxattr.call_args_list]
+    assert called_names == [mod.ATTR_LEGACY, mod.ATTR_FILEPROVIDER]
+
+
+def test_is_ignored_returns_true_if_first_attr_set_in_both_mode(
+    tmp_path, monkeypatch, both_mode
+):
+    """If the legacy attr is set, is_ignored short-circuits without reading
+    the second — short-circuit semantics matter when the user is on legacy
+    sync; we want an early True rather than two getxattr calls per file."""
+    p = tmp_path / "file.txt"
+    p.touch()
+
+    mock_getxattr = MagicMock(return_value=b"1")
+    monkeypatch.setattr(xattr, "getxattr", mock_getxattr)
+
+    assert mod.is_ignored(p) is True
+    mock_getxattr.assert_called_once_with(str(p), mod.ATTR_LEGACY, symlink=True)
+
+
+def test_is_ignored_returns_true_if_second_attr_set_in_both_mode(
+    tmp_path, monkeypatch, both_mode
+):
+    """First attr ENOATTR, second attr present → True. Exercises the
+    fall-through path that's the whole point of writing both."""
+    p = tmp_path / "file.txt"
+    p.touch()
+
+    call_outcomes = [_oserr(_ENOATTR), b"1"]
+    mock_getxattr = MagicMock(side_effect=call_outcomes)
+    monkeypatch.setattr(xattr, "getxattr", mock_getxattr)
+
+    assert mod.is_ignored(p) is True
+    assert mock_getxattr.call_count == 2
+
+
+def test_is_ignored_returns_false_if_both_attrs_absent_in_both_mode(
+    tmp_path, monkeypatch, both_mode
+):
+    """Both attrs ENOATTR → False (path simply not marked under either name)."""
+    p = tmp_path / "file.txt"
+    p.touch()
+
+    mock_getxattr = MagicMock(side_effect=[_oserr(_ENOATTR), _oserr(_ENOATTR)])
+    monkeypatch.setattr(xattr, "getxattr", mock_getxattr)
+
+    assert mod.is_ignored(p) is False
+    assert mock_getxattr.call_count == 2
+
+
+def test_clear_ignored_removes_both_attrs_in_both_mode(
+    tmp_path, monkeypatch, both_mode
+):
+    """clear_ignored issues two removexattr calls — one per attr — and
+    treats per-attr ENOATTR as a no-op (so a half-marked path that only
+    ever had one attr written gets cleaned up regardless)."""
+    p = tmp_path / "file.txt"
+    p.touch()
+
+    mock_removexattr = MagicMock(side_effect=[None, _oserr(_ENOATTR)])
+    monkeypatch.setattr(xattr, "removexattr", mock_removexattr)
+    mod.clear_ignored(p)
+
+    assert mock_removexattr.call_count == 2
+    called_names = [call.args[1] for call in mock_removexattr.call_args_list]
+    assert called_names == [mod.ATTR_LEGACY, mod.ATTR_FILEPROVIDER]
+
+
+# ---- detection_summary public API (followup item 37) ------------------------
+
+
+def test_detection_summary_starts_with_mode_token_in_legacy_default(
+    tmp_path, monkeypatch, reset_attr_cache
+):
+    """The summary returned by detection_summary() leads with the mode
+    keyword (`legacy:`/`file_provider:`/`both:`) so daemon-log-grep and
+    `dbxignore status` parsers get a stable prefix."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    legacy_dropbox = tmp_path / "Dropbox"
+    legacy_dropbox.mkdir()
+    _stage_dropbox_info(tmp_path, str(legacy_dropbox))
+    monkeypatch.setattr("subprocess.run", _fake_pluginkit(stdout=""))
+
+    summary = mod.detection_summary()
+    assert summary.startswith("legacy:")
+
+
+def test_detection_summary_starts_with_both_when_pluginkit_unknown(
+    tmp_path, monkeypatch, reset_attr_cache
+):
+    """The both-mode summary starts with `both:` so users can tell at a
+    glance that detection landed in the dual-attribute defensive arm."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "subprocess.run",
+        _fake_pluginkit(side_effect=FileNotFoundError("pluginkit not found")),
+    )
+
+    summary = mod.detection_summary()
+    assert summary.startswith("both:")

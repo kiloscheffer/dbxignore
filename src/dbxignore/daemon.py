@@ -22,6 +22,7 @@ from watchdog.observers import Observer
 from dbxignore import roots as roots_module
 from dbxignore import state as state_module
 from dbxignore.debounce import Debouncer, EventKind
+from dbxignore.markers import detection_summary
 from dbxignore.reconcile import reconcile_subtree
 from dbxignore.roots import find_containing
 from dbxignore.rules import IGNORE_FILENAME, RuleCache
@@ -293,6 +294,14 @@ def run(stop_event: threading.Event | None = None) -> None:
         if not configured_roots:
             logger.error("no Dropbox roots discovered; exiting")
             return
+
+        # Surface the macOS sync-mode detection result so users can self-
+        # diagnose without DBXIGNORE_LOG_LEVEL=DEBUG (followup item 37).
+        # Returns None on Windows/Linux — single-attribute platforms have
+        # no detection step to report.
+        summary = detection_summary()
+        if summary is not None:
+            logger.info("sync mode detection: %s", summary)
 
         cache = RuleCache()
         for r in configured_roots:

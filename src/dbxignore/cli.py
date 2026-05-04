@@ -362,6 +362,136 @@ def status(summary: bool) -> None:
             )
 
 
+def _walk_marked_paths(target: Path) -> list[Path]:
+    """Walk ``target`` and return every path currently bearing an ignore marker.
+
+    Mirrors ``list_ignored``'s pruning: once a directory is found marked,
+    don't descend into it (its descendants are inheritance-ignored by
+    Dropbox, and dbxignore itself doesn't write redundant child markers
+    under a marked parent — the rare case of an individually-marked
+    descendant under a marked parent is left to the next ``apply`` to
+    reconcile, since `clear` with a pruning walk gets the same
+    user-visible outcome at vastly lower walk cost on big trees).
+    """
+    found: list[Path] = []
+    for current, dirnames, filenames in os.walk(target, followlinks=False):
+        current_path = Path(current)
+        kept_dirs: list[str] = []
+        for name in dirnames:
+            p = current_path / name
+            try:
+                if markers.is_ignored(p):
+                    found.append(p)
+                else:
+                    kept_dirs.append(name)
+            except OSError:
+                kept_dirs.append(name)
+        dirnames[:] = kept_dirs
+        for name in filenames:
+            p = current_path / name
+            try:
+                if markers.is_ignored(p):
+                    found.append(p)
+            except OSError:
+                continue
+    return found
+
+
+@main.command()
+@click.argument("path", required=False, type=click.Path(path_type=Path))
+@click.option(
+    "--dry-run", is_flag=True,
+    help="Print what would be cleared, don't change anything.",
+)
+@click.option(
+    "--force", is_flag=True,
+    help="Run even if the daemon appears to be alive — its next sweep "
+    "would re-apply markers, so use only for known short-window tests.",
+)
+@click.option(
+    "--yes", is_flag=True,
+    help="Skip the confirmation prompt (for scripted use).",
+)
+def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
+    """Clear every Dropbox ignore marker under the watched roots (or under PATH).
+
+    Inverse of ``apply``: where ``apply`` sets every marker the rules
+    dictate, ``clear`` unsets every marker regardless of rules. Leaves
+    ``.dropboxignore`` files and per-user state.json untouched —
+    ``uninstall --purge`` is the heavier verb that also wipes state.
+
+    Refuses to run if the daemon is alive (the daemon's next sweep would
+    re-apply rule-driven markers within seconds for rule-reload events
+    or within an hour for the recovery sweep tick); pass ``--force`` to
+    override. Prompts before clearing unless ``--yes`` is set.
+    """
+    s = state.read()
+    if (
+        not force
+        and s is not None
+        and s.daemon_pid is not None
+        and state.is_daemon_alive(s.daemon_pid)
+    ):
+        click.echo(
+            f"error: daemon is running (pid={s.daemon_pid}). "
+            f"The next sweep would re-apply markers.",
+            err=True,
+        )
+        click.echo(
+            "Stop the daemon first (`dbxignore uninstall`), or pass --force.",
+            err=True,
+        )
+        sys.exit(2)
+
+    discovered = _discover_roots()
+    if not discovered:
+        click.echo("No Dropbox roots found.", err=True)
+        sys.exit(2)
+
+    if path is None:
+        targets = discovered
+    else:
+        target = path.resolve()
+        if find_containing(target, discovered) is None:
+            click.echo(f"Path {path} is not under any Dropbox root.", err=True)
+            sys.exit(2)
+        targets = [target]
+
+    to_clear: list[Path] = []
+    for target in targets:
+        to_clear.extend(_walk_marked_paths(target))
+
+    if not to_clear:
+        click.echo("No markers to clear.")
+        return
+
+    if dry_run:
+        for p in to_clear:
+            click.echo(f"would clear: {p}")
+        click.echo(f"clear: would_clear={len(to_clear)} (dry-run)")
+        return
+
+    if not yes:
+        click.echo(f"This will clear {len(to_clear)} markers.")
+        click.echo("Dropbox will then start syncing previously-ignored paths.")
+        if not click.confirm("Continue?"):
+            click.echo("Aborted.")
+            return
+
+    cleared = 0
+    errors: list[tuple[Path, str]] = []
+    for p in to_clear:
+        try:
+            markers.clear_ignored(p)
+            cleared += 1
+        except OSError as exc:
+            errors.append((p, str(exc)))
+
+    click.echo(f"clear: cleared={cleared} errors={len(errors)}")
+    for p, msg in errors[:10]:
+        click.echo(f"  error: {p} - {msg}", err=True)
+
+
 @main.command("list")
 @click.argument("path", required=False, type=click.Path(path_type=Path))
 def list_ignored(path: Path | None) -> None:

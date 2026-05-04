@@ -38,8 +38,6 @@ def test_apply_with_path_argument_scopes_reconcile(tmp_path, fake_markers, monke
 
 
 def test_apply_from_gitignore_mounts_at_dirname(tmp_path, fake_markers, monkeypatch):
-    """Rules from gitignore at <root>/sub/.gitignore mount at <root>/sub;
-    only paths under <root>/sub are reconciled."""
     sub = tmp_path / "sub"
     sub.mkdir()
     other = tmp_path / "other"
@@ -63,7 +61,6 @@ def test_apply_from_gitignore_mounts_at_dirname(tmp_path, fake_markers, monkeypa
 def test_apply_from_gitignore_ignores_existing_dropboxignore(
     tmp_path, fake_markers, monkeypatch
 ):
-    """Existing .dropboxignore in tree does NOT participate in --from-gitignore."""
     (tmp_path / ".dropboxignore").write_text("other/\n", encoding="utf-8")
     (tmp_path / "other").mkdir()
     (tmp_path / "build").mkdir()

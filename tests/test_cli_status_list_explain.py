@@ -140,9 +140,17 @@ def test_format_summary_no_pid_omits_pid_field():
 
 def test_status_summary_flag_emits_single_line(tmp_path, monkeypatch):
     """`dbxignore status --summary` produces exactly one line on stdout
-    (the public-API contract for status-bar widgets)."""
+    (the public-API contract for status-bar widgets).
+
+    Pins is_daemon_alive=True via monkeypatch rather than relying on the
+    test process's own name matching the dbxignore daemon-name guard:
+    pytest entry-point exec'd by `uv run pytest` shows up as `pytest` on
+    Linux, which fails the `"python" in name or "dbxignored" in name`
+    check and would land us in not_running. Same shape as #58's
+    legacy_mode pinning lesson — explicit fixture > host-dependent guess.
+    """
     s = state.State(
-        daemon_pid=os.getpid(),
+        daemon_pid=12345,
         daemon_started=dt.datetime.now(dt.UTC),
         last_sweep=dt.datetime.now(dt.UTC),
         last_sweep_marked=5,
@@ -153,6 +161,7 @@ def test_status_summary_flag_emits_single_line(tmp_path, monkeypatch):
     path = tmp_path / "state.json"
     state.write(s, path)
     monkeypatch.setattr(state, "default_path", lambda: path)
+    monkeypatch.setattr(state, "is_daemon_alive", lambda pid: True)
     monkeypatch.setattr(cli, "_discover_roots", lambda: [])
 
     runner = CliRunner()
@@ -161,7 +170,7 @@ def test_status_summary_flag_emits_single_line(tmp_path, monkeypatch):
     lines = result.output.strip().splitlines()
     assert len(lines) == 1, f"expected one line, got {len(lines)}: {result.output!r}"
     line = lines[0]
-    assert line.startswith("state=running ")
+    assert line.startswith("state=running pid=12345 ")
     assert "marked=5" in line
     assert "cleared=2" in line
     assert "errors=0" in line

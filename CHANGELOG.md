@@ -7,6 +7,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- **`_WatchdogHandler.on_any_event` fast-paths matched `DIR_CREATE` events.** When a freshly-created directory's path already matches a cached rule, the handler calls `reconcile_subtree` synchronously and skips `Debouncer.submit`. The marker write therefore lands without the per-kind debouncer queue's queueing + worker-thread context-switch cost, narrowing the race window where Dropbox's own watcher sees the new directory and starts ingesting children before the parent's marker is set. Other event kinds (`RULES`, `OTHER`) and unmatched `DIR_CREATE`s still go through the debouncer. Trade-off: a queued-but-unprocessed `RULES` event that would invalidate the match means the bypass marks a path the next `reconcile_subtree` (driven by that `RULES` event) clears — bounded transient false-positive.
+
 ### Fixed
 
 - **`state.write()` parse-back validation.** Between writing the temp `state.json.tmp` and `os.replace`-ing it into place, `state.write()` now reads the temp file back and `json.loads`-parses it; on `JSONDecodeError`, the temp is unlinked and the exception re-raised, leaving any prior `state.json` untouched. Closes a latent path where a future serializer regression producing malformed JSON would otherwise reach disk, then `_read_at`'s `JSONDecodeError` arm would silently fall through to "no prior daemon" and bypass `daemon.run`'s singleton check — the same failure mode the v0.3.1 atomic-write change defended from torn JSON.

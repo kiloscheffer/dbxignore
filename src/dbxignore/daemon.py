@@ -237,16 +237,33 @@ def _is_other_live_daemon(pid: int | None) -> bool:
 
 
 class _WatchdogHandler(FileSystemEventHandler):
-    def __init__(self, debouncer: Debouncer, roots: list[Path]) -> None:
+    def __init__(
+        self, debouncer: Debouncer, roots: list[Path], cache: RuleCache
+    ) -> None:
         self._debouncer = debouncer
         self._roots = roots
+        self._cache = cache
 
     def on_any_event(self, event):
         try:
             classification = _classify(event, self._roots)
-            if classification is not None:
-                kind, key, _root, _src = classification
-                self._debouncer.submit(kind, key, event)
+            if classification is None:
+                return
+            kind, key, root, src = classification
+            # Fast-path: a DIR_CREATE for a path already matching a cached
+            # rule reconciles synchronously, skipping the debouncer queue.
+            # Every millisecond of debounce widens the race window where
+            # Dropbox sees the new directory and starts ingesting children
+            # before the parent's marker lands. RULES still coalesce (rule
+            # bursts deserve it); OTHER still batches. Trade-off: if the
+            # matching rule was just deleted in a queued-but-not-yet-
+            # processed RULES event, the bypass marks a path that the next
+            # reconcile_subtree (driven by that RULES event) will clear —
+            # bounded transient false-positive (followup item 57).
+            if kind is EventKind.DIR_CREATE and self._cache.match(src):
+                reconcile_subtree(root, src, self._cache)
+                return
+            self._debouncer.submit(kind, key, event)
         except Exception:  # noqa: BLE001 — watcher must not die
             logger.exception("watchdog handler failed on event %r", event)
 
@@ -287,7 +304,7 @@ def run(stop_event: threading.Event | None = None) -> None:
             on_emit=lambda item: _dispatch(item[2], cache, configured_roots),
             timeouts_ms=_timeouts_from_env(),
         )
-        handler = _WatchdogHandler(debouncer, configured_roots)
+        handler = _WatchdogHandler(debouncer, configured_roots, cache)
         observer = Observer()
         for r in configured_roots:
             observer.schedule(handler, str(r), recursive=True)

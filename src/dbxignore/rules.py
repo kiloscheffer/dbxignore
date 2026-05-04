@@ -142,6 +142,28 @@ class RuleCache:
             self._rules.pop(ignore_file.resolve(), None)
             self._recompute_conflicts(log_warnings=log_warnings)
 
+    def load_external(
+        self, source: Path, mount_at: Path, *, log_warnings: bool = True
+    ) -> None:
+        """Load ``source``'s lines as if it were a .dropboxignore at ``mount_at``.
+
+        Used by ``dbxignore apply --from-gitignore``: rules in ``source`` are
+        mounted at ``mount_at`` (which becomes a tracked root for this cache).
+        The cache treats them indistinguishably from rules discovered at
+        ``mount_at/.dropboxignore``.
+
+        Errors during read or parse log a warning per ``_load_file``'s
+        contract and do not raise; callers that need failure to surface as
+        a CLI error must validate ``source`` themselves before calling.
+        """
+        mount_at = mount_at.resolve()
+        synthetic_path = mount_at / IGNORE_FILENAME
+        with self._lock:
+            if mount_at not in self._roots:
+                self._roots.append(mount_at)
+            self._load_file(source, as_path=synthetic_path)
+            self._recompute_conflicts(log_warnings=log_warnings)
+
     def match(self, path: Path) -> bool:
         if not path.is_absolute():
             raise ValueError(f"match() requires an absolute path; got {path!r}")
@@ -211,8 +233,20 @@ class RuleCache:
     # ---- internal helpers ------------------------------------------------
 
     def _load_file(
-        self, ignore_file: Path, *, st: os.stat_result | None = None
+        self,
+        ignore_file: Path,
+        *,
+        st: os.stat_result | None = None,
+        as_path: Path | None = None,
     ) -> None:
+        """Read and parse ``ignore_file`` into the cache.
+
+        ``as_path`` overrides the cache key. When set, the parsed rules are
+        stored as if they came from ``as_path`` rather than ``ignore_file``.
+        Used by ``load_external`` to mount a non-``.dropboxignore`` source
+        at an arbitrary directory; pass ``None`` for the discovery code path
+        and the source location is the cache key.
+        """
         try:
             lines = ignore_file.read_text(encoding="utf-8").splitlines()
             if st is None:
@@ -225,7 +259,8 @@ class RuleCache:
         except (ValueError, TypeError, re.error) as exc:
             logger.warning("Invalid .dropboxignore at %s: %s", ignore_file, exc)
             return
-        self._rules[ignore_file.resolve()] = _LoadedRules(
+        cache_key = (as_path or ignore_file).resolve()
+        self._rules[cache_key] = _LoadedRules(
             lines=lines,
             entries=_build_entries(lines, spec),
             mtime_ns=st.st_mtime_ns,

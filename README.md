@@ -192,9 +192,37 @@ target/
 | `dbxignore daemon` | Run the watcher + hourly sweep in the foreground. Usually invoked by Task Scheduler. |
 | `dbxignore apply [PATH]` | One-shot reconcile of the whole Dropbox (or a subtree). Pass `--from-gitignore <path>` to load rules from a `.gitignore` instead of `.dropboxignore` files in the tree. |
 | `dbxignore generate <PATH>` | Translate a `.gitignore` (or any nominated file) to a `.dropboxignore`. `<PATH>` is a file or a directory; default output is `<dir>/.dropboxignore`. Flags: `-o <path>`, `--stdout`, `--force`. |
-| `dbxignore status` | Is the daemon running? Last sweep counts, last error. |
+| `dbxignore status` | Is the daemon running? Last sweep counts, last error. Pass `--summary` for a stable single-line summary suitable for status-bar widgets — see [Status-bar integration](#status-bar-integration). |
 | `dbxignore list [PATH]` | Print every path currently bearing the ignore marker. |
 | `dbxignore explain PATH` | Which `.dropboxignore` rule (if any) matches the path? |
+
+### Status-bar integration
+
+`dbxignore status --summary` emits a stable single-line summary on stdout, suitable for status-bar widgets (polybar, tmux, i3blocks, sketchybar) and cron-friendly polling.
+
+The format is part of the public API per [SemVer](https://semver.org/): adding new fields is non-breaking, but renaming or removing existing fields bumps MINOR pre-1.0 / MAJOR post-1.0.
+
+```
+state=<token> [pid=N] marked=N cleared=N errors=N conflicts=N
+```
+
+State tokens:
+
+- `running` — `state.json` present and the recorded PID corresponds to a live dbxignore daemon process.
+- `not_running` — `state.json` present but the recorded PID is no longer a live daemon (cleanly stopped, or stale state).
+- `no_state` — no `state.json` (daemon never ran). Only `state` and `conflicts` are emitted in this case.
+
+`pid=N` is omitted when no PID was recorded (rare partial-write case). The remaining fields (`marked`, `cleared`, `errors`) are present whenever a `state.json` exists, even if the daemon never finished a sweep — they default to zero.
+
+Examples:
+
+```
+state=running pid=12345 marked=7 cleared=1 errors=0 conflicts=0
+state=not_running pid=12345 marked=7 cleared=1 errors=0 conflicts=0
+state=no_state conflicts=0
+```
+
+A polybar module reading the daemon state could grep `state=\S+` for the at-a-glance indicator and `errors=\S+` for an error-count badge.
 
 ## Behaviour
 

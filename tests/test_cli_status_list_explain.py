@@ -92,6 +92,102 @@ def test_list_does_not_descend_into_ignored_directories(tmp_path, fake_markers, 
     assert "file.o" not in result.output
 
 
+# ---- status --summary (followup item 60) ------------------------------------
+
+
+def test_format_summary_no_state_returns_minimal_line():
+    """No state.json → only `state=no_state conflicts=N` is meaningful."""
+    assert cli._format_summary(None, alive=False, conflicts_count=0) == "state=no_state conflicts=0"
+    assert cli._format_summary(None, alive=True, conflicts_count=3) == "state=no_state conflicts=3"
+
+
+def test_format_summary_running_includes_pid_and_counts():
+    """state.json + alive PID → `state=running pid=N marked=N cleared=N errors=N conflicts=N`."""
+    s = state.State(
+        daemon_pid=12345,
+        last_sweep_marked=7,
+        last_sweep_cleared=1,
+        last_sweep_errors=0,
+    )
+    assert cli._format_summary(s, alive=True, conflicts_count=0) == (
+        "state=running pid=12345 marked=7 cleared=1 errors=0 conflicts=0"
+    )
+
+
+def test_format_summary_not_running_uses_same_pid_field():
+    """state.json present but daemon dead → state=not_running, same pid= field
+    (parsing stays uniform; the not_running token tells the consumer the pid
+    is stale)."""
+    s = state.State(
+        daemon_pid=12345,
+        last_sweep_marked=7,
+        last_sweep_cleared=1,
+        last_sweep_errors=0,
+    )
+    assert cli._format_summary(s, alive=False, conflicts_count=2) == (
+        "state=not_running pid=12345 marked=7 cleared=1 errors=0 conflicts=2"
+    )
+
+
+def test_format_summary_no_pid_omits_pid_field():
+    """state.json present but daemon_pid is None (rare edge: state.json from
+    a partial write) → omit pid=, force state=not_running."""
+    s = state.State(daemon_pid=None)
+    assert cli._format_summary(s, alive=False, conflicts_count=0) == (
+        "state=not_running marked=0 cleared=0 errors=0 conflicts=0"
+    )
+
+
+def test_status_summary_flag_emits_single_line(tmp_path, monkeypatch):
+    """`dbxignore status --summary` produces exactly one line on stdout
+    (the public-API contract for status-bar widgets).
+
+    Pins is_daemon_alive=True via monkeypatch rather than relying on the
+    test process's own name matching the dbxignore daemon-name guard:
+    pytest entry-point exec'd by `uv run pytest` shows up as `pytest` on
+    Linux, which fails the `"python" in name or "dbxignored" in name`
+    check and would land us in not_running. Same shape as #58's
+    legacy_mode pinning lesson — explicit fixture > host-dependent guess.
+    """
+    s = state.State(
+        daemon_pid=12345,
+        daemon_started=dt.datetime.now(dt.UTC),
+        last_sweep=dt.datetime.now(dt.UTC),
+        last_sweep_marked=5,
+        last_sweep_cleared=2,
+        last_sweep_errors=0,
+        watched_roots=[Path(r"C:\Dropbox")],
+    )
+    path = tmp_path / "state.json"
+    state.write(s, path)
+    monkeypatch.setattr(state, "default_path", lambda: path)
+    monkeypatch.setattr(state, "is_daemon_alive", lambda pid: True)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [])
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["status", "--summary"])
+    assert result.exit_code == 0
+    lines = result.output.strip().splitlines()
+    assert len(lines) == 1, f"expected one line, got {len(lines)}: {result.output!r}"
+    line = lines[0]
+    assert line.startswith("state=running pid=12345 ")
+    assert "marked=5" in line
+    assert "cleared=2" in line
+    assert "errors=0" in line
+    assert "conflicts=0" in line
+
+
+def test_status_summary_no_state_emits_no_state_token(tmp_path, monkeypatch):
+    """No state.json + no roots → `state=no_state conflicts=0` and nothing else."""
+    monkeypatch.setattr(state, "default_path", lambda: tmp_path / "missing.json")
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [])
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["status", "--summary"])
+    assert result.exit_code == 0
+    assert result.output.strip() == "state=no_state conflicts=0"
+
+
 def test_status_lists_rule_conflicts(tmp_path, monkeypatch):
     """`status` surfaces RuleCache conflicts alongside daemon pid / sweep info."""
     import click.testing

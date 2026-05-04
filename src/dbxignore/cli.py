@@ -287,6 +287,13 @@ def status() -> None:
         for r in s.watched_roots:
             click.echo(f"watching: {r}")
 
+    # macOS sync-mode visibility (followup item 37). Returns None on
+    # Windows/Linux where there's no detection step to report — those
+    # platforms have a single attribute name fixed at module import.
+    summary = markers.detection_summary()
+    if summary is not None:
+        click.echo(f"sync mode: {summary}")
+
     # Conflicts section — present only when RuleCache has any.
     # Skip the rule-cache walk entirely when there are no roots — otherwise
     # `status` pays for an rglob we don't need.

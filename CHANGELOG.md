@@ -7,8 +7,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **`dbxignore status` shows the macOS sync-mode detection result on darwin.** A new `sync mode: <mode>: <reason>` line in `dbxignore status` (and an INFO log line `sync mode detection: ...` at daemon startup) surfaces what the path-primary + pluginkit-disambiguating detection landed on (`legacy:` / `file_provider:` / `both:`) without needing `DBXIGNORE_LOG_LEVEL=DEBUG`. The line prints only on darwin — Windows and Linux are single-attribute platforms with nothing to detect. Cross-platform via the new `markers.detection_summary()` facade returning `None` on non-darwin.
+
 ### Changed
 
+- **macOS xattr backend writes both attributes when sync-mode detection is genuinely uncertain.** When `pluginkit` is unavailable (binary missing, hung query, subprocess error) AND `~/.dropbox/info.json` gave no decisive path signal (no path under `~/Library/CloudStorage/` and no `/Volumes/` path with extension allowed), `_detect()` now returns `[ATTR_LEGACY, ATTR_FILEPROVIDER]` and `set_ignored` writes both names. Previously this case fell through to a single-attribute legacy default, which silently no-ops on File Provider users whose detection misfires for environmental reasons. `is_ignored` short-circuits True on the first non-empty hit (so legacy users don't pay two getxattr calls per file); `clear_ignored` iterates with per-attribute ENOATTR no-op. The trade is a stray attribute on the inactive sync stack (metadata cleanliness) versus a silent no-op on the active stack (correctness).
 - **`_WatchdogHandler.on_any_event` fast-paths matched `DIR_CREATE` events.** When a freshly-created directory's path already matches a cached rule, the handler calls `reconcile_subtree` synchronously and skips `Debouncer.submit`. The marker write therefore lands without the per-kind debouncer queue's queueing + worker-thread context-switch cost, narrowing the race window where Dropbox's own watcher sees the new directory and starts ingesting children before the parent's marker is set. Other event kinds (`RULES`, `OTHER`) and unmatched `DIR_CREATE`s still go through the debouncer. Trade-off: a queued-but-unprocessed `RULES` event that would invalidate the match means the bypass marks a path the next `reconcile_subtree` (driven by that `RULES` event) clears — bounded transient false-positive.
 
 ### Fixed

@@ -395,7 +395,11 @@ def uninstall(purge: bool) -> None:
     "--stdout", is_flag=True,
     help="Write to stdout instead of a file.",
 )
-def generate(path: Path, output: Path | None, stdout: bool) -> None:
+@click.option(
+    "--force", is_flag=True,
+    help="Overwrite an existing .dropboxignore at the target location.",
+)
+def generate(path: Path, output: Path | None, stdout: bool, force: bool) -> None:
     """Translate a .gitignore (or any nominated file) to a .dropboxignore.
 
     PATH may be a file or a directory. Directory: looks for .gitignore
@@ -421,6 +425,13 @@ def generate(path: Path, output: Path | None, stdout: bool) -> None:
         return
 
     target = output if output is not None else (source.parent / IGNORE_FILENAME)
+    if target.exists() and not force:
+        click.echo(
+            f"error: {target} exists; pass --force to overwrite or "
+            "--stdout to preview",
+            err=True,
+        )
+        sys.exit(2)
     target.write_text(text, encoding="utf-8")
 
     rule_count = sum(

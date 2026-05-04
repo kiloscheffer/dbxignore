@@ -5,12 +5,13 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
 import click
 
-from dbxignore import markers, reconcile, roots, state
+from dbxignore import markers, reconcile, roots, rules, state
 from dbxignore.roots import find_containing
 from dbxignore.rules import IGNORE_FILENAME, RuleCache
 
@@ -417,8 +418,24 @@ def generate(path: Path, output: Path | None, stdout: bool, force: bool) -> None
         click.echo(f"error: {exc.message}", err=True)
         sys.exit(2)
 
-    text = source.read_text(encoding="utf-8")
+    try:
+        text = source.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        click.echo(f"error: {source} is not valid UTF-8", err=True)
+        sys.exit(2)
+    except OSError as exc:
+        click.echo(f"error: cannot read {source}: {exc.strerror}", err=True)
+        sys.exit(2)
     lines = text.splitlines()
+
+    try:
+        rules._build_spec(lines)
+    except (ValueError, TypeError, re.error) as exc:
+        click.echo(
+            f"error: {source} contains invalid pattern: {exc}",
+            err=True,
+        )
+        sys.exit(2)
 
     if stdout:
         click.echo(text, nl=False)
@@ -432,7 +449,20 @@ def generate(path: Path, output: Path | None, stdout: bool, force: bool) -> None
             err=True,
         )
         sys.exit(2)
-    target.write_text(text, encoding="utf-8")
+    try:
+        target.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        click.echo(f"error: cannot write {target}: {exc.strerror}", err=True)
+        sys.exit(2)
+
+    discovered = _discover_roots()
+    target_resolved = target.resolve()
+    if discovered and find_containing(target_resolved, discovered) is None:
+        click.echo(
+            f"warning: {target} is not under any discovered Dropbox root; "
+            "reconcile will not see it",
+            err=True,
+        )
 
     rule_count = sum(
         1 for line in lines

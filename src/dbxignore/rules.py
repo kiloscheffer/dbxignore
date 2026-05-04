@@ -155,6 +155,12 @@ class RuleCache:
         Errors during read or parse log a warning per ``_load_file``'s
         contract and do not raise; callers that need failure to surface as
         a CLI error must validate ``source`` themselves before calling.
+
+        Callers should construct a fresh ``RuleCache`` and not subsequently
+        call ``load_root`` on the same ``mount_at``: ``_load_if_changed``
+        keys on stat values from ``source``, so a real ``.dropboxignore``
+        at ``mount_at`` could be skipped if its mtime+size happen to match
+        the synthesized entry's.
         """
         mount_at = mount_at.resolve()
         synthetic_path = mount_at / IGNORE_FILENAME

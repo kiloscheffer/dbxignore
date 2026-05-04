@@ -74,6 +74,20 @@ def default_path() -> Path:
     return user_state_dir() / "state.json"
 
 
+def daemon_is_running(state_obj: State | None) -> bool:
+    """True if the recorded daemon PID corresponds to a live daemon.
+
+    Convenience wrapper around ``is_daemon_alive`` for the common
+    "state.json says PID X is the daemon — is X actually running?" check.
+    Folds the None-state and None-pid edges into a single bool so callers
+    don't have to repeat ``s is not None and s.daemon_pid is not None and
+    is_daemon_alive(s.daemon_pid)``.
+    """
+    if state_obj is None or state_obj.daemon_pid is None:
+        return False
+    return is_daemon_alive(state_obj.daemon_pid)
+
+
 def is_daemon_alive(pid: int | None) -> bool:
     """Return True if ``pid`` is a live dbxignore daemon process.
 

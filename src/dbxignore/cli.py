@@ -750,8 +750,8 @@ def init(path: Path | None, force: bool, to_stdout: bool) -> None:
 
     Walks the target directory to depth 3 looking for marker-bait dirs
     (node_modules, __pycache__, .venv, target, build, etc.) and writes
-    a comprehensive .dropboxignore template, with a header noting which
-    dirs were detected in this tree. The template covers Node.js, Python,
+    a .dropboxignore template, with a header noting which dirs were
+    detected in this tree. The template covers Node.js, Python,
     Rust, JVM, .NET, frontend frameworks, build/dist outputs, and
     OS/editor detritus — edit afterward to remove patterns that don't
     apply to your setup.

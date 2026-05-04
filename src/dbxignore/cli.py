@@ -90,19 +90,22 @@ def _load_cache(roots: list[Path]) -> RuleCache:
 
 
 def _resolve_gitignore_arg(path: Path) -> Path:
-    """Resolve a generate/--from-gitignore argument to an actual file.
+    """Resolve a ``generate`` argument to an actual file.
 
-    Directory → look for ``.gitignore`` inside; file → use as-is. Raises
-    ``click.UsageError`` (exit 2) with a CLI-formatted message if the
-    resolved path does not exist.
+    Directory → look for ``.gitignore`` inside; file → use as-is. Exits 2
+    with a CLI-formatted stderr message if the resolved path does not exist.
+    Single-caller helper; ``_apply_from_gitignore`` deliberately does its
+    own (stricter) resolution and does not call this.
     """
     if path.is_dir():
         candidate = path / ".gitignore"
         if not candidate.exists():
-            raise click.UsageError(f"no .gitignore in {path}")
+            click.echo(f"error: no .gitignore in {path}", err=True)
+            sys.exit(2)
         return candidate
     if not path.exists():
-        raise click.UsageError(f"{path} not found")
+        click.echo(f"error: {path} not found", err=True)
+        sys.exit(2)
     return path
 
 
@@ -189,9 +192,6 @@ def _apply_from_gitignore(source: Path) -> None:
         )
         sys.exit(2)
 
-    # Validate the source can be read + parsed BEFORE running reconcile.
-    # load_external swallows OSError/parse failures into log warnings;
-    # users running an interactive command want failures to surface here.
     _read_and_validate_rule_source(source)
 
     cache = RuleCache()
@@ -510,11 +510,7 @@ def generate(path: Path, output: Path | None, stdout: bool, force: bool) -> None
         click.echo("error: -o and --stdout are mutually exclusive", err=True)
         sys.exit(2)
 
-    try:
-        source = _resolve_gitignore_arg(path)
-    except click.UsageError as exc:
-        click.echo(f"error: {exc.message}", err=True)
-        sys.exit(2)
+    source = _resolve_gitignore_arg(path)
 
     text = _read_and_validate_rule_source(source)
     lines = text.splitlines()

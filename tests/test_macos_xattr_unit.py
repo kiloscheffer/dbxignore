@@ -86,7 +86,24 @@ def test_is_ignored_rejects_relative_path():
 # ---- set_ignored ------------------------------------------------------------
 
 
-def test_set_ignored_calls_setxattr_with_correct_args(tmp_path, monkeypatch):
+@pytest.fixture
+def legacy_mode(monkeypatch):
+    """Force `_detected_attr_names()` to return [ATTR_LEGACY] for one test.
+
+    Pins the single-attr legacy-write behavior regardless of the host's
+    pluginkit availability. Without this, Linux test runners (no
+    pluginkit binary → `_pluginkit_extension_state()` returns "unknown")
+    would land in the dual-attr mode and break ``assert_called_once_with``
+    invariants in tests that pre-date item 58.
+    """
+    monkeypatch.setattr(
+        mod, "_decision_cache", ([mod.ATTR_LEGACY], "legacy: test override")
+    )
+    yield
+    monkeypatch.setattr(mod, "_decision_cache", None)
+
+
+def test_set_ignored_calls_setxattr_with_correct_args(tmp_path, monkeypatch, legacy_mode):
     """set_ignored calls xattr.setxattr with the detected attr name and _MARKER_VALUE."""
     p = tmp_path / "file.txt"
     p.touch()
@@ -96,7 +113,7 @@ def test_set_ignored_calls_setxattr_with_correct_args(tmp_path, monkeypatch):
     mod.set_ignored(p)
 
     mock_setxattr.assert_called_once_with(
-        str(p), mod._detected_attr_name(), mod._MARKER_VALUE, symlink=True
+        str(p), mod.ATTR_LEGACY, mod._MARKER_VALUE, symlink=True
     )
 
 
@@ -120,7 +137,7 @@ def test_set_ignored_rejects_relative_path():
 # ---- clear_ignored ----------------------------------------------------------
 
 
-def test_clear_ignored_calls_removexattr_with_correct_args(tmp_path, monkeypatch):
+def test_clear_ignored_calls_removexattr_with_correct_args(tmp_path, monkeypatch, legacy_mode):
     """clear_ignored calls xattr.removexattr with the detected attr name and symlink=True."""
     p = tmp_path / "file.txt"
     p.touch()
@@ -130,7 +147,7 @@ def test_clear_ignored_calls_removexattr_with_correct_args(tmp_path, monkeypatch
     mod.clear_ignored(p)
 
     mock_removexattr.assert_called_once_with(
-        str(p), mod._detected_attr_name(), symlink=True
+        str(p), mod.ATTR_LEGACY, symlink=True
     )
 
 

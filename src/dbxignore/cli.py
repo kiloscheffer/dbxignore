@@ -106,6 +106,32 @@ def _resolve_gitignore_arg(path: Path) -> Path:
     return path
 
 
+def _read_and_validate_rule_source(source: Path) -> str:
+    """Read ``source`` as UTF-8 and verify it parses as a pathspec.
+
+    Returns the raw text on success. Exits with code 2 (and a CLI-formatted
+    stderr message) if the file can't be read, isn't valid UTF-8, or
+    contains a pattern the parser rejects. Used by both ``generate`` and
+    ``apply --from-gitignore`` — the two interactive entry points where
+    rule-source failures should surface as user-facing errors rather than
+    being swallowed into log warnings the way ``RuleCache._load_file`` does.
+    """
+    try:
+        text = source.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        click.echo(f"error: {source} is not valid UTF-8", err=True)
+        sys.exit(2)
+    except OSError as exc:
+        click.echo(f"error: cannot read {source}: {exc.strerror}", err=True)
+        sys.exit(2)
+    try:
+        rules._build_spec(text.splitlines())
+    except (ValueError, TypeError, re.error) as exc:
+        click.echo(f"error: {source} contains invalid pattern: {exc}", err=True)
+        sys.exit(2)
+    return text
+
+
 def _process_is_alive(pid: int | None) -> bool:
     if pid is None:
         return False
@@ -166,19 +192,7 @@ def _apply_from_gitignore(source: Path) -> None:
     # Validate the source can be read + parsed BEFORE running reconcile.
     # load_external swallows OSError/parse failures into log warnings;
     # users running an interactive command want failures to surface here.
-    try:
-        text = source.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        click.echo(f"error: {source} is not valid UTF-8", err=True)
-        sys.exit(2)
-    except OSError as exc:
-        click.echo(f"error: cannot read {source}: {exc.strerror}", err=True)
-        sys.exit(2)
-    try:
-        rules._build_spec(text.splitlines())
-    except (ValueError, TypeError, re.error) as exc:
-        click.echo(f"error: {source} contains invalid pattern: {exc}", err=True)
-        sys.exit(2)
+    _read_and_validate_rule_source(source)
 
     cache = RuleCache()
     cache.load_external(source, mount_at)
@@ -498,24 +512,8 @@ def generate(path: Path, output: Path | None, stdout: bool, force: bool) -> None
         click.echo(f"error: {exc.message}", err=True)
         sys.exit(2)
 
-    try:
-        text = source.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        click.echo(f"error: {source} is not valid UTF-8", err=True)
-        sys.exit(2)
-    except OSError as exc:
-        click.echo(f"error: cannot read {source}: {exc.strerror}", err=True)
-        sys.exit(2)
+    text = _read_and_validate_rule_source(source)
     lines = text.splitlines()
-
-    try:
-        rules._build_spec(lines)
-    except (ValueError, TypeError, re.error) as exc:
-        click.echo(
-            f"error: {source} contains invalid pattern: {exc}",
-            err=True,
-        )
-        sys.exit(2)
 
     if stdout:
         click.echo(text, nl=False)

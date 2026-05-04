@@ -154,6 +154,66 @@ def test_dispatch_moved_non_rules_dest_outside_any_root(tmp_path, monkeypatch):
     assert reconcile_calls == [(root, old_file.parent)]
 
 
+def test_handler_bypasses_debouncer_for_matched_dir_create(tmp_path, monkeypatch):
+    """DIR_CREATE for a path that already matches a cached rule fast-paths
+    to reconcile_subtree synchronously, skipping the debouncer queue (item 57)."""
+    root = tmp_path.resolve()
+    cache = MagicMock()
+    cache.match.return_value = True
+    debouncer = MagicMock()
+    reconcile_calls: list = []
+    monkeypatch.setattr(daemon, "reconcile_subtree",
+                        lambda r, sub, c: reconcile_calls.append((r, sub)))
+
+    new_dir = root / "node_modules"
+    new_dir.mkdir()
+
+    handler = daemon._WatchdogHandler(debouncer, [root], cache)
+    handler.on_any_event(_stub_event("created", str(new_dir), is_directory=True))
+
+    debouncer.submit.assert_not_called()
+    assert reconcile_calls == [(root, new_dir.resolve())]
+
+
+def test_handler_uses_debouncer_for_unmatched_dir_create(tmp_path, monkeypatch):
+    """DIR_CREATE for a path that doesn't match any cached rule still goes
+    through the debouncer — the bypass is conditional on a positive match."""
+    root = tmp_path.resolve()
+    cache = MagicMock()
+    cache.match.return_value = False
+    debouncer = MagicMock()
+    reconcile_calls: list = []
+    monkeypatch.setattr(daemon, "reconcile_subtree",
+                        lambda r, sub, c: reconcile_calls.append((r, sub)))
+
+    new_dir = root / "src"
+    new_dir.mkdir()
+
+    handler = daemon._WatchdogHandler(debouncer, [root], cache)
+    handler.on_any_event(_stub_event("created", str(new_dir), is_directory=True))
+
+    debouncer.submit.assert_called_once()
+    assert reconcile_calls == []
+
+
+def test_handler_uses_debouncer_for_rules_events(tmp_path):
+    """RULES events keep their debounce — only matched DIR_CREATE bypasses.
+    cache.match shouldn't even be consulted for non-DIR_CREATE kinds."""
+    root = tmp_path.resolve()
+    cache = MagicMock()
+    debouncer = MagicMock()
+
+    rules_file = root / "proj" / ".dropboxignore"
+    rules_file.parent.mkdir()
+    rules_file.write_text("build/\n", encoding="utf-8")
+
+    handler = daemon._WatchdogHandler(debouncer, [root], cache)
+    handler.on_any_event(_stub_event("modified", str(rules_file)))
+
+    debouncer.submit.assert_called_once()
+    cache.match.assert_not_called()
+
+
 def test_dispatch_moved_rules_reloads_at_dest(tmp_path, monkeypatch):
     root = tmp_path.resolve()
     cache = MagicMock()

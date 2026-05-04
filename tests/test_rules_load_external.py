@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 
-from dbxignore.rules import IGNORE_FILENAME, RuleCache
+from dbxignore.rules import RuleCache
 
 
 def test_load_external_match_succeeds(tmp_path):
@@ -22,9 +22,13 @@ def test_load_external_match_succeeds(tmp_path):
     assert cache.match((mount_at / "build").resolve()) is True
 
 
-def test_load_external_cache_key_is_mount_path(tmp_path):
-    """The cache stores rules under <mount_at>/.dropboxignore, not the source path."""
-    source = tmp_path / "elsewhere.gitignore"
+def test_load_external_rules_apply_under_mount_not_source(tmp_path):
+    """Rules apply to paths under mount_at, not under source.parent —
+    pins that load_external mounts the synthesized rules at mount_at
+    rather than wherever the source happens to live."""
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    source = source_dir / "rules.gitignore"
     source.write_text("*.log\n", encoding="utf-8")
 
     mount_at = tmp_path / "project"
@@ -33,9 +37,13 @@ def test_load_external_cache_key_is_mount_path(tmp_path):
     cache = RuleCache()
     cache.load_external(source, mount_at)
 
-    expected_key = (mount_at / IGNORE_FILENAME).resolve()
-    assert expected_key in cache._rules
-    assert source.resolve() not in cache._rules
+    log_in_mount = mount_at / "test.log"
+    log_in_mount.touch()
+    assert cache.match(log_in_mount.resolve()) is True
+
+    log_in_source_dir = source_dir / "test.log"
+    log_in_source_dir.touch()
+    assert cache.match(log_in_source_dir.resolve()) is False
 
 
 def test_load_external_unreadable_source_logs_warning_no_raise(tmp_path, caplog):

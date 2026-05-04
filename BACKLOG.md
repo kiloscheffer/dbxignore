@@ -1388,13 +1388,47 @@ Routing the actual marker write through `dbxignore.exe` rather than re-implement
 
 Touches: `src/dbxignore/install/windows_shell.py` (new module); `src/dbxignore/install/__init__.py` (optional dispatcher hook); `src/dbxignore/cli.py` (`install --shell-integration` flag, `uninstall --shell-integration`); new `tests/test_install_windows_shell.py` (windows_only); README §"Windows Explorer integration".
 
+## 66. `dbxignore generate` skips out-of-root warning when no Dropbox roots are discovered
+
+`src/dbxignore/cli.py`'s `generate` command emits a stderr warning when the resolved target sits outside any discovered Dropbox root — but the guard is `if discovered and find_containing(target_resolved, discovered) is None:`. When `_discover_roots()` returns `[]` (no `info.json`, `DBXIGNORE_ROOT` unset, Dropbox not installed), the entire warning branch is short-circuited away. The user gets no signal that the produced `.dropboxignore` will not be observed by reconcile or the daemon. Empty-roots is the degenerate case of "all roots are somewhere else"; the warning's whole purpose ("your file won't be observed") applies even harder when no roots exist at all.
+
+The spec error matrix (PR #94's spec at `docs/superpowers/specs/2026-05-04-gitignore-import.md`) lists "target outside all Dropbox roots → exit 0 + stderr warning" but doesn't have an explicit "no-roots" row, so the current code is not strictly spec-incorrect — just inconsistent with the warning's stated rationale.
+
+**Fix candidates:**
+
+- **Drop the `if discovered and ...` guard, keep the inner check.** When `discovered` is `[]`, `find_containing` returns `None` for any path, so the warning fires with the same wording. Single-line change.
+- **Tailor the message for the no-roots case.** Distinguish "outside all roots" from "no roots discovered at all" with a different stderr line (e.g. `warning: no Dropbox roots discovered; reconcile will not see <target>`). More informative; one extra branch.
+- **Defer.** Users running `generate` on a machine without Dropbox arguably know there's no Dropbox. The asymmetry with `apply` (which exits 2 on no-roots) is intentional — `generate` is documented as not requiring Dropbox.
+
+**Urgency:** low. Cosmetic-leaning; the user could be confused by the silence but the file IS produced correctly.
+
+Touches: `src/dbxignore/cli.py` (`generate` body — adjust the out-of-root warning guard); `tests/test_cli_generate.py` (extend `test_generate_target_outside_roots_warns_but_writes` or add a `test_generate_no_roots_still_warns`).
+
+## 67. `apply --from-gitignore` does not suppress conflict warnings to stderr
+
+In PR #92's `_load_cache` extraction (commit `a6fb74b`), every CLI command was routed through a helper that calls `RuleCache.load_root(..., log_warnings=False)` to suppress per-mutation conflict WARNINGs that would be a stderr duplicate of the structured stdout (`status` already prints conflict rows in a column-aligned table; the per-mutation log line is noise).
+
+PR #94's `_apply_from_gitignore` bypasses `_load_cache` (for good reason — it constructs a fresh single-rule-source cache rather than discovering rules from the tree) but calls `cache.load_external(source, mount_at)` with the default `log_warnings=True`. If the user's gitignore contains a conflicted negation (e.g. `build/` + `!build/keep/`), the WARNING fires to stderr — inconsistent with the regular `apply` path, which suppresses it.
+
+The damage is "stderr noise that the regular `apply` path does not produce." Not a functional defect; not visible unless the user redirects stderr or the test suite asserts against `caplog`.
+
+**Fix candidates:**
+
+- **Pass `log_warnings=False` explicitly.** One-line change in `_apply_from_gitignore`: `cache.load_external(source, mount_at, log_warnings=False)`. Restores stderr parity with `apply`.
+- **Make `log_warnings=False` the default.** Cache-layer methods would all become quiet by default; daemon callers (which DO want the warnings logged) would have to pass `log_warnings=True`. Larger ripple; not worth the inversion for one new caller.
+- **Defer.** No user-visible bug; only matters for stderr-watching scripts.
+
+**Urgency:** low. Behavioral inconsistency, not a defect.
+
+Touches: `src/dbxignore/cli.py` (`_apply_from_gitignore` — add `log_warnings=False` arg). Optional regression test in `tests/test_cli_apply.py` (assert no stderr WARNING from a conflict-bearing gitignore via `caplog`).
+
 ---
 
 ## Status
 
 ### Open
 
-Twenty-eight items. Twenty-six are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18) and waits for a third recurrence before triggering action.
+Thirty items. Twenty-eight are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18) and waits for a third recurrence before triggering action.
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
@@ -1424,6 +1458,8 @@ Twenty-eight items. Twenty-six are passive (no concrete trigger requires action)
 - **#63** — `dbxignore init` to scaffold a starter `.dropboxignore` with detection of common dev directories (`node_modules` / `__pycache__` / `.venv` / `target` / `build` / `dist` / `.pytest_cache` / `.ruff_cache`). Walk capped at depth 3 to avoid scanning into existing `node_modules`; emit one rule per detected pattern + a curated default set. ~80 LOC + packaged template at `src/dbxignore/templates/default.dropboxignore` + tests.
 - **#64** — `dbxignore daemon --dry-run` for previewing daemon behavior without committing markers. Threads `dry_run` bool through `daemon.run`, `_sweep_once`, `_dispatch`. Parity with `apply --dry-run`. ~30 LOC + tests.
 - **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall.
+- **#66** — `dbxignore generate` skips its out-of-root warning when `_discover_roots()` returns `[]`. The `if discovered and ...` short-circuit defeats the warning's "your file won't be observed" purpose precisely when no roots exist at all. One-line guard fix.
+- **#67** — `apply --from-gitignore` does not pass `log_warnings=False` to `RuleCache.load_external`, so conflict WARNINGs land on stderr — inconsistent with the regular `apply` path that routes through `_load_cache` (PR #92's `a6fb74b` extracted that helper specifically to suppress per-mutation conflict WARNINGs). One-line fix.
 
 ### Resolved (reverse chronological)
 
@@ -1501,3 +1537,4 @@ How items entered this tracker:
 - **Items 49–51** added 2026-05-02 from a `/simplify` whole-codebase review pass on `main` (no diff — explicit `the whole codebase` argument). Three parallel agents (reuse, quality, efficiency) ran against `src/dbxignore/` with all twenty open backlog items passed as exclusions to suppress rediscovery. Two solid findings emerged beyond the existing backlog: #49 (a clear duplication, fixed in the same PR) and #50 (a partial overlap that diverges by design in one branch — filed for future install-layer bundling). #51 documents an explicitly-rejected refactor for the design-tension record, mirroring item #40's precedent. Efficiency review found nothing new beyond items already tracked (#41, #43, #45-48).
 - **Items 41-48** added 2026-05-02 from a whole-codebase local code-review pass against `0e6a285` (eight 75-confidence advisories — below the ≥80 ship-bar but verified-real, filed for backlog). Same shape and provenance as the items 20-23 batch from 2026-04-25. Five parallel reviewer agents (CLAUDE.md adherence, shallow bug scan, git-history regressions, prior PR comments, code-comment-vs-code consistency) → 11 findings → 11 parallel scoring agents → 8 cleared as verified-real, 3 filtered out: a flagged race in `RuleCache._applicable` (already filed as item #23, design-accepted) and a dead `RuntimeError` branch in `_common.detect_invocation` (already filed as item #26) both scored 0 as duplicates; a `pythonw.exe`/`detect_invocation` duplication concern scored 50 as defensible architectural inconsistency. Items #41 (functional ENOTSUP arm asymmetry) and #43 (resolve-at-boundary regression) are the two functional gaps; the remaining six are docstring/comment drift surfaced primarily by the consistency-pass agent.
 - **Items 55-65** added 2026-05-04 from a design-review pass over the daemon, CLI, install, rules, and macOS-backend layers. Eleven items spanning defensive-coding gaps (#55, #58), ergonomic feature gaps (#56, #59-#64), one perf optimization companion to item #53 (#62), and one Windows UX feature (#65). All filed at low or low-medium urgency — no fired triggers; bundle each with the next code-touch in its respective layer.
+- **Items 66-67** added 2026-05-04 from a `/code-review` pass over PR #94 itself. Five parallel reviewer agents (CLAUDE.md adherence, shallow bug scan, git-history regressions, prior PR comments, code-comment-vs-code consistency) → 8 findings → 8 parallel scoring agents → both items came in at score 75, one shy of the ≥80 ship-bar but verified-real, filed for backlog. Same shape as the items 41-48 batch from 2026-05-02. Both are one-line behavioral consistency tweaks; bundle with the next CLI-touching change.

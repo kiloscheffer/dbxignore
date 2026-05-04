@@ -74,6 +74,43 @@ def default_path() -> Path:
     return user_state_dir() / "state.json"
 
 
+def is_daemon_alive(pid: int | None) -> bool:
+    """Return True if ``pid`` is a live dbxignore daemon process.
+
+    Verifies BOTH that the PID exists AND that the process at that PID is
+    plausibly a dbxignore daemon: a recycled PID claimed by an unrelated
+    process registers as alive under a bare existence check, which is the
+    PID-reuse false positive we want to avoid. Frozen PyInstaller installs
+    run as ``dbxignored.exe``; source runs are typically ``python -m
+    dbxignore daemon`` (or pytest under the test suite).
+
+    Lazy-imports ``psutil``; falls back to ``os.kill(pid, 0)`` for the
+    bare-existence check when ``psutil`` isn't installed (in which case
+    PID-reuse can't be detected — a known limitation, not a behavior
+    bug). Used by ``cli.status`` to render the "running / not running /
+    state may be stale" UI and by ``daemon._is_other_live_daemon`` for
+    the singleton check.
+    """
+    if pid is None:
+        return False
+    try:
+        import psutil
+    except ImportError:
+        try:
+            os.kill(pid, 0)
+        except (OSError, ProcessLookupError):
+            return False
+        return True
+    if not psutil.pid_exists(pid):
+        return False
+    try:
+        proc = psutil.Process(pid)
+        name = proc.name().lower()
+    except psutil.Error:
+        return False
+    return "python" in name or "dbxignored" in name
+
+
 def write(state: State, path: Path | None = None) -> None:
     path = path or default_path()
     path.parent.mkdir(parents=True, exist_ok=True)

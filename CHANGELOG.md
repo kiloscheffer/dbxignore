@@ -7,6 +7,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- **`dbxignore status` daemon-liveness check is more accurate and the "not running" message clearer.** New shared helper `state.is_daemon_alive(pid)` verifies BOTH that the PID exists AND that the process at that PID is plausibly a dbxignore daemon (matches `python` or `dbxignored` in the process name). Previously `cli._process_is_alive` did only `psutil.pid_exists` — a recycled PID claimed by an unrelated process registered as "alive" (false positive). The "not running" branch now reads `daemon: not running (last pid=X — state.json may be stale)` instead of just `daemon: not running (pid=X)`, distinguishing a cleanly-stopped daemon from stale state. Internal: `daemon._is_other_live_daemon` deduplicated to delegate to the new helper, with the singleton-check-specific `pid == os.getpid()` self-exclusion preserved.
+
 ### Added
 
 - **`dbxignore status` shows the macOS sync-mode detection result on darwin.** A new `sync mode: <mode>: <reason>` line in `dbxignore status` (and an INFO log line `sync mode detection: ...` at daemon startup) surfaces what the path-primary + pluginkit-disambiguating detection landed on (`legacy:` / `file_provider:` / `both:`) without needing `DBXIGNORE_LOG_LEVEL=DEBUG`. The line prints only on darwin — Windows and Linux are single-attribute platforms with nothing to detect. Cross-platform via the new `markers.detection_summary()` facade returning `None` on non-darwin.

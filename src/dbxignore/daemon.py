@@ -54,6 +54,26 @@ def _resolve_under_roots(
     return root, p.resolve()
 
 
+def _moved_dest_under_root(event: Any, roots: list[Path]) -> tuple[Path, Path] | None:
+    """Return ``(dest_root, resolved_dest)`` if ``event`` is a moved event
+    whose ``dest_path`` is a ``.dropboxignore`` under a watched root.
+
+    Used by ``_classify`` to recognize rule-file move-into events whether or
+    not the event's ``src_path`` resolves under a watched root — atomic-save
+    renames within a root and cross-watch moves from outside (where watchdog
+    may emit empty/external ``src_path``) are both rule-file events.
+    """
+    if event.event_type != "moved" or not event.dest_path:
+        return None
+    dest_path = Path(event.dest_path)
+    if dest_path.name != IGNORE_FILENAME:
+        return None
+    dest_root = find_containing(dest_path, roots)
+    if dest_root is None:
+        return None
+    return dest_root, dest_path.resolve()
+
+
 def _classify(
     event: Any, roots: list[Path]
 ) -> tuple[EventKind, str, Path, Path] | None:
@@ -63,33 +83,46 @@ def _classify(
     and ``run()`` below). The returned ``resolved_src`` is hoisted out of
     ``_dispatch`` so downstream consumers don't repeat the syscall.
     """
+    dest_rule = _moved_dest_under_root(event, roots)
     located = _resolve_under_roots(event.src_path, roots)
     if located is None:
+        # src is outside all watched roots, or unresolvable (watchdog emits
+        # empty src_path for cross-watch moves: e.g. a `.dropboxignore` moved
+        # in from `~/Downloads` or any non-watched directory). If dest is a
+        # rule file inside a watched root, treat the event as a rule-file
+        # event keyed at dest. Without this fallback, such a move is dropped
+        # and the new rule file is invisible until the hourly sweep.
+        if dest_rule is not None:
+            dest_root, dest = dest_rule
+            return (
+                EventKind.RULES,
+                f"moved-into:{str(dest).lower()}",
+                dest_root,
+                dest,
+            )
         return None
     root, src = located
     if src.name == IGNORE_FILENAME:
         return EventKind.RULES, str(src).lower(), root, src
-    # A moved event whose dest_path basename is `.dropboxignore` is a rule-file
-    # event even when its src_path isn't — atomic-save editors rename a temp
-    # file into place (`.dropboxignore.tmp` -> `.dropboxignore`), so the rule
-    # cache only sees the rename. Without this branch the event would land in
-    # OTHER and the new rules would not load until the next hourly sweep.
-    if event.event_type == "moved" and event.dest_path:
-        dest_path = Path(event.dest_path)
-        if dest_path.name == IGNORE_FILENAME and find_containing(dest_path, roots) is not None:
-            # Key on the dest path (the rule file), not on src (the temp file
-            # name). Atomic-save editors generate unique tmp filenames per
-            # save; keying on src would defeat the RULES debounce window for
-            # consecutive saves of the same `.dropboxignore`.
-            #
-            # Prefix with `moved-into:` so the key cannot collide with the
-            # first branch's bare-path key (which uses the same path string
-            # when src IS the rule file). Without the prefix, a move-out
-            # `A/.dropboxignore` -> `B/...` (key `A/...`) and a move-into
-            # `tmp` -> `A/.dropboxignore` (key would also be `A/...`) land
-            # on the same debouncer token, and last-wins coalesce drops
-            # one event's dest-side handling.
-            return EventKind.RULES, f"moved-into:{str(dest_path).lower()}", root, src
+    # Moved event with src inside a root but not a rule file, dest is a rule
+    # file (atomic-save: `.dropboxignore.tmp` -> `.dropboxignore`). Without
+    # this branch the event lands in OTHER and the new rules don't load
+    # until the next hourly sweep.
+    if dest_rule is not None:
+        # Key on the dest path (the rule file), not on src (the temp file
+        # name). Atomic-save editors generate unique tmp filenames per
+        # save; keying on src would defeat the RULES debounce window for
+        # consecutive saves of the same `.dropboxignore`.
+        #
+        # Prefix with `moved-into:` so the key cannot collide with the
+        # first branch's bare-path key (which uses the same path string
+        # when src IS the rule file). Without the prefix, a move-out
+        # `A/.dropboxignore` -> `B/...` (key `A/...`) and a move-into
+        # `tmp` -> `A/.dropboxignore` (key would also be `A/...`) land
+        # on the same debouncer token, and last-wins coalesce drops
+        # one event's dest-side handling.
+        _, dest = dest_rule
+        return EventKind.RULES, f"moved-into:{str(dest).lower()}", root, src
     if event.event_type == "created" and event.is_directory:
         return EventKind.DIR_CREATE, str(src).lower(), root, src
     if event.event_type in ("created", "moved"):

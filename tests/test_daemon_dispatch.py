@@ -238,3 +238,226 @@ def test_dispatch_moved_rules_reloads_at_dest(tmp_path, monkeypatch):
         [(root, old_file.parent), (root, new_file.parent)],
         key=lambda rc: str(rc[1]),
     )
+
+
+def test_classify_moved_dest_is_rule_file_classifies_as_rules(tmp_path):
+    """A moved event whose dest_path is .dropboxignore must classify as RULES
+    even when src_path is not — atomic-save editors rename a temp file into
+    place, so the rule cache only sees the rename event and would otherwise
+    miss the new rules until the next hourly sweep."""
+    root = tmp_path.resolve()
+    proj = root / "proj"
+    proj.mkdir()
+    src = proj / ".dropboxignore.tmp"
+    dest = proj / ".dropboxignore"
+    dest.write_text("build/\n", encoding="utf-8")
+
+    ev = _stub_event("moved", str(src), dest_path=str(dest))
+    classification = daemon._classify(ev, roots=[root])
+
+    assert classification is not None
+    kind, _key, classified_root, _src = classification
+    assert kind == EventKind.RULES
+    assert classified_root == root
+
+
+def test_classify_moved_into_rules_keys_on_dest_for_debounce_coalesce(tmp_path):
+    """Atomic-save editors generate a unique tmp filename per save (vim's
+    `4913`, mktemp randomness, kakoune's `<pid>`-suffixed tmp). The classify
+    key must be derived from the destination rule-file path so a burst of
+    saves of the same `.dropboxignore` coalesces in the RULES debounce
+    window; keying on src would assign every save a distinct token."""
+    root = tmp_path.resolve()
+    proj = root / "proj"
+    proj.mkdir()
+    dest = proj / ".dropboxignore"
+    dest.write_text("build/\n", encoding="utf-8")
+
+    save_a = _stub_event("moved", str(proj / "4913"), dest_path=str(dest))
+    save_b = _stub_event("moved", str(proj / "8231"), dest_path=str(dest))
+
+    _, key_a, _, _ = daemon._classify(save_a, roots=[root])
+    _, key_b, _, _ = daemon._classify(save_b, roots=[root])
+
+    assert key_a == key_b
+    assert str(dest).lower() in key_a
+
+
+def test_classify_moved_with_empty_src_to_rule_dest_classifies_as_rules(tmp_path):
+    """Cross-watch move shape: watchdog emits a moved event with empty
+    `src_path` when the source side was in a non-watched directory (the
+    kernel's IN_MOVED_TO without a matching IN_MOVED_FROM, similar shapes
+    on Windows / macOS). The early `located is None` guard would drop the
+    event; this branch must re-check the dest before discarding."""
+    root = tmp_path.resolve()
+    proj = root / "proj"
+    proj.mkdir()
+    dest = proj / ".dropboxignore"
+    dest.write_text("build/\n", encoding="utf-8")
+
+    ev = _stub_event("moved", "", dest_path=str(dest))
+    classification = daemon._classify(ev, roots=[root])
+
+    assert classification is not None
+    kind, _key, classified_root, classified_src = classification
+    assert kind == EventKind.RULES
+    assert classified_root == root
+    assert classified_src == dest.resolve()
+
+
+def test_classify_moved_with_external_src_to_rule_dest_classifies_as_rules(tmp_path):
+    """Same cross-watch case but with a non-empty src_path that's outside
+    every watched root (e.g., a download directory or system temp location).
+    `_resolve_under_roots` returns None for the src; the dest-path fallback
+    must still classify as RULES."""
+    watched = (tmp_path / "watched").resolve()
+    watched.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+
+    proj = watched / "proj"
+    proj.mkdir()
+    dest = proj / ".dropboxignore"
+    dest.write_text("build/\n", encoding="utf-8")
+
+    src_outside = external / "downloaded.dropboxignore"
+
+    ev = _stub_event("moved", str(src_outside), dest_path=str(dest))
+    classification = daemon._classify(ev, roots=[watched])
+
+    assert classification is not None
+    kind, _key, classified_root, classified_src = classification
+    assert kind == EventKind.RULES
+    assert classified_root == watched
+    assert classified_src == dest.resolve()
+
+
+def test_dispatch_moved_with_external_src_reloads_dest(tmp_path, monkeypatch):
+    """End-to-end: dispatch on a cross-watch move (src outside, dest is rule)
+    must call `cache.reload_file(dest)` and reconcile dest.parent. Without
+    this, a rule file moved in from an external location is invisible until
+    the hourly sweep."""
+    watched = (tmp_path / "watched").resolve()
+    watched.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+
+    cache = MagicMock()
+    reconcile_calls: list = []
+    monkeypatch.setattr(
+        daemon, "reconcile_subtree", lambda r, sub, c: reconcile_calls.append((r, sub))
+    )
+
+    proj = watched / "proj"
+    proj.mkdir()
+    dest = proj / ".dropboxignore"
+    dest.write_text("build/\n", encoding="utf-8")
+
+    src_outside = external / "downloaded.dropboxignore"
+    ev = _stub_event("moved", str(src_outside), dest_path=str(dest))
+
+    daemon._dispatch(ev, cache, roots=[watched])
+
+    cache.reload_file.assert_called_once_with(dest.resolve())
+    assert reconcile_calls == [(watched, dest.parent.resolve())]
+
+
+def test_classify_moved_out_and_moved_into_same_path_have_distinct_keys(tmp_path):
+    """A move-out (`A/.dropboxignore` -> `B/.dropboxignore`, src is rule)
+    keys via the src-path branch; a move-into (`tmp` -> `A/.dropboxignore`,
+    dest is rule) keys via the dest-path branch. Both events touching the
+    same `A/.dropboxignore` path must produce DIFFERENT debouncer tokens —
+    they're semantically distinct (move-out's dest-side reload of B would
+    be lost if last-wins coalescing collapsed them). Pin the disambiguation
+    so a future refactor can't reintroduce the collision."""
+    root = tmp_path.resolve()
+    a = root / "A"
+    b = root / "B"
+    a.mkdir()
+    b.mkdir()
+    a_rule = a / ".dropboxignore"
+    b_rule = b / ".dropboxignore"
+    b_rule.write_text("build/\n", encoding="utf-8")
+    tmp_at_a = a / "tmp.4913"
+
+    move_out = _stub_event("moved", str(a_rule), dest_path=str(b_rule))
+    move_in = _stub_event("moved", str(tmp_at_a), dest_path=str(a_rule))
+
+    _, key_out, _, _ = daemon._classify(move_out, roots=[root])
+    _, key_in, _, _ = daemon._classify(move_in, roots=[root])
+
+    assert key_out != key_in
+
+
+def test_dispatch_moved_non_rules_to_rules_reloads_dest(tmp_path, monkeypatch):
+    """Atomic-save: rename `.dropboxignore.tmp` -> `.dropboxignore`. Cache
+    must reload at the dest; src was never cached so remove_file is a no-op."""
+    root = tmp_path.resolve()
+    cache = MagicMock()
+    reconcile_calls: list = []
+    monkeypatch.setattr(daemon, "reconcile_subtree",
+                        lambda r, sub, c: reconcile_calls.append((r, sub)))
+
+    proj = root / "proj"
+    proj.mkdir()
+    src = proj / ".dropboxignore.tmp"
+    dest = proj / ".dropboxignore"
+    dest.write_text("build/\n", encoding="utf-8")
+
+    ev = _stub_event("moved", str(src), dest_path=str(dest))
+    daemon._dispatch(ev, cache, roots=[root])
+
+    cache.reload_file.assert_called_once_with(dest)
+    cache.remove_file.assert_not_called()
+    assert reconcile_calls == [(root, proj)]
+
+
+def test_dispatch_moved_non_rules_to_rules_reloads_before_reconciling(tmp_path, monkeypatch):
+    """Atomic-save same-parent: the cache reload MUST happen before the
+    reconcile, otherwise the same-parent dedupe collapses to a single
+    reconcile call running against the stale cache and the new rules
+    don't take effect until another event or the hourly sweep."""
+    root = tmp_path.resolve()
+    cache = MagicMock()
+    call_order: list[str] = []
+    cache.reload_file = MagicMock(side_effect=lambda *a, **k: call_order.append("reload"))
+    monkeypatch.setattr(
+        daemon, "reconcile_subtree", lambda r, sub, c: call_order.append("reconcile")
+    )
+
+    proj = root / "proj"
+    proj.mkdir()
+    src = proj / ".dropboxignore.tmp"
+    dest = proj / ".dropboxignore"
+    dest.write_text("build/\n", encoding="utf-8")
+
+    ev = _stub_event("moved", str(src), dest_path=str(dest))
+    daemon._dispatch(ev, cache, roots=[root])
+
+    assert call_order == ["reload", "reconcile"]
+
+
+def test_dispatch_moved_rules_to_non_rules_does_not_reload_backup(tmp_path, monkeypatch):
+    """Editor save-via-rename step: `.dropboxignore` -> `.dropboxignore~`.
+    Dispatch must drop the old rule file from the cache and must NOT call
+    `cache.reload_file` on the backup. Pins the dispatch contract only;
+    the downstream `_build_sequence` cleanliness is a consequence covered
+    by the rule-cache layer."""
+    root = tmp_path.resolve()
+    cache = MagicMock()
+    reconcile_calls: list = []
+    monkeypatch.setattr(daemon, "reconcile_subtree",
+                        lambda r, sub, c: reconcile_calls.append((r, sub)))
+
+    proj = root / "proj"
+    proj.mkdir()
+    src = proj / ".dropboxignore"
+    dest = proj / ".dropboxignore~"
+    dest.write_text("build/\n", encoding="utf-8")
+
+    ev = _stub_event("moved", str(src), dest_path=str(dest))
+    daemon._dispatch(ev, cache, roots=[root])
+
+    cache.remove_file.assert_called_once_with(src)
+    cache.reload_file.assert_not_called()
+    assert reconcile_calls == [(root, proj)]

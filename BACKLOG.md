@@ -1612,13 +1612,39 @@ The on-disk marker behavior is correct — `reconcile._reconcile_path` evaluates
 
 Touches: `src/dbxignore/rules_conflicts.py` (`literal_prefix`, `_detect_conflicts`); possibly `src/dbxignore/rules.py` (only if conservative-drop needs additional cache state); `tests/test_rules_conflicts.py::test_detect_skips_glob_prefix_negation` (flip the assertion or rewrite as a fix-verification test).
 
+## 77. Debouncer key disambiguation relies on string prefixing rather than a structured shape
+
+**Surfaced 2026-05-05 in Codex review of PR #120 (P2 finding) and the follow-up fix in commit `0c8a748`.**
+
+`Debouncer._pending` is keyed on `(EventKind, key: str)`. `_classify` currently produces three distinct semantic key shapes for `EventKind.RULES`:
+
+- single-path events (created / modified / deleted on a `.dropboxignore`): `str(src).lower()`
+- moved events with src=rule (move-out): `str(src).lower()` — same shape as above
+- moved events with dest=rule, src=non-rule (move-into / atomic save): `f"moved-into:{str(dest_path).lower()}"`
+
+PR #120 added the third shape and prefixed it with `moved-into:` specifically to prevent collision with the second shape (Codex's exact concern). The remaining cross-shape collision potential is between the first two: a move-out `A/.dropboxignore` -> `B/...` and a created/modified event for `A/.dropboxignore` within the 100ms RULES debounce window both key on `str(A/.dropboxignore).lower()`. The Debouncer's last-wins overwrite then drops one event's dispatch. In practice this needs a scripted sequence (`mv A/.dropboxignore B/ && touch A/.dropboxignore`) — editor save patterns don't naturally produce it — so it's rare, but it is a real correctness gap.
+
+The deeper issue is the keying model itself: stringly-typed disambiguation doesn't scale. Each new dispatch path needing distinct semantics requires another prefix and another cross-branch collision audit. The next refactor that introduces a fourth key shape will face the same review-driven catch-up that PR #120 went through.
+
+**Fix candidates:**
+
+- **Structured tuple key.** Change Debouncer's key type to `tuple[str, ...]` with a leading `role` discriminator: `("single", path)`, `("moved-out", path)`, `("moved-into", path)`. Type-checker enforces the shape; no string-prefix encoding; new dispatch paths add a new role token rather than picking a non-colliding string. Touches `Debouncer.submit` / `_pending` types and every `_classify` return; the `_key` discard at `daemon._dispatch` line 100 is unaffected since the dispatch never inspects the key. ~30 LOC plus test updates.
+- **Per-role debounce queue.** Split `_pending` into separate dicts indexed by role (each keyed only on path). Mechanically equivalent to the tuple shape but spreads state across more fields.
+- **Status quo + audit comment.** Keep the prefix scheme; add an inline comment near `_classify` enumerating every key shape and which cross-shape collisions are acceptable vs. shielded. Cheapest — documents the design weakness without fixing it. The remaining first-vs-second-shape collision still ships.
+
+Candidate 1 is the most direct fit for the failure mode: the bug surfaces because two distinct semantic operations produce the same string by accident, and tuples naturally prevent that. The migration is bounded — the Debouncer's key type is the only public-ish surface, and its sole external producer is `_classify`.
+
+**Urgency:** low. Rare in practice, no observed regression, current code's `moved-into:` prefix addresses the only collision a reviewer flagged. Worth picking up the next time the debounce/classify layer needs another dispatch path or another keying concern surfaces.
+
+Touches: `src/dbxignore/debounce.py` (`Debouncer._pending` type, `submit` signature, `_run` emit signature); `src/dbxignore/daemon.py` (`_classify` return shape, possibly `_WatchdogHandler.on_any_event` if it inspects the key — currently it doesn't); `tests/test_daemon_dispatch.py` (the four key-equality tests would switch from string comparisons to tuple comparisons).
+
 ---
 
 ## Status
 
 ### Open
 
-Twenty-nine items. Twenty-six are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18); item #73 had multiple fired triggers in one session (the local PR-review hook over-fired on Bash commands that didn't match its declared `if` filter — friction not blocking). Item #34's third recurrence fired 2026-05-04 during PR #95 pre-flight; widening 5.0s → 7.0s → 10.0s all failed under full-suite load (different polls exhausted on each run), so the suggested band-aid fix shape was abandoned and #34 stays open pending root-cause diagnosis (the test passes in 0.27s in isolation but >7s in the full suite, so the cause lives in test-order interaction with an earlier test).
+Thirty items. Twenty-seven are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18); item #73 had multiple fired triggers in one session (the local PR-review hook over-fired on Bash commands that didn't match its declared `if` filter — friction not blocking). Item #34's third recurrence fired 2026-05-04 during PR #95 pre-flight; widening 5.0s → 7.0s → 10.0s all failed under full-suite load (different polls exhausted on each run), so the suggested band-aid fix shape was abandoned and #34 stays open pending root-cause diagnosis (the test passes in 0.27s in isolation but >7s in the full suite, so the cause lives in test-order interaction with an earlier test).
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
@@ -1649,6 +1675,7 @@ Twenty-nine items. Twenty-six are passive (no concrete trigger requires action);
 - **#74** — GitHub Actions pinned to mutable major-version tags (`@v4`, `@v1`, `@v2.6.0`, `@release/v1`) rather than 40-char SHAs across all workflow files. Speculative security hardening — switching to SHAs would be a project-wide convention shift requiring a Dependabot maintenance practice. Surfaced 2026-05-05 in `code-reviewer` review of PR #111. No observed incident or specific pressure.
 - **#75** — `phase_extended_cli()` body byte-identical between `manual-test-{ubuntu-vps,macos}.sh` (~120 LOC duplicated). Could extract to `scripts/_phase_extended_cli.sh` and `source` from both. Trade-off is duplication-vs-platform-conditional balance; only two scripts share (Windows is PowerShell). Surfaced 2026-05-05 in `/simplify` review of PRs #114 + #115.
 - **#76** — Conflict detector skips negations whose pattern starts with a glob (`**/foo/bar/`, `foo*/bar/`); `RuleCache.match()` then reports such paths as not-ignored even though Dropbox inheritance makes them ignored on disk. Marker behavior is correct (reconcile evaluates per-file `match()`); the bug surface is `status` / `explain` diagnostics. Three fix candidates filed in the body (conservative drop / targeted detection / warn-only). Surfaced 2026-05-05 in code review of the daemon classification path.
+- **#77** — Debouncer key disambiguation in `_classify` relies on string prefixing (`moved-into:` added in PR #120) rather than a structured tuple shape. The remaining first-vs-second-shape collision (move-out + created/modified on the same `.dropboxignore` within 100ms) still ships. Three fix candidates: structured tuple key (preferred), per-role queues, status-quo-plus-audit-comment. Surfaced 2026-05-05 in Codex review of PR #120.
 
 ### Resolved (reverse chronological)
 

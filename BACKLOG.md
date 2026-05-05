@@ -1457,13 +1457,30 @@ Touches: `src/dbxignore/cli.py` (`_apply_from_gitignore` — add `log_warnings=F
 
 Touches: `src/dbxignore/cli.py` (`status --summary` branch); `src/dbxignore/state.py` (option 2: add `last_conflicts_count` field + decode tolerance); README §"Status-bar integration" (document whichever shape lands).
 
+## 69. No real-pathspec regression test for glob-prefix negations through the post-PR-#108 detector branch
+
+**Surfaced by:** `pr-test-analyzer` review of PR #108 (deferred suggestion, severity 5).
+
+PR #108's detector fix added a new branch in `rules_conflicts._detect_conflicts`: `is_directory_negation = raw.rstrip() == prefix` selects between `_ancestors_of(strict=True)` for directory negations and `_ancestors_of(strict=False)` for broader negations. `tests/test_rules_conflicts.py::test_detect_skips_glob_prefix_negation` covers the `literal_prefix() == None` early-exit for `!**/foo/bar/`, but it uses the `_FakePattern` shim and doesn't exercise the new branch with a real pathspec pattern.
+
+The contract being verified: a glob-prefix negation like `!**/foo/` should still be skipped (no conflict, no false positive) regardless of which strict-ancestor branch the detector enters. Today this is implicit — `literal_prefix()` returns `None` and the function `continue`s before either branch runs — but a future refactor of `literal_prefix()` could quietly start returning a prefix for patterns that begin with a glob, and the strict-ancestor logic would then fire on a wrong prefix. A real-pathspec test in `test_rules_reload_explain.py` (parallel to the post-fix tests already there) would pin the contract end-to-end.
+
+**Fix candidates:**
+
+- **Add a `test_rulecache_glob_prefix_negation_skipped` test** in `test_rules_reload_explain.py`: write `.dropboxignore` with `build/` + `!**/keep/`, assert `cache.conflicts() == []` (negation skipped, not flagged). Repeat with `build/*` + `!**/keep/` for symmetry. ~20 LOC.
+- **Defer.** No observed user report; the existing shim test covers the behavior at the unit level.
+
+**Urgency:** low. Polish — the contract holds today; this would lock it down against future refactors of `literal_prefix()` semantics.
+
+Touches: `tests/test_rules_reload_explain.py` (new test).
+
 ---
 
 ## Status
 
 ### Open
 
-Twenty-one items. Nineteen are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18). Item #34's third recurrence fired 2026-05-04 during PR #95 pre-flight; widening 5.0s → 7.0s → 10.0s all failed under full-suite load (different polls exhausted on each run), so the suggested band-aid fix shape was abandoned and #34 stays open pending root-cause diagnosis (the test passes in 0.27s in isolation but >7s in the full suite, so the cause lives in test-order interaction with an earlier test).
+Twenty-two items. Twenty are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18). Item #34's third recurrence fired 2026-05-04 during PR #95 pre-flight; widening 5.0s → 7.0s → 10.0s all failed under full-suite load (different polls exhausted on each run), so the suggested band-aid fix shape was abandoned and #34 stays open pending root-cause diagnosis (the test passes in 0.27s in isolation but >7s in the full suite, so the cause lives in test-order interaction with an earlier test).
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
@@ -1486,6 +1503,7 @@ Twenty-one items. Nineteen are passive (no concrete trigger requires action); it
 - **#66** — `dbxignore generate` skips its out-of-root warning when `_discover_roots()` returns `[]`. The `if discovered and ...` short-circuit defeats the warning's "your file won't be observed" purpose precisely when no roots exist at all. One-line guard fix.
 - **#67** — `apply --from-gitignore` does not pass `log_warnings=False` to `RuleCache.load_external`, so conflict WARNINGs land on stderr — inconsistent with the regular `apply` path that routes through `_load_cache` (PR #92's `a6fb74b` extracted that helper specifically to suppress per-mutation conflict WARNINGs). One-line fix.
 - **#68** — `dbxignore status --summary` runs the full `_load_cache(discovered).conflicts()` walk every poll. Status-bar widgets polling at high cadence pay an rglob over `.dropboxignore` files per tick. Three fix candidates filed in the body (skip conflict walk in summary mode / cache count in state.json / mtime-gated rebuild). Surfaced by `/simplify` review of PR #99's hoist, no user report yet.
+- **#69** — No real-pathspec regression test for glob-prefix negations through the post-PR-#108 detector branch. `tests/test_rules_conflicts.py::test_detect_skips_glob_prefix_negation` covers the `literal_prefix() == None` early-exit via the shim, but doesn't pin that the new `is_directory_negation` / strict-ancestor branch is correctly bypassed for `!**/foo/`. Defensive lock-down against future `literal_prefix()` refactors. Surfaced by `pr-test-analyzer` review of PR #108.
 
 ### Resolved (reverse chronological)
 

@@ -69,6 +69,15 @@ def _classify(
     root, src = located
     if src.name == IGNORE_FILENAME:
         return EventKind.RULES, str(src).lower(), root, src
+    # A moved event whose dest_path basename is `.dropboxignore` is a rule-file
+    # event even when its src_path isn't — atomic-save editors rename a temp
+    # file into place (`.dropboxignore.tmp` -> `.dropboxignore`), so the rule
+    # cache only sees the rename. Without this branch the event would land in
+    # OTHER and the new rules would not load until the next hourly sweep.
+    if event.event_type == "moved" and event.dest_path:
+        dest_path = Path(event.dest_path)
+        if dest_path.name == IGNORE_FILENAME and find_containing(dest_path, roots) is not None:
+            return EventKind.RULES, str(src).lower(), root, src
     if event.event_type == "created" and event.is_directory:
         return EventKind.DIR_CREATE, str(src).lower(), root, src
     if event.event_type in ("created", "moved"):
@@ -87,12 +96,22 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
             cache.remove_file(src)
             reconcile_subtree(root, src.parent, cache)
         elif event.event_type == "moved":
-            cache.remove_file(src)
+            # src and dest are handled independently: each side is a rule
+            # file iff its basename is `.dropboxignore`. Possible shapes:
+            #   rule -> rule           : remove src, reload dest
+            #   rule -> non-rule       : remove src only (editor backup
+            #                            rename `.dropboxignore` -> `.bak`)
+            #   non-rule -> rule       : reload dest only (atomic save:
+            #                            `.dropboxignore.tmp` -> rule file)
+            src_is_rules = src.name == IGNORE_FILENAME
+            if src_is_rules:
+                cache.remove_file(src)
             reconcile_subtree(root, src.parent, cache)
             dest_located = _resolve_under_roots(event.dest_path, roots)
             if dest_located is not None:
                 dest_root, dest = dest_located
-                cache.reload_file(dest)
+                if dest.name == IGNORE_FILENAME:
+                    cache.reload_file(dest)
                 if (dest_root, dest.parent) != (root, src.parent):
                     reconcile_subtree(dest_root, dest.parent, cache)
         else:

@@ -118,7 +118,9 @@ def install_task() -> None:
     # user doesn't see an install error for a partial-success state.
     run_result = subprocess.run(  # noqa: S603 — hardcoded args, no user data
         ["schtasks", "/Run", "/TN", TASK_NAME],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if run_result.returncode == 0:
         logger.info("Started scheduled task %s", TASK_NAME)
@@ -136,7 +138,9 @@ def uninstall_task() -> None:
     """Remove the Task Scheduler entry; raises RuntimeError if schtasks fails."""
     result = subprocess.run(  # noqa: S603 — hardcoded args, no user data
         ["schtasks", "/Delete", "/TN", TASK_NAME, "/F"],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode != 0:
         raise RuntimeError(

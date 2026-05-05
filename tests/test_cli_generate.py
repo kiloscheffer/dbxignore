@@ -1,5 +1,6 @@
 """Tests for `dbxignore generate` — translates a .gitignore to a
 .dropboxignore."""
+
 from __future__ import annotations
 
 from click.testing import CliRunner
@@ -75,9 +76,7 @@ def test_generate_mutex_stdout_and_o_errors(tmp_path):
     bogus_out = tmp_path / "out"
 
     runner = CliRunner()
-    result = runner.invoke(
-        cli.main, ["generate", str(source), "-o", str(bogus_out), "--stdout"]
-    )
+    result = runner.invoke(cli.main, ["generate", str(source), "-o", str(bogus_out), "--stdout"])
 
     assert result.exit_code == 2
     assert "mutually exclusive" in result.output
@@ -130,9 +129,7 @@ def test_generate_invalid_pattern_writes_nothing(tmp_path, monkeypatch):
 
 def test_generate_missing_source_errors(tmp_path):
     runner = CliRunner()
-    result = runner.invoke(
-        cli.main, ["generate", str(tmp_path / "nonexistent.gitignore")]
-    )
+    result = runner.invoke(cli.main, ["generate", str(tmp_path / "nonexistent.gitignore")])
 
     assert result.exit_code == 2
     assert "not found" in result.output

@@ -43,8 +43,10 @@ def fake_markers(monkeypatch):
 @pytest.fixture
 def write_file():
     """Write a file, creating parent dirs; returns a callable ``(path, content="")``."""
+
     def _write(path: Path, content: str = "") -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return path
+
     return _write

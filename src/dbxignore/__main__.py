@@ -8,6 +8,7 @@ def main() -> None:
     if exe_name == "dbxignored" and len(sys.argv) == 1:
         sys.argv.append("daemon")
     from dbxignore.cli import main as _main
+
     _main()
 
 

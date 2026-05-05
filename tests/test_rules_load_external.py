@@ -2,6 +2,7 @@
 ``dbxignore apply --from-gitignore``. The seam loads an arbitrary file's
 lines as if it were a .dropboxignore at a specified mount directory.
 """
+
 from __future__ import annotations
 
 import logging

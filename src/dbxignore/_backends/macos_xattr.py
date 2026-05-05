@@ -138,8 +138,7 @@ def _pluginkit_extension_state() -> str:
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return "unknown"
     matching = [
-        line for line in result.stdout.splitlines()
-        if _DROPBOX_FILEPROVIDER_BUNDLE_ID in line
+        line for line in result.stdout.splitlines() if _DROPBOX_FILEPROVIDER_BUNDLE_ID in line
     ]
     if not matching:
         return "not_registered"

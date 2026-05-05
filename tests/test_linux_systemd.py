@@ -36,9 +36,7 @@ def test_unit_file_content_appends_arguments(tmp_path):
         Path("/home/u/.local/bin/python"),
         "-m dbxignore daemon",
     )
-    assert (
-        "ExecStart=/home/u/.local/bin/python -m dbxignore daemon" in content
-    )
+    assert "ExecStart=/home/u/.local/bin/python -m dbxignore daemon" in content
 
 
 def test_unit_content_has_no_environment_line_by_default():
@@ -89,10 +87,7 @@ def test_unit_content_escapes_backslash_and_quote_in_environment_value():
         Path("/usr/local/bin/dbxignored"),
         environment={"DBXIGNORE_ROOT": r'/path with "quote" and \slash'},
     )
-    assert (
-        r'Environment="DBXIGNORE_ROOT=/path with \"quote\" and \\slash"'
-        in content
-    )
+    assert r'Environment="DBXIGNORE_ROOT=/path with \"quote\" and \\slash"' in content
 
 
 def test_unit_content_accepts_none_environment():
@@ -116,9 +111,11 @@ def test_install_propagates_dbxignore_root_env(tmp_path, monkeypatch):
         lambda: (Path("/usr/local/bin/dbxignored"), ""),
     )
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda cmd, check, capture_output=False, text=False:
-            subprocess.CompletedProcess(cmd, 0, "", ""),
+        subprocess,
+        "run",
+        lambda cmd, check, capture_output=False, text=False: subprocess.CompletedProcess(
+            cmd, 0, "", ""
+        ),
     )
 
     from dbxignore.install import linux_systemd
@@ -139,9 +136,11 @@ def test_install_omits_environment_when_dbxignore_root_unset(tmp_path, monkeypat
         lambda: (Path("/usr/local/bin/dbxignored"), ""),
     )
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda cmd, check, capture_output=False, text=False:
-            subprocess.CompletedProcess(cmd, 0, "", ""),
+        subprocess,
+        "run",
+        lambda cmd, check, capture_output=False, text=False: subprocess.CompletedProcess(
+            cmd, 0, "", ""
+        ),
     )
 
     from dbxignore.install import linux_systemd
@@ -163,9 +162,11 @@ def test_install_ignores_empty_dbxignore_root(tmp_path, monkeypatch):
         lambda: (Path("/usr/local/bin/dbxignored"), ""),
     )
     monkeypatch.setattr(
-        subprocess, "run",
-        lambda cmd, check, capture_output=False, text=False:
-            subprocess.CompletedProcess(cmd, 0, "", ""),
+        subprocess,
+        "run",
+        lambda cmd, check, capture_output=False, text=False: subprocess.CompletedProcess(
+            cmd, 0, "", ""
+        ),
     )
 
     from dbxignore.install import linux_systemd
@@ -282,6 +283,7 @@ def test_remove_dropin_directory_removes_existing(tmp_path, monkeypatch):
     )
 
     from dbxignore.install import linux_systemd
+
     result = linux_systemd.remove_dropin_directory()
 
     assert result == dropin_dir
@@ -293,6 +295,7 @@ def test_remove_dropin_directory_absent_returns_none(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
 
     from dbxignore.install import linux_systemd
+
     assert linux_systemd.remove_dropin_directory() is None
 
 
@@ -301,4 +304,5 @@ def test_remove_dropin_directory_no_home_returns_none(monkeypatch):
     monkeypatch.delenv("HOME", raising=False)
 
     from dbxignore.install import linux_systemd
+
     assert linux_systemd.remove_dropin_directory() is None

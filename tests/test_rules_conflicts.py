@@ -24,13 +24,13 @@ from dbxignore.rules_conflicts import Conflict, _detect_conflicts, literal_prefi
     ("pattern", "expected"),
     [
         ("build/keep/", "build/keep/"),
-        ("build/keep", "build/"),        # no trailing slash → cut at last /
+        ("build/keep", "build/"),  # no trailing slash → cut at last /
         ("src/**/test.py", "src/"),
-        ("foo*/bar/", None),             # glob in first segment
-        ("**/cache/", None),             # starts with glob
-        ("/anchored/path/", "anchored/path/"),   # leading-/ normalized
-        ("", None),                      # empty
-        ("plain", "plain"),              # single segment, no slash, no glob
+        ("foo*/bar/", None),  # glob in first segment
+        ("**/cache/", None),  # starts with glob
+        ("/anchored/path/", "anchored/path/"),  # leading-/ normalized
+        ("", None),  # empty
+        ("plain", "plain"),  # single segment, no slash, no glob
         ("a/b/c/d/", "a/b/c/d/"),
         ("?single-char-glob", None),
         ("[abc]/charset", None),
@@ -66,10 +66,10 @@ class _FakeEntry:
     """Test shim for the sequence entries _detect_conflicts consumes."""
 
     source: Path
-    line: int           # 1-based
-    raw: str            # source line text
+    line: int  # 1-based
+    raw: str  # source line text
     ancestor_dir: Path  # directory the pattern is scoped to
-    pattern: Any        # object with .include and .match_file
+    pattern: Any  # object with .include and .match_file
 
 
 class _FakePattern:

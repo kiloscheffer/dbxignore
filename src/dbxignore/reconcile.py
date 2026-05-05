@@ -65,7 +65,8 @@ def reconcile_subtree(
         # Reconcile each subdirectory; if it ends up ignored, prune it from
         # the walk (os.walk honors in-place modification of dirnames).
         dirnames[:] = [
-            name for name in dirnames
+            name
+            for name in dirnames
             if not _reconcile_path(current_path / name, cache, report, dry_run=dry_run)
         ]
         for name in filenames:
@@ -105,9 +106,7 @@ def _reconcile_path(
         # Without this arm the error would escape `_reconcile_path` and kill
         # the per-root sweep worker silently (followup item 21). Mirrors the
         # write-side ENOTSUP/EOPNOTSUPP handling shape.
-        logger.warning(
-            "I/O error reading marker on %s: errno=%s %s", path, exc.errno, exc
-        )
+        logger.warning("I/O error reading marker on %s: errno=%s %s", path, exc.errno, exc)
         report.errors.append((path, f"read: errno={exc.errno} {exc}"))
         return None
 
@@ -141,9 +140,7 @@ def _reconcile_path(
         return currently_ignored
     except OSError as exc:
         if exc.errno in (errno.ENOTSUP, errno.EOPNOTSUPP):
-            logger.warning(
-                "Filesystem does not support ignore markers on %s: %s", path, exc
-            )
+            logger.warning("Filesystem does not support ignore markers on %s: %s", path, exc)
             report.errors.append((path, f"unsupported: {exc}"))
             # Mirror PermissionError's return: preserve last-known marker
             # state so subtree pruning fires when an already-marked

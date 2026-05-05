@@ -117,15 +117,22 @@ function Assert-AdsUnset {
 # test directory; optionally writes a .dropboxignore. The Phase 4.5 cases
 # share this setup; helper keeps the per-case body focused on what's
 # actually being tested.
+#
+# DropboxignoreContent is gated by $PSBoundParameters.ContainsKey, NOT a
+# null/empty check: PowerShell's [string] coerces $null → "" on parameter
+# binding, so a `Reset-TestDir -Path $T` call without the content arg
+# would otherwise still write a (zero-byte) .dropboxignore — and `init` /
+# `generate` then refuse with "already exists, pass --force." Verify the
+# parameter was actually supplied at the call site.
 
 function Reset-TestDir {
     param(
         [Parameter(Mandatory)] [string]$Path,
-        [string]$DropboxignoreContent = $null
+        [AllowEmptyString()] [string]$DropboxignoreContent
     )
     if (Test-Path $Path) { Remove-Item -Path $Path -Recurse -Force }
     New-Item -ItemType Directory -Path $Path -Force | Out-Null
-    if ($null -ne $DropboxignoreContent) {
+    if ($PSBoundParameters.ContainsKey('DropboxignoreContent')) {
         Set-Content -Path (Join-Path $Path ".dropboxignore") -Value $DropboxignoreContent -Encoding utf8
     }
 }
@@ -615,7 +622,8 @@ function Test-Daemon {
     $clearAliveContent = Get-Content $clearAliveOut -Raw
     if ($LASTEXITCODE -eq 0) {
         Write-Fail "5e - clear should have refused while daemon alive"
-        $clearAliveContent -split "`n" | ForEach-Object { Write-Note "    $_" }
+        # `r?`n so CRLF endings on Windows don't leave stray \r on each line.
+        $clearAliveContent -split "`r?`n" | ForEach-Object { Write-Note "    $_" }
     } else {
         Write-Pass "5e - clear exited non-zero (refused)"
     }

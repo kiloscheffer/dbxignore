@@ -107,15 +107,22 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
             #                            rename `.dropboxignore` -> `.bak`)
             #   non-rule -> rule       : reload dest only (atomic save:
             #                            `.dropboxignore.tmp` -> rule file)
+            #
+            # All cache mutations run before any reconcile so the reconcile
+            # sees the post-move rule state. Critical for the non-rule->rule
+            # same-parent case (atomic save, e.g. `.dropboxignore.tmp` ->
+            # `.dropboxignore`): the same-parent dedupe collapses to a single
+            # reconcile call, which must run after the dest reload — otherwise
+            # the new rules don't apply until the next event or hourly sweep.
             src_is_rules = src.name == IGNORE_FILENAME
+            dest_located = _resolve_under_roots(event.dest_path, roots)
             if src_is_rules:
                 cache.remove_file(src)
+            if dest_located is not None and dest_located[1].name == IGNORE_FILENAME:
+                cache.reload_file(dest_located[1])
             reconcile_subtree(root, src.parent, cache)
-            dest_located = _resolve_under_roots(event.dest_path, roots)
             if dest_located is not None:
                 dest_root, dest = dest_located
-                if dest.name == IGNORE_FILENAME:
-                    cache.reload_file(dest)
                 if (dest_root, dest.parent) != (root, src.parent):
                     reconcile_subtree(dest_root, dest.parent, cache)
         else:

@@ -77,7 +77,11 @@ def _classify(
     if event.event_type == "moved" and event.dest_path:
         dest_path = Path(event.dest_path)
         if dest_path.name == IGNORE_FILENAME and find_containing(dest_path, roots) is not None:
-            return EventKind.RULES, str(src).lower(), root, src
+            # Key on the dest path (the rule file), not on src (the temp file
+            # name). Atomic-save editors generate unique tmp filenames per
+            # save; keying on src would defeat the RULES debounce window for
+            # consecutive saves of the same `.dropboxignore`.
+            return EventKind.RULES, str(dest_path).lower(), root, src
     if event.event_type == "created" and event.is_directory:
         return EventKind.DIR_CREATE, str(src).lower(), root, src
     if event.event_type in ("created", "moved"):

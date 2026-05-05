@@ -280,7 +280,34 @@ def test_classify_moved_into_rules_keys_on_dest_for_debounce_coalesce(tmp_path):
     _, key_b, _, _ = daemon._classify(save_b, roots=[root])
 
     assert key_a == key_b
-    assert key_a == str(dest).lower()
+    assert str(dest).lower() in key_a
+
+
+def test_classify_moved_out_and_moved_into_same_path_have_distinct_keys(tmp_path):
+    """A move-out (`A/.dropboxignore` -> `B/.dropboxignore`, src is rule)
+    keys via the src-path branch; a move-into (`tmp` -> `A/.dropboxignore`,
+    dest is rule) keys via the dest-path branch. Both events touching the
+    same `A/.dropboxignore` path must produce DIFFERENT debouncer tokens —
+    they're semantically distinct (move-out's dest-side reload of B would
+    be lost if last-wins coalescing collapsed them). Pin the disambiguation
+    so a future refactor can't reintroduce the collision."""
+    root = tmp_path.resolve()
+    a = root / "A"
+    b = root / "B"
+    a.mkdir()
+    b.mkdir()
+    a_rule = a / ".dropboxignore"
+    b_rule = b / ".dropboxignore"
+    b_rule.write_text("build/\n", encoding="utf-8")
+    tmp_at_a = a / "tmp.4913"
+
+    move_out = _stub_event("moved", str(a_rule), dest_path=str(b_rule))
+    move_in = _stub_event("moved", str(tmp_at_a), dest_path=str(a_rule))
+
+    _, key_out, _, _ = daemon._classify(move_out, roots=[root])
+    _, key_in, _, _ = daemon._classify(move_in, roots=[root])
+
+    assert key_out != key_in
 
 
 def test_dispatch_moved_non_rules_to_rules_reloads_dest(tmp_path, monkeypatch):

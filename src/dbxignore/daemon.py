@@ -81,7 +81,15 @@ def _classify(
             # name). Atomic-save editors generate unique tmp filenames per
             # save; keying on src would defeat the RULES debounce window for
             # consecutive saves of the same `.dropboxignore`.
-            return EventKind.RULES, str(dest_path).lower(), root, src
+            #
+            # Prefix with `moved-into:` so the key cannot collide with the
+            # first branch's bare-path key (which uses the same path string
+            # when src IS the rule file). Without the prefix, a move-out
+            # `A/.dropboxignore` -> `B/...` (key `A/...`) and a move-into
+            # `tmp` -> `A/.dropboxignore` (key would also be `A/...`) land
+            # on the same debouncer token, and last-wins coalesce drops
+            # one event's dest-side handling.
+            return EventKind.RULES, f"moved-into:{str(dest_path).lower()}", root, src
     if event.event_type == "created" and event.is_directory:
         return EventKind.DIR_CREATE, str(src).lower(), root, src
     if event.event_type in ("created", "moved"):

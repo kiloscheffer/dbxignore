@@ -238,3 +238,72 @@ def test_dispatch_moved_rules_reloads_at_dest(tmp_path, monkeypatch):
         [(root, old_file.parent), (root, new_file.parent)],
         key=lambda rc: str(rc[1]),
     )
+
+
+def test_classify_moved_dest_is_rule_file_classifies_as_rules(tmp_path):
+    """A moved event whose dest_path is .dropboxignore must classify as RULES
+    even when src_path is not — atomic-save editors rename a temp file into
+    place, so the rule cache only sees the rename event and would otherwise
+    miss the new rules until the next hourly sweep."""
+    root = tmp_path.resolve()
+    proj = root / "proj"
+    proj.mkdir()
+    src = proj / ".dropboxignore.tmp"
+    dest = proj / ".dropboxignore"
+    dest.write_text("build/\n", encoding="utf-8")
+
+    ev = _stub_event("moved", str(src), dest_path=str(dest))
+    classification = daemon._classify(ev, roots=[root])
+
+    assert classification is not None
+    kind, _key, classified_root, _src = classification
+    assert kind == EventKind.RULES
+    assert classified_root == root
+
+
+def test_dispatch_moved_non_rules_to_rules_reloads_dest(tmp_path, monkeypatch):
+    """Atomic-save: rename `.dropboxignore.tmp` -> `.dropboxignore`. Cache
+    must reload at the dest; src was never cached so remove_file is a no-op."""
+    root = tmp_path.resolve()
+    cache = MagicMock()
+    reconcile_calls: list = []
+    monkeypatch.setattr(daemon, "reconcile_subtree",
+                        lambda r, sub, c: reconcile_calls.append((r, sub)))
+
+    proj = root / "proj"
+    proj.mkdir()
+    src = proj / ".dropboxignore.tmp"
+    dest = proj / ".dropboxignore"
+    dest.write_text("build/\n", encoding="utf-8")
+
+    ev = _stub_event("moved", str(src), dest_path=str(dest))
+    daemon._dispatch(ev, cache, roots=[root])
+
+    cache.reload_file.assert_called_once_with(dest)
+    cache.remove_file.assert_not_called()
+    assert reconcile_calls == [(root, proj)]
+
+
+def test_dispatch_moved_rules_to_non_rules_does_not_reload_backup(tmp_path, monkeypatch):
+    """Editor save-via-rename step: `.dropboxignore` -> `.dropboxignore~`.
+    Cache must drop the old rule file and must NOT load the backup as if it
+    were rules — `_build_sequence` iterates every cached entry, so a stray
+    `.dropboxignore~` cache entry would pollute conflict detection."""
+    root = tmp_path.resolve()
+    cache = MagicMock()
+    reconcile_calls: list = []
+    monkeypatch.setattr(daemon, "reconcile_subtree",
+                        lambda r, sub, c: reconcile_calls.append((r, sub)))
+
+    proj = root / "proj"
+    proj.mkdir()
+    src = proj / ".dropboxignore"
+    dest = proj / ".dropboxignore~"
+    dest.write_text("build/\n", encoding="utf-8")
+
+    ev = _stub_event("moved", str(src), dest_path=str(dest))
+    daemon._dispatch(ev, cache, roots=[root])
+
+    cache.remove_file.assert_called_once_with(src)
+    cache.reload_file.assert_not_called()
+    assert reconcile_calls == [(root, proj)]

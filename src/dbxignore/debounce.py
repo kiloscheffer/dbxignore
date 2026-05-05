@@ -13,9 +13,9 @@ logger = logging.getLogger(__name__)
 
 
 class EventKind(enum.Enum):
-    RULES = "rules"         # .dropboxignore create/modify/delete
-    DIR_CREATE = "dir"      # directory creation (react immediately)
-    OTHER = "other"         # everything else worth reconciling
+    RULES = "rules"  # .dropboxignore create/modify/delete
+    DIR_CREATE = "dir"  # directory creation (react immediately)
+    OTHER = "other"  # everything else worth reconciling
 
 
 @dataclass
@@ -81,8 +81,7 @@ class Debouncer:
                     if self._pending:
                         wait_s = max(
                             0.0,
-                            min(p.deadline for p in self._pending.values())
-                            - time.monotonic(),
+                            min(p.deadline for p in self._pending.values()) - time.monotonic(),
                         )
                         self._cond.wait(timeout=wait_s)
                     else:

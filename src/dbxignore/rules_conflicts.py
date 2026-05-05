@@ -12,6 +12,7 @@ docstring for details).
 ``rules.py`` re-imports the public symbols (``Conflict``,
 ``_detect_conflicts``) so existing call sites are unaffected.
 """
+
 from __future__ import annotations
 
 import logging
@@ -50,7 +51,7 @@ def literal_prefix(pattern: str) -> str | None:
         last_sep = p[:boundary].rfind("/")
         if last_sep == -1:
             return None
-        return p[:last_sep + 1]
+        return p[: last_sep + 1]
     # No glob present: return whole pattern. If it ends in `/`, we keep the
     # trailing slash; otherwise we cut at the last `/` so the prefix is a
     # directory-shaped string (the detector walks directory ancestors).
@@ -59,7 +60,7 @@ def literal_prefix(pattern: str) -> str | None:
     if p.endswith("/"):
         return p
     last_sep = p.rfind("/")
-    return p[:last_sep + 1]
+    return p[: last_sep + 1]
 
 
 @dataclass(frozen=True)
@@ -73,12 +74,12 @@ class Conflict:
     ``[dropped]`` annotation in ``explain()`` output.
     """
 
-    dropped_source: Path      # the .dropboxignore file containing the negation
-    dropped_line: int         # 1-based source line of the negation
-    dropped_pattern: str      # raw pattern text (e.g. "!build/keep/")
-    masking_source: Path      # the .dropboxignore file containing the include
-    masking_line: int         # 1-based source line of the masking include
-    masking_pattern: str      # raw pattern text (e.g. "build/")
+    dropped_source: Path  # the .dropboxignore file containing the negation
+    dropped_line: int  # 1-based source line of the negation
+    dropped_pattern: str  # raw pattern text (e.g. "!build/keep/")
+    masking_source: Path  # the .dropboxignore file containing the include
+    masking_line: int  # 1-based source line of the masking include
+    masking_pattern: str  # raw pattern text (e.g. "build/")
 
 
 def _ancestors_of(
@@ -121,9 +122,10 @@ def _ancestors_of(
             # diagnostic trail (the non-strict branch's loop-break also handles
             # this case but loses context).
             logger.debug(
-                "negation prefix %r resolves to %s, outside root %s; "
-                "skipping conflict check",
-                prefix, target, root,
+                "negation prefix %r resolves to %s, outside root %s; skipping conflict check",
+                prefix,
+                target,
+                root,
             )
             return []
         current = target.parent
@@ -144,9 +146,7 @@ def _ancestors_of(
     return results
 
 
-def _find_masking_include(
-    earlier_entries: list, ancestors: list[Path]
-) -> object | None:
+def _find_masking_include(earlier_entries: list, ancestors: list[Path]) -> object | None:
     """Return an earlier include that effectively marks any ancestor.
 
     For each ancestor, find the *last* earlier rule (include or negation)
@@ -182,9 +182,7 @@ def _find_masking_include(
     return None
 
 
-def _detect_conflicts(
-    sequence: list, *, root: Path
-) -> list[Conflict]:
+def _detect_conflicts(sequence: list, *, root: Path) -> list[Conflict]:
     """Static rule-conflict detection.
 
     Input ``sequence`` is a list of entries in evaluation order. Each entry
@@ -219,19 +217,19 @@ def _detect_conflicts(
         # prefix directory itself, so pathspec last-match-wins handles the
         # override and only strict ancestors can mask.
         is_directory_negation = raw.rstrip() == prefix
-        ancestors = _ancestors_of(
-            prefix, entry.ancestor_dir, root, strict=is_directory_negation
-        )
+        ancestors = _ancestors_of(prefix, entry.ancestor_dir, root, strict=is_directory_negation)
 
         masking = _find_masking_include(sequence[:i], ancestors)
         if masking is None:
             continue
-        conflicts.append(Conflict(
-            dropped_source=entry.source,
-            dropped_line=entry.line,
-            dropped_pattern=entry.raw.strip(),
-            masking_source=masking.source,
-            masking_line=masking.line,
-            masking_pattern=masking.raw.strip(),
-        ))
+        conflicts.append(
+            Conflict(
+                dropped_source=entry.source,
+                dropped_line=entry.line,
+                dropped_pattern=entry.raw.strip(),
+                masking_source=masking.source,
+                masking_line=masking.line,
+                masking_pattern=masking.raw.strip(),
+            )
+        )
     return conflicts

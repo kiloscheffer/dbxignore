@@ -53,25 +53,19 @@ def log_dir(tmp_path, monkeypatch):
     return tmp_path / "state" / "dbxignore"
 
 
-def test_configured_logging_installs_rotating_handler(
-    isolated_pkg_logger, log_dir, monkeypatch
-):
+def test_configured_logging_installs_rotating_handler(isolated_pkg_logger, log_dir, monkeypatch):
     monkeypatch.delenv("DBXIGNORE_LOG_LEVEL", raising=False)
     pkg_logger = logging.getLogger("dbxignore")
 
     with daemon._configured_logging():
         handlers = pkg_logger.handlers
 
-        rotating = [
-            h for h in handlers
-            if isinstance(h, logging.handlers.RotatingFileHandler)
-        ]
+        rotating = [h for h in handlers if isinstance(h, logging.handlers.RotatingFileHandler)]
         assert len(rotating) == 1
         assert Path(rotating[0].baseFilename) == log_dir / "daemon.log"
 
         stderr_handlers = [
-            h for h in handlers
-            if type(h) is logging.StreamHandler and h.stream is sys.stderr
+            h for h in handlers if type(h) is logging.StreamHandler and h.stream is sys.stderr
         ]
         if sys.platform.startswith("linux"):
             assert len(stderr_handlers) == 1, (
@@ -87,9 +81,7 @@ def test_configured_logging_installs_rotating_handler(
         assert pkg_logger.level == logging.INFO
 
 
-def test_configured_logging_does_not_close_stderr_on_exit(
-    isolated_pkg_logger, log_dir
-):
+def test_configured_logging_does_not_close_stderr_on_exit(isolated_pkg_logger, log_dir):
     """The Linux dual-sink attaches a StreamHandler wrapping sys.stderr.
     The cleanup loop calls .close() on every handler; that must not close
     sys.stderr itself, or subsequent test output (and real daemon restart)
@@ -103,9 +95,7 @@ def test_configured_logging_does_not_close_stderr_on_exit(
     assert not sys.stderr.closed
 
 
-def test_configured_logging_respects_log_level_env(
-    isolated_pkg_logger, log_dir, monkeypatch
-):
+def test_configured_logging_respects_log_level_env(isolated_pkg_logger, log_dir, monkeypatch):
     monkeypatch.setenv("DBXIGNORE_LOG_LEVEL", "DEBUG")
     pkg_logger = logging.getLogger("dbxignore")
 
@@ -113,9 +103,7 @@ def test_configured_logging_respects_log_level_env(
         assert pkg_logger.level == logging.DEBUG
 
 
-def test_configured_logging_accepts_lowercase_level(
-    isolated_pkg_logger, log_dir, monkeypatch
-):
+def test_configured_logging_accepts_lowercase_level(isolated_pkg_logger, log_dir, monkeypatch):
     """The env var is case-insensitive: `debug` should resolve to logging.DEBUG."""
     monkeypatch.setenv("DBXIGNORE_LOG_LEVEL", "debug")
     pkg_logger = logging.getLogger("dbxignore")
@@ -150,9 +138,7 @@ def test_configured_logging_warns_and_falls_back_on_unknown_level(
     assert "falling back to INFO" in log_text, log_text
 
 
-def test_configured_logging_unset_env_is_silent(
-    isolated_pkg_logger, log_dir, monkeypatch
-):
+def test_configured_logging_unset_env_is_silent(isolated_pkg_logger, log_dir, monkeypatch):
     """When DBXIGNORE_LOG_LEVEL is unset, no warning fires — the default-INFO
     path is the common case and should not emit a misconfiguration warning."""
     monkeypatch.delenv("DBXIGNORE_LOG_LEVEL", raising=False)
@@ -166,9 +152,7 @@ def test_configured_logging_unset_env_is_silent(
         assert "not a recognized logging level" not in log_text, log_text
 
 
-def test_configured_logging_empty_string_env_is_silent(
-    isolated_pkg_logger, log_dir, monkeypatch
-):
+def test_configured_logging_empty_string_env_is_silent(isolated_pkg_logger, log_dir, monkeypatch):
     """DBXIGNORE_LOG_LEVEL="" is shell-quirk-equivalent to unset — fall back
     to INFO without a warning. Mirrors the DBXIGNORE_ROOT="" → fall back to
     info.json discovery treatment in roots.discover()."""
@@ -184,9 +168,7 @@ def test_configured_logging_empty_string_env_is_silent(
         assert "not a recognized logging level" not in log_text, log_text
 
 
-def test_configured_logging_restores_logger_state_on_exit(
-    isolated_pkg_logger, log_dir
-):
+def test_configured_logging_restores_logger_state_on_exit(isolated_pkg_logger, log_dir):
     sentinel = isolated_pkg_logger
     pkg_logger = logging.getLogger("dbxignore")
 
@@ -210,21 +192,16 @@ def test_configured_logging_restores_on_exception(isolated_pkg_logger, log_dir):
     assert pkg_logger.level == logging.WARNING
 
 
-def test_configured_logging_closes_installed_handler_on_exit(
-    isolated_pkg_logger, log_dir
-):
+def test_configured_logging_closes_installed_handler_on_exit(isolated_pkg_logger, log_dir):
     """Rotating file handler must be closed on exit so Windows releases the log file."""
     installed: list[logging.Handler] = []
     pkg_logger = logging.getLogger("dbxignore")
 
     with daemon._configured_logging():
         installed.extend(
-            h for h in pkg_logger.handlers
-            if isinstance(h, logging.handlers.RotatingFileHandler)
+            h for h in pkg_logger.handlers if isinstance(h, logging.handlers.RotatingFileHandler)
         )
         assert installed, "expected a RotatingFileHandler inside the context"
 
     for h in installed:
-        assert h.stream is None or h.stream.closed, (
-            f"handler {h!r} was not closed on context exit"
-        )
+        assert h.stream is None or h.stream.closed, f"handler {h!r} was not closed on context exit"

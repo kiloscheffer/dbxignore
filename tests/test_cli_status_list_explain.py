@@ -193,9 +193,7 @@ def test_status_lists_rule_conflicts(tmp_path, monkeypatch):
     import click.testing
 
     root = tmp_path
-    (root / ".dropboxignore").write_text(
-        "build/\n!build/keep/\n", encoding="utf-8"
-    )
+    (root / ".dropboxignore").write_text("build/\n!build/keep/\n", encoding="utf-8")
 
     monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")
     monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
@@ -245,9 +243,7 @@ def test_status_column_aligns_conflicts_with_varying_pattern_lengths(tmp_path, m
     assert result.exit_code == 0
 
     conflict_lines = [line for line in result.output.splitlines() if "masked by" in line]
-    assert len(conflict_lines) == 2, (
-        f"expected 2 conflict lines, got: {conflict_lines}"
-    )
+    assert len(conflict_lines) == 2, f"expected 2 conflict lines, got: {conflict_lines}"
     columns = [line.index("masked by") for line in conflict_lines]
     assert len(set(columns)) == 1, (
         f"'masked by' should be column-aligned across conflicts; "
@@ -259,15 +255,14 @@ def test_explain_annotates_dropped_negations(tmp_path, monkeypatch):
     import click.testing
 
     root = tmp_path
-    (root / ".dropboxignore").write_text(
-        "build/\n!build/keep/\n", encoding="utf-8"
-    )
+    (root / ".dropboxignore").write_text("build/\n!build/keep/\n", encoding="utf-8")
     (root / "build").mkdir()
     (root / "build" / "keep").mkdir()
     monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
 
     result = click.testing.CliRunner().invoke(
-        cli.main, ["explain", str(root / "build" / "keep")],
+        cli.main,
+        ["explain", str(root / "build" / "keep")],
     )
     assert result.exit_code == 0
     assert "build/" in result.output
@@ -284,9 +279,7 @@ def test_status_does_not_log_conflict_warning_to_stderr(tmp_path, monkeypatch, c
     import click.testing
 
     root = tmp_path
-    (root / ".dropboxignore").write_text(
-        "build/\n!build/keep/\n", encoding="utf-8"
-    )
+    (root / ".dropboxignore").write_text("build/\n!build/keep/\n", encoding="utf-8")
     monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")
     monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
 
@@ -296,11 +289,9 @@ def test_status_does_not_log_conflict_warning_to_stderr(tmp_path, monkeypatch, c
     assert result.exit_code == 0
     assert "rule conflicts (1):" in result.output
     conflict_warnings = [
-        r for r in caplog.records
-        if r.name == "dbxignore.rules" and "negation" in r.message
+        r for r in caplog.records if r.name == "dbxignore.rules" and "negation" in r.message
     ]
     assert conflict_warnings == [], (
-        f"status should not emit conflict WARNINGs; got: "
-        f"{[r.message for r in conflict_warnings]}"
+        f"status should not emit conflict WARNINGs; got: {[r.message for r in conflict_warnings]}"
     )
     assert "masked by" in result.output

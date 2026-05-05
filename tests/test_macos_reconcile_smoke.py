@@ -3,6 +3,7 @@ through the real reconcile path on real xattrs.
 
 Runs only on macOS — uses real APFS xattrs against tmp_path.
 """
+
 from __future__ import annotations
 
 import sys

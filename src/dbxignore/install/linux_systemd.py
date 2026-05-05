@@ -54,9 +54,7 @@ def _run_systemctl(cmd: list[str]) -> None:
     try:
         subprocess.run(cmd, check=True)  # noqa: S603 — hardcoded args, no user data
     except subprocess.CalledProcessError as exc:
-        raise RuntimeError(
-            f"{' '.join(cmd)} failed with exit code {exc.returncode}"
-        ) from exc
+        raise RuntimeError(f"{' '.join(cmd)} failed with exit code {exc.returncode}") from exc
 
 
 def build_unit_content(
@@ -73,10 +71,13 @@ def build_unit_content(
     exec_start = f"{exe_path.as_posix()} {arguments}".strip()
     env_lines = ""
     if environment:
-        env_lines = "\n".join(
-            f'Environment="{key}={_escape_systemd_env_value(value)}"'
-            for key, value in environment.items()
-        ) + "\n"
+        env_lines = (
+            "\n".join(
+                f'Environment="{key}={_escape_systemd_env_value(value)}"'
+                for key, value in environment.items()
+            )
+            + "\n"
+        )
     return f"""[Unit]
 Description=dbxignore daemon
 Documentation=https://github.com/kiloscheffer/dbxignore
@@ -95,11 +96,7 @@ WantedBy=default.target
 
 def install_unit() -> None:
     exe, args = detect_invocation()
-    environment = {
-        name: os.environ[name]
-        for name in _FORWARDED_ENV_VARS
-        if os.environ.get(name)
-    }
+    environment = {name: os.environ[name] for name in _FORWARDED_ENV_VARS if os.environ.get(name)}
     content = build_unit_content(exe, args, environment=environment or None)
     path = _unit_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -121,7 +118,9 @@ def uninstall_unit() -> None:
     # disable --now: stop and disable. Missing unit → non-zero exit, which we swallow.
     subprocess.run(  # noqa: S603 — hardcoded args, no user data
         ["systemctl", "--user", "disable", "--now", UNIT_NAME],
-        check=False, capture_output=True, text=True,
+        check=False,
+        capture_output=True,
+        text=True,
     )
     if path.exists():
         path.unlink()

@@ -1,4 +1,5 @@
 """CLI surface tests for the ``dbxignore`` and ``dbxignored`` entry points."""
+
 from __future__ import annotations
 
 import re

@@ -130,9 +130,7 @@ def _compute_source_conflicts(source: Path) -> list[rules.Conflict]:
     return cache.conflicts()
 
 
-def _emit_generate_conflict_warning(
-    source: Path, conflicts: list[rules.Conflict]
-) -> None:
+def _emit_generate_conflict_warning(source: Path, conflicts: list[rules.Conflict]) -> None:
     """Echo dropped-negation warnings to stderr.
 
     The byte-for-byte invariant of `generate` is preserved — this is purely
@@ -221,17 +219,12 @@ def _confirm_apply(would_mark: int, would_clear: int) -> bool:
     so the wording matches the actual situation.
     """
     if would_mark > 0 and would_clear > 0:
-        click.echo(
-            f"This will mark {would_mark} paths and clear "
-            f"{would_clear} existing markers."
-        )
+        click.echo(f"This will mark {would_mark} paths and clear {would_clear} existing markers.")
         click.echo(
             "Marking removes paths from cloud Dropbox and other linked "
             "devices (local copies on this device are preserved)."
         )
-        click.echo(
-            "Clearing causes Dropbox to upload the local copies back to cloud."
-        )
+        click.echo("Clearing causes Dropbox to upload the local copies back to cloud.")
     elif would_mark > 0:
         click.echo(f"This will mark {would_mark} paths as ignored.")
         click.echo(
@@ -265,9 +258,7 @@ def _run_apply_pass(
     return aggregate
 
 
-def _apply_from_gitignore(
-    source: Path, *, dry_run: bool = False, yes: bool = False
-) -> None:
+def _apply_from_gitignore(source: Path, *, dry_run: bool = False, yes: bool = False) -> None:
     """Run a one-shot reconcile using rules loaded from `source`.
 
     Rules are mounted at `dirname(source).resolve()` and applied only to
@@ -319,9 +310,7 @@ def _apply_from_gitignore(
         return
 
     if not yes:
-        preview = reconcile.reconcile_subtree(
-            mount_at, mount_at, cache, dry_run=True
-        )
+        preview = reconcile.reconcile_subtree(mount_at, mount_at, cache, dry_run=True)
         if preview.marked == 0 and preview.cleared == 0:
             click.echo("Nothing to apply (rules already in sync).")
             return
@@ -339,20 +328,24 @@ def _apply_from_gitignore(
 @main.command()
 @click.argument("path", required=False, type=click.Path(path_type=Path))
 @click.option(
-    "--from-gitignore", "from_gitignore",
-    type=click.Path(exists=False, path_type=Path), default=None,
+    "--from-gitignore",
+    "from_gitignore",
+    type=click.Path(exists=False, path_type=Path),
+    default=None,
     help=(
         "Apply rules loaded from `<path>` instead of from .dropboxignore "
         "files in the tree. The directory containing `<path>` must be under "
-        "a discovered Dropbox root. See README §\"Using .gitignore rules\"."
+        'a discovered Dropbox root. See README §"Using .gitignore rules".'
     ),
 )
 @click.option(
-    "--dry-run", is_flag=True,
+    "--dry-run",
+    is_flag=True,
     help="Print what would be marked/cleared without changing anything.",
 )
 @click.option(
-    "--yes", is_flag=True,
+    "--yes",
+    is_flag=True,
     help="Skip the confirmation prompt (for scripted use). Without --yes "
     "and outside --dry-run, apply previews changes and asks before "
     "mutating any marker — marking a previously-synced path causes "
@@ -373,8 +366,7 @@ def apply(
     """
     if from_gitignore is not None and path is not None:
         click.echo(
-            "error: --from-gitignore and the positional path argument "
-            "are mutually exclusive",
+            "error: --from-gitignore and the positional path argument are mutually exclusive",
             err=True,
         )
         sys.exit(2)
@@ -426,9 +418,7 @@ def apply(
     )
 
 
-def _format_summary(
-    state_obj: state.State | None, alive: bool, conflicts_count: int
-) -> str:
+def _format_summary(state_obj: state.State | None, alive: bool, conflicts_count: int) -> str:
     """Build the stable single-line summary emitted by `status --summary`.
 
     Format is part of the public API per SemVer (see README §"Status-bar
@@ -486,9 +476,7 @@ def status(summary: bool) -> None:
         elif state.is_daemon_alive(s.daemon_pid):
             click.echo(f"daemon: running (pid={s.daemon_pid})")
         else:
-            click.echo(
-                f"daemon: not running (last pid={s.daemon_pid} — state.json may be stale)"
-            )
+            click.echo(f"daemon: not running (last pid={s.daemon_pid} — state.json may be stale)")
         if s.daemon_started:
             click.echo(f"started: {s.daemon_started.isoformat()}")
         if s.last_sweep:
@@ -527,8 +515,7 @@ def status(summary: bool) -> None:
         w_dloc, w_dpat, w_mloc = (max(len(r[i]) for r in rows) for i in (0, 1, 2))
         for d_loc, d_pat, m_loc, m_pat in rows:
             click.echo(
-                f"  {d_loc:<{w_dloc}}  {d_pat:<{w_dpat}}  "
-                f"masked by {m_loc:<{w_mloc}}  {m_pat}"
+                f"  {d_loc:<{w_dloc}}  {d_pat:<{w_dpat}}  masked by {m_loc:<{w_mloc}}  {m_pat}"
             )
 
 
@@ -570,16 +557,19 @@ def _walk_marked_paths(target: Path) -> list[Path]:
 @main.command()
 @click.argument("path", required=False, type=click.Path(path_type=Path))
 @click.option(
-    "--dry-run", is_flag=True,
+    "--dry-run",
+    is_flag=True,
     help="Print what would be cleared, don't change anything.",
 )
 @click.option(
-    "--force", is_flag=True,
+    "--force",
+    is_flag=True,
     help="Run even if the daemon appears to be alive — its next sweep "
     "would re-apply markers, so use only for known short-window tests.",
 )
 @click.option(
-    "--yes", is_flag=True,
+    "--yes",
+    is_flag=True,
     help="Skip the confirmation prompt (for scripted use).",
 )
 def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
@@ -703,10 +693,7 @@ def explain(path: Path) -> None:
         return
 
     # Build lookup: (source, line) -> Conflict so we can annotate dropped rows.
-    conflicts_by_drop = {
-        (c.dropped_source, c.dropped_line): c
-        for c in cache.conflicts()
-    }
+    conflicts_by_drop = {(c.dropped_source, c.dropped_line): c for c in cache.conflicts()}
 
     for m in matches:
         loc = _format_ignore_file_loc(m.ignore_file, discovered)
@@ -723,6 +710,7 @@ def explain(path: Path) -> None:
 
 def _run_daemon() -> None:
     from dbxignore import daemon as daemon_mod
+
     daemon_mod.run()
 
 
@@ -736,6 +724,7 @@ def daemon() -> None:
 def install() -> None:
     """Register the daemon with the platform's user-scoped service manager."""
     from dbxignore.install import install_service
+
     try:
         install_service()
     except RuntimeError as exc:
@@ -764,6 +753,7 @@ def uninstall(purge: bool) -> None:
     is to leave no dbxignore-authored artifacts on disk.
     """
     from dbxignore.install import uninstall_service
+
     try:
         uninstall_service()
     except RuntimeError as exc:
@@ -800,17 +790,39 @@ def uninstall(purge: bool) -> None:
         # (3) Remove the systemd drop-in directory (Linux only).
         if sys.platform.startswith("linux"):
             from dbxignore.install import linux_systemd
+
             removed_dropin = linux_systemd.remove_dropin_directory()
             if removed_dropin is not None:
                 click.echo(f"Removed systemd drop-in directory {removed_dropin}.")
 
 
-_INIT_DETECTION_DIRS = frozenset({
-    "node_modules", "__pycache__", ".venv", "venv", "env", "target",
-    "build", "dist", "out", ".pytest_cache", ".mypy_cache", ".ruff_cache",
-    ".tox", ".nox", ".next", ".nuxt", ".svelte-kit", ".turbo", ".gradle",
-    ".cache", "bin", "obj", "htmlcov",
-})
+_INIT_DETECTION_DIRS = frozenset(
+    {
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "env",
+        "target",
+        "build",
+        "dist",
+        "out",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".tox",
+        ".nox",
+        ".next",
+        ".nuxt",
+        ".svelte-kit",
+        ".turbo",
+        ".gradle",
+        ".cache",
+        "bin",
+        "obj",
+        "htmlcov",
+    }
+)
 
 
 def _load_default_template() -> str:
@@ -821,8 +833,8 @@ def _load_default_template() -> str:
     config — hatchling's `packages = ["src/dbxignore"]` includes the
     subdir's non-.py files automatically).
     """
-    return files("dbxignore.templates").joinpath("default.dropboxignore").read_text(
-        encoding="utf-8"
+    return (
+        files("dbxignore.templates").joinpath("default.dropboxignore").read_text(encoding="utf-8")
     )
 
 
@@ -868,15 +880,19 @@ def _format_init_output(template: str, detected: list[str]) -> str:
 
 @main.command()
 @click.argument(
-    "path", required=False,
+    "path",
+    required=False,
     type=click.Path(path_type=Path, file_okay=False, dir_okay=True),
 )
 @click.option(
-    "--force", is_flag=True,
+    "--force",
+    is_flag=True,
     help="Overwrite an existing .dropboxignore.",
 )
 @click.option(
-    "--stdout", "to_stdout", is_flag=True,
+    "--stdout",
+    "to_stdout",
+    is_flag=True,
     help="Print to stdout, don't write a file.",
 )
 def init(path: Path | None, force: bool, to_stdout: bool) -> None:
@@ -924,16 +940,21 @@ def init(path: Path | None, force: bool, to_stdout: bool) -> None:
 @main.command()
 @click.argument("path", type=click.Path(exists=False, path_type=Path))
 @click.option(
-    "-o", "--output", "output",
-    type=click.Path(path_type=Path), default=None,
+    "-o",
+    "--output",
+    "output",
+    type=click.Path(path_type=Path),
+    default=None,
     help="Write to this path instead of `<dir>/.dropboxignore`.",
 )
 @click.option(
-    "--stdout", is_flag=True,
+    "--stdout",
+    is_flag=True,
     help="Write to stdout instead of a file.",
 )
 @click.option(
-    "--force", is_flag=True,
+    "--force",
+    is_flag=True,
     help="Overwrite an existing .dropboxignore at the target location.",
 )
 def generate(path: Path, output: Path | None, stdout: bool, force: bool) -> None:
@@ -964,8 +985,7 @@ def generate(path: Path, output: Path | None, stdout: bool, force: bool) -> None
         conflicts = _compute_source_conflicts(source)
     except OSError as exc:
         click.echo(
-            f"warning: could not run conflict check on {source}: {exc}; "
-            "proceeding with generate",
+            f"warning: could not run conflict check on {source}: {exc}; proceeding with generate",
             err=True,
         )
         conflicts = []
@@ -979,8 +999,7 @@ def generate(path: Path, output: Path | None, stdout: bool, force: bool) -> None
     target = output if output is not None else (source.parent / IGNORE_FILENAME)
     if target.exists() and not force:
         click.echo(
-            f"error: {target} exists; pass --force to overwrite or "
-            "--stdout to preview",
+            f"error: {target} exists; pass --force to overwrite or --stdout to preview",
             err=True,
         )
         sys.exit(2)
@@ -1002,10 +1021,7 @@ def generate(path: Path, output: Path | None, stdout: bool, force: bool) -> None
     if conflicts:
         _emit_generate_conflict_warning(source, conflicts)
 
-    rule_count = sum(
-        1 for line in lines
-        if line.strip() and not line.strip().startswith("#")
-    )
+    rule_count = sum(1 for line in lines if line.strip() and not line.strip().startswith("#"))
     click.echo(f"wrote {rule_count} rules to {target}")
 
 

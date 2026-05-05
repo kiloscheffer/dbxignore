@@ -10,19 +10,25 @@ import pytest
 from dbxignore import daemon, state
 
 
-@pytest.mark.parametrize("name,expected", [
-    ("python.exe", True),
-    ("python3", True),
-    ("pythonw.exe", True),
-    ("dbxignored.exe", True),
-    ("dbxignored", True),
-    ("notepad.exe", False),
-    ("svchost.exe", False),
-])
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("python.exe", True),
+        ("python3", True),
+        ("pythonw.exe", True),
+        ("dbxignored.exe", True),
+        ("dbxignored", True),
+        ("notepad.exe", False),
+        ("svchost.exe", False),
+    ],
+)
 def test_is_other_live_daemon_accepts_python_and_frozen_exe(monkeypatch, name, expected):
     class _FakeProc:
-        def __init__(self, _pid): pass
-        def name(self): return name
+        def __init__(self, _pid):
+            pass
+
+        def name(self):
+            return name
 
     monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
     monkeypatch.setattr(psutil, "Process", _FakeProc)

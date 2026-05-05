@@ -108,7 +108,8 @@ def test_is_daemon_alive_dead_pid_returns_false(monkeypatch):
     monkeypatch.setattr(psutil, "pid_exists", lambda pid: False)
     # Sentinel that would raise if reached — pid_exists False must short-circuit.
     monkeypatch.setattr(
-        psutil, "Process",
+        psutil,
+        "Process",
         lambda pid: (_ for _ in ()).throw(AssertionError("Process should not be called")),
     )
     assert state.is_daemon_alive(99999) is False
@@ -119,9 +120,13 @@ def test_is_daemon_alive_recycled_pid_returns_false_for_unrelated_process(monkey
     the PID was reused by something else (firefox, svchost, etc.). The
     bare-existence check would say "alive"; the process-name guard catches
     the false positive (followup item 59)."""
+
     class _FakeProc:
-        def __init__(self, _pid): pass
-        def name(self): return "firefox.exe"
+        def __init__(self, _pid):
+            pass
+
+        def name(self):
+            return "firefox.exe"
 
     monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
     monkeypatch.setattr(psutil, "Process", _FakeProc)
@@ -131,9 +136,13 @@ def test_is_daemon_alive_recycled_pid_returns_false_for_unrelated_process(monkey
 def test_is_daemon_alive_python_process_returns_true(monkeypatch):
     """Source-run daemon: process is python (or python3, pythonw.exe, etc.).
     Match is case-insensitive and substring-based so all common variants pass."""
+
     class _FakeProc:
-        def __init__(self, _pid): pass
-        def name(self): return "Python3.11"
+        def __init__(self, _pid):
+            pass
+
+        def name(self):
+            return "Python3.11"
 
     monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
     monkeypatch.setattr(psutil, "Process", _FakeProc)
@@ -144,9 +153,13 @@ def test_is_daemon_alive_dbxignored_process_returns_true(monkeypatch):
     """Frozen PyInstaller install: process is dbxignored.exe (or dbxignored
     on macOS/Linux). The 'd' suffix distinguishes the daemon binary from
     the dbxignore CLI binary."""
+
     class _FakeProc:
-        def __init__(self, _pid): pass
-        def name(self): return "dbxignored.exe"
+        def __init__(self, _pid):
+            pass
+
+        def name(self):
+            return "dbxignored.exe"
 
     monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
     monkeypatch.setattr(psutil, "Process", _FakeProc)
@@ -156,9 +169,13 @@ def test_is_daemon_alive_dbxignored_process_returns_true(monkeypatch):
 def test_is_daemon_alive_psutil_error_returns_false(monkeypatch):
     """psutil.Process(pid).name() raises (NoSuchProcess if the PID died
     between pid_exists and the name call) → False. Race-window safety net."""
+
     class _FakeProc:
-        def __init__(self, _pid): pass
-        def name(self): raise psutil.NoSuchProcess(12345)
+        def __init__(self, _pid):
+            pass
+
+        def name(self):
+            raise psutil.NoSuchProcess(12345)
 
     monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
     monkeypatch.setattr(psutil, "Process", _FakeProc)
@@ -181,7 +198,4 @@ def test_default_path_linux_uses_xdg_state_home(monkeypatch, tmp_path):
 def test_default_path_linux_falls_back_to_local_state(monkeypatch, tmp_path):
     monkeypatch.delenv("XDG_STATE_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
-    assert (
-        state.default_path()
-        == tmp_path / ".local" / "state" / "dbxignore" / "state.json"
-    )
+    assert state.default_path() == tmp_path / ".local" / "state" / "dbxignore" / "state.json"

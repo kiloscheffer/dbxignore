@@ -18,9 +18,7 @@ def test_build_xml_contains_logon_trigger_and_action():
 
 def test_build_xml_uses_pythonw_when_source_install(tmp_path):
     pythonw = tmp_path / "pythonw.exe"
-    xml = install.build_task_xml(
-        exe_path=pythonw, arguments="-m dbxignore daemon"
-    )
+    xml = install.build_task_xml(exe_path=pythonw, arguments="-m dbxignore daemon")
     assert "pythonw.exe" in xml
     assert "-m dbxignore daemon" in xml
 
@@ -107,9 +105,7 @@ def test_install_task_runs_schtasks_create_then_run(monkeypatch, tmp_path):
     so the daemon comes up without waiting for next logon. Mirrors what
     `systemctl --user enable --now` does on Linux and what
     `launchctl bootstrap` + RunAtLoad does on macOS."""
-    monkeypatch.setattr(
-        install, "detect_invocation", lambda: (Path(r"C:\bin\dbxignored.exe"), "")
-    )
+    monkeypatch.setattr(install, "detect_invocation", lambda: (Path(r"C:\bin\dbxignored.exe"), ""))
     calls = []
 
     def fake_run(cmd, **kwargs):
@@ -126,9 +122,7 @@ def test_install_task_runs_schtasks_create_then_run(monkeypatch, tmp_path):
     assert calls[1] == ["schtasks", "/Run", "/TN", install.TASK_NAME]
 
 
-def test_install_task_warns_but_does_not_raise_when_run_fails(
-    monkeypatch, caplog
-):
+def test_install_task_warns_but_does_not_raise_when_run_fails(monkeypatch, caplog):
     """A schtasks /Run failure must NOT surface as an install error — the
     Create succeeded, the task is registered, and it'll start at next logon
     regardless. Suppressing the failure here avoids a confusing partial-
@@ -136,9 +130,7 @@ def test_install_task_warns_but_does_not_raise_when_run_fails(
     fact installed."""
     import logging
 
-    monkeypatch.setattr(
-        install, "detect_invocation", lambda: (Path(r"C:\bin\dbxignored.exe"), "")
-    )
+    monkeypatch.setattr(install, "detect_invocation", lambda: (Path(r"C:\bin\dbxignored.exe"), ""))
 
     def fake_run(cmd, **kwargs):
         if cmd[0:2] == ["schtasks", "/Create"]:
@@ -224,9 +216,7 @@ def test_purge_removes_state_json(tmp_path, monkeypatch, fake_markers):
 
     monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
     monkeypatch.setattr(cli, "_discover_roots", lambda: [])
-    monkeypatch.setattr(
-        "dbxignore.install.uninstall_service", lambda: None
-    )
+    monkeypatch.setattr("dbxignore.install.uninstall_service", lambda: None)
 
     result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
     assert result.exit_code == 0
@@ -246,9 +236,7 @@ def test_purge_removes_daemon_log_and_rotations(tmp_path, monkeypatch, fake_mark
 
     monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
     monkeypatch.setattr(cli, "_discover_roots", lambda: [])
-    monkeypatch.setattr(
-        "dbxignore.install.uninstall_service", lambda: None
-    )
+    monkeypatch.setattr("dbxignore.install.uninstall_service", lambda: None)
 
     result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
     assert result.exit_code == 0
@@ -268,9 +256,7 @@ def test_purge_rmdirs_empty_state_dir(tmp_path, monkeypatch, fake_markers):
 
     monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
     monkeypatch.setattr(cli, "_discover_roots", lambda: [])
-    monkeypatch.setattr(
-        "dbxignore.install.uninstall_service", lambda: None
-    )
+    monkeypatch.setattr("dbxignore.install.uninstall_service", lambda: None)
 
     click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
     assert not state_dir.exists()
@@ -292,9 +278,7 @@ def test_purge_preserves_state_dir_with_foreign_content(tmp_path, monkeypatch, f
 
     monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
     monkeypatch.setattr(cli, "_discover_roots", lambda: [])
-    monkeypatch.setattr(
-        "dbxignore.install.uninstall_service", lambda: None
-    )
+    monkeypatch.setattr("dbxignore.install.uninstall_service", lambda: None)
 
     click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
     # State dir survives because it's not empty.
@@ -315,9 +299,7 @@ def test_purge_handles_missing_state_dir(tmp_path, monkeypatch, fake_markers):
 
     monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
     monkeypatch.setattr(cli, "_discover_roots", lambda: [])
-    monkeypatch.setattr(
-        "dbxignore.install.uninstall_service", lambda: None
-    )
+    monkeypatch.setattr("dbxignore.install.uninstall_service", lambda: None)
 
     result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
     assert result.exit_code == 0
@@ -343,9 +325,7 @@ def test_purge_removes_systemd_dropin_dir(tmp_path, monkeypatch, fake_markers):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
     monkeypatch.setattr(cli, "_discover_roots", lambda: [])
-    monkeypatch.setattr(
-        "dbxignore.install.uninstall_service", lambda: None
-    )
+    monkeypatch.setattr("dbxignore.install.uninstall_service", lambda: None)
 
     click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
     assert not dropin_dir.exists()
@@ -371,9 +351,7 @@ def test_purge_preserves_files_not_matching_daemon_log_rotation(
 
     monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
     monkeypatch.setattr(cli, "_discover_roots", lambda: [])
-    monkeypatch.setattr(
-        "dbxignore.install.uninstall_service", lambda: None
-    )
+    monkeypatch.setattr("dbxignore.install.uninstall_service", lambda: None)
 
     click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
 

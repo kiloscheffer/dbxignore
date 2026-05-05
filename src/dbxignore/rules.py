@@ -79,6 +79,7 @@ class _PatternLike(Protocol):
     expose more without breaking the contract."""
 
     include: bool | None
+
     def match_file(self, path: str) -> bool | None: ...
 
 
@@ -87,10 +88,10 @@ class _SequenceEntry:
     """One rule in the flattened evaluation-order sequence used by
     conflict detection. Internal to RuleCache."""
 
-    source: Path           # the .dropboxignore file this rule came from
-    line: int              # 1-based source line number
-    raw: str               # source-line text (without trailing newline)
-    ancestor_dir: Path     # directory the pattern is scoped to
+    source: Path  # the .dropboxignore file this rule came from
+    line: int  # 1-based source line number
+    raw: str  # source-line text (without trailing newline)
+    ancestor_dir: Path  # directory the pattern is scoped to
     pattern: _PatternLike  # GitIgnoreSpecPattern at runtime; see _PatternLike
 
 
@@ -122,10 +123,7 @@ class RuleCache:
             # Drop cached entries for .dropboxignore files under this root that
             # rglob didn't find — they've been deleted since the last load and
             # their rules must stop applying.
-            for stale in [
-                p for p in self._rules
-                if p not in seen and p.is_relative_to(root)
-            ]:
+            for stale in [p for p in self._rules if p not in seen and p.is_relative_to(root)]:
                 del self._rules[stale]
             self._recompute_conflicts(log_warnings=log_warnings)
 
@@ -142,9 +140,7 @@ class RuleCache:
             self._rules.pop(ignore_file.resolve(), None)
             self._recompute_conflicts(log_warnings=log_warnings)
 
-    def load_external(
-        self, source: Path, mount_at: Path, *, log_warnings: bool = True
-    ) -> None:
+    def load_external(self, source: Path, mount_at: Path, *, log_warnings: bool = True) -> None:
         """Load ``source``'s lines as if it were a .dropboxignore at ``mount_at``.
 
         Used by ``dbxignore apply --from-gitignore``: rules in ``source`` are
@@ -223,17 +219,16 @@ class RuleCache:
             for line_idx, pattern in loaded.entries:
                 if pattern.match_file(rel_str) is None:
                     continue
-                raw_line = (
-                    loaded.lines[line_idx]
-                    if line_idx < len(loaded.lines) else ""
+                raw_line = loaded.lines[line_idx] if line_idx < len(loaded.lines) else ""
+                results.append(
+                    Match(
+                        ignore_file=ignore_file,
+                        line=line_idx + 1,
+                        pattern=raw_line,
+                        negation=not bool(pattern.include),
+                        is_dropped=(ignore_file, line_idx) in self._dropped,
+                    )
                 )
-                results.append(Match(
-                    ignore_file=ignore_file,
-                    line=line_idx + 1,
-                    pattern=raw_line,
-                    negation=not bool(pattern.include),
-                    is_dropped=(ignore_file, line_idx) in self._dropped,
-                ))
         return results
 
     # ---- internal helpers ------------------------------------------------
@@ -292,9 +287,7 @@ class RuleCache:
             return
         self._load_file(ignore_file, st=st)
 
-    def _applicable(
-        self, root: Path, path: Path
-    ) -> list[tuple[Path, _LoadedRules]]:
+    def _applicable(self, root: Path, path: Path) -> list[tuple[Path, _LoadedRules]]:
         """Return (ancestor, loaded_rules) for each applicable .dropboxignore
         in shallow-to-deep order."""
         result: list[tuple[Path, _LoadedRules]] = []
@@ -362,8 +355,12 @@ class RuleCache:
                         "(Dropbox inherits ignored state from ancestor directories). "
                         "Dropping the negation from the active rule set. "
                         "See README §Gotchas.",
-                        c.dropped_pattern, c.dropped_source, c.dropped_line,
-                        c.masking_pattern, c.masking_source, c.masking_line,
+                        c.dropped_pattern,
+                        c.dropped_source,
+                        c.dropped_line,
+                        c.masking_pattern,
+                        c.masking_source,
+                        c.masking_line,
                     )
         self._dropped = new_dropped
         self._conflicts = new_conflicts
@@ -383,23 +380,20 @@ class RuleCache:
             loaded = self._rules[ignore_file]
             ancestor_dir = ignore_file.parent
             for line_idx, pattern in loaded.entries:
-                raw = (
-                    loaded.lines[line_idx]
-                    if line_idx < len(loaded.lines) else ""
+                raw = loaded.lines[line_idx] if line_idx < len(loaded.lines) else ""
+                sequence.append(
+                    _SequenceEntry(
+                        source=ignore_file,
+                        line=line_idx + 1,
+                        raw=raw,
+                        ancestor_dir=ancestor_dir,
+                        pattern=pattern,
+                    )
                 )
-                sequence.append(_SequenceEntry(
-                    source=ignore_file,
-                    line=line_idx + 1,
-                    raw=raw,
-                    ancestor_dir=ancestor_dir,
-                    pattern=pattern,
-                ))
         return sequence
 
 
-def _build_entries(
-    lines: list[str], spec: pathspec.PathSpec
-) -> list[tuple[int, pathspec.Pattern]]:
+def _build_entries(lines: list[str], spec: pathspec.PathSpec) -> list[tuple[int, pathspec.Pattern]]:
     """Pair each active source line with its compiled pattern.
 
     Fast path: filter ``spec.patterns`` to active entries (``include is not
@@ -411,8 +405,7 @@ def _build_entries(
     to keep ``(source_line_index, pattern)`` pairing correct.
     """
     active_line_indices = [
-        i for i, raw in enumerate(lines)
-        if (s := raw.strip()) and not s.startswith("#")
+        i for i, raw in enumerate(lines) if (s := raw.strip()) and not s.startswith("#")
     ]
     active_patterns = [p for p in spec.patterns if p.include is not None]
     if len(active_line_indices) == len(active_patterns):

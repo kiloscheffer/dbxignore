@@ -51,18 +51,14 @@ def test_apply_from_gitignore_mounts_at_dirname(tmp_path, fake_markers, monkeypa
     monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
 
     runner = CliRunner()
-    result = runner.invoke(
-        cli.main, ["apply", "--from-gitignore", str(gitignore), "--yes"]
-    )
+    result = runner.invoke(cli.main, ["apply", "--from-gitignore", str(gitignore), "--yes"])
 
     assert result.exit_code == 0, result.output
     assert (sub / "build").resolve() in fake_markers._ignored
     assert (other / "build").resolve() not in fake_markers._ignored
 
 
-def test_apply_from_gitignore_ignores_existing_dropboxignore(
-    tmp_path, fake_markers, monkeypatch
-):
+def test_apply_from_gitignore_ignores_existing_dropboxignore(tmp_path, fake_markers, monkeypatch):
     (tmp_path / ".dropboxignore").write_text("other/\n", encoding="utf-8")
     (tmp_path / "other").mkdir()
     (tmp_path / "build").mkdir()
@@ -73,9 +69,7 @@ def test_apply_from_gitignore_ignores_existing_dropboxignore(
     monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
 
     runner = CliRunner()
-    result = runner.invoke(
-        cli.main, ["apply", "--from-gitignore", str(gitignore), "--yes"]
-    )
+    result = runner.invoke(cli.main, ["apply", "--from-gitignore", str(gitignore), "--yes"])
 
     assert result.exit_code == 0, result.output
     assert (tmp_path / "build").resolve() in fake_markers._ignored
@@ -207,9 +201,7 @@ def test_apply_dry_run_with_from_gitignore_does_not_mutate(tmp_path, fake_marker
     (tmp_path / "build").mkdir()
 
     runner = CliRunner()
-    result = runner.invoke(
-        cli.main, ["apply", "--from-gitignore", str(gitignore), "--dry-run"]
-    )
+    result = runner.invoke(cli.main, ["apply", "--from-gitignore", str(gitignore), "--dry-run"])
 
     assert result.exit_code == 0, result.output
     assert "apply --dry-run:" in result.output
@@ -327,9 +319,7 @@ def test_apply_from_gitignore_yes_skips_prompt(tmp_path, fake_markers, monkeypat
     monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
 
     runner = CliRunner()
-    result = runner.invoke(
-        cli.main, ["apply", "--from-gitignore", str(gitignore), "--yes"]
-    )
+    result = runner.invoke(cli.main, ["apply", "--from-gitignore", str(gitignore), "--yes"])
 
     assert result.exit_code == 0, result.output
     assert "Continue?" not in result.output
@@ -344,18 +334,14 @@ def test_apply_from_gitignore_prompt_aborts_on_no(tmp_path, fake_markers, monkey
     monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
 
     runner = CliRunner()
-    result = runner.invoke(
-        cli.main, ["apply", "--from-gitignore", str(gitignore)], input="n\n"
-    )
+    result = runner.invoke(cli.main, ["apply", "--from-gitignore", str(gitignore)], input="n\n")
 
     assert result.exit_code == 0, result.output
     assert "Aborted" in result.output
     assert (tmp_path / "build").resolve() not in fake_markers._ignored
 
 
-def test_apply_prompt_mentions_cloud_delete_for_mark_only(
-    tmp_path, fake_markers, monkeypatch
-):
+def test_apply_prompt_mentions_cloud_delete_for_mark_only(tmp_path, fake_markers, monkeypatch):
     """Prompt copy must explicitly call out the cloud-delete consequence for the
     mark-only direction — that's the footgun the prompt exists to surface."""
     (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")

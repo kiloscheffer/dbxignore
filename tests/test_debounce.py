@@ -12,8 +12,10 @@ _DEFAULT_TIMEOUTS = {
 
 def test_single_event_is_emitted_after_quiet_period():
     received: list[tuple] = []
-    d = Debouncer(on_emit=received.append,
-                  timeouts_ms={EventKind.DIR_CREATE: 10, EventKind.OTHER: 50, EventKind.RULES: 20})
+    d = Debouncer(
+        on_emit=received.append,
+        timeouts_ms={EventKind.DIR_CREATE: 10, EventKind.OTHER: 50, EventKind.RULES: 20},
+    )
     d.start()
     try:
         d.submit(EventKind.OTHER, "key1", "payload1")
@@ -25,8 +27,10 @@ def test_single_event_is_emitted_after_quiet_period():
 
 def test_coalesces_repeated_events_for_same_key():
     received: list[tuple] = []
-    d = Debouncer(on_emit=received.append,
-                  timeouts_ms={EventKind.DIR_CREATE: 10, EventKind.OTHER: 100, EventKind.RULES: 20})
+    d = Debouncer(
+        on_emit=received.append,
+        timeouts_ms={EventKind.DIR_CREATE: 10, EventKind.OTHER: 100, EventKind.RULES: 20},
+    )
     d.start()
     try:
         # 2ms inter-submit gap (was 20ms) gives 50x headroom against the 100ms
@@ -46,8 +50,10 @@ def test_coalesces_repeated_events_for_same_key():
 
 def test_different_keys_emit_independently():
     received: list[tuple] = []
-    d = Debouncer(on_emit=received.append,
-                  timeouts_ms={EventKind.DIR_CREATE: 10, EventKind.OTHER: 50, EventKind.RULES: 20})
+    d = Debouncer(
+        on_emit=received.append,
+        timeouts_ms={EventKind.DIR_CREATE: 10, EventKind.OTHER: 50, EventKind.RULES: 20},
+    )
     d.start()
     try:
         d.submit(EventKind.OTHER, "a", "aa")
@@ -61,8 +67,10 @@ def test_different_keys_emit_independently():
 
 def test_dir_create_emits_immediately():
     received: list[tuple] = []
-    d = Debouncer(on_emit=received.append,
-                  timeouts_ms={EventKind.DIR_CREATE: 0, EventKind.OTHER: 500, EventKind.RULES: 100})
+    d = Debouncer(
+        on_emit=received.append,
+        timeouts_ms={EventKind.DIR_CREATE: 0, EventKind.OTHER: 500, EventKind.RULES: 100},
+    )
     d.start()
     try:
         d.submit(EventKind.DIR_CREATE, "newdir", "p")

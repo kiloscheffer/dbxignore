@@ -7,6 +7,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **Conflict detector no longer drops effective negations under children-only patterns.** Previously, a `.dropboxignore` containing `build/*` followed by `!build/keep/` had the negation reported as a conflict and dropped from the active rule set, leaving `build/keep` marked ignored. The detector now distinguishes directory negations whose target is matched by an earlier include (pathspec last-match-wins handles these — the negation's own match overrides the include for the target itself) from negations whose path lives strictly under a marked ancestor directory (Dropbox's directory inheritance makes those inert). Implemented via a `strict` flag on `_ancestors_of` (skip the target itself for directory negations whose `raw == prefix`) and last-match-wins logic in `_find_masking_include` (account for negations between an earlier include and the current rule). Behaviour change: `build/` + `!build/keep/` continues to flag (`build/` marks the dir itself, inheritance overrides the negation); `build/*` + `!build/keep/` and `build/*` + `!build/keep/` + `!build/keep/**` no longer flag and now take effect — `build/keep` stays unmarked and Dropbox keeps it in sync.
+
+### Added
+
+- **`dbxignore generate` warns at write time about dropped negations in the source.** After producing the `.dropboxignore` (or before emitting it on `--stdout`), the static conflict detector runs against the source as a self-contained rule set; any conflicts are listed on stderr with line numbers and the masking rule. The byte-for-byte invariant of `generate` is preserved — the warning is informational, the file content is unchanged. Within-file conflicts only; cross-file conflicts (a `.dropboxignore` higher in the tree masking a negation in this one) still surface only at runtime via `dbxignore status` / `explain`.
+
 ### Changed
 
 - **`dbxignore --help` and per-command help text render with colors, panels, and inline-code highlighting.** Switched the CLI from `click` to `rich-click` (drop-in import alias) with `TEXT_MARKUP = "markdown"`, so single backticks in command/option help text render as colored monospace tokens, sections appear in panels, and option flags are highlighted. Converted the existing rST `` ``foo`` `` literals in `cli.py` docstrings to Markdown `` `foo` `` form (37 sites). Adds `rich-click>=1.8` to dependencies (transitively pulls in `rich`, `markdown-it-py`, `mdurl`, `pygments`).

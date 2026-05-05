@@ -155,3 +155,81 @@ def test_generate_target_outside_roots_warns_but_writes(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert (outside / ".dropboxignore").exists()
     assert "not under any discovered Dropbox root" in result.output
+
+
+# ---- generate-time conflict warning -----------------------------------------
+
+
+def test_generate_no_conflicts_no_warning(tmp_path):
+    """Clean source: no conflict warning, no stderr noise."""
+    source = tmp_path / ".gitignore"
+    source.write_text("build/\nnode_modules/\n*.log\n", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["generate", str(source)])
+
+    assert result.exit_code == 0, result.output
+    assert "dropped negation" not in result.output
+    assert "masked by" not in result.output
+
+
+def test_generate_warns_on_dropped_negation(tmp_path):
+    """`build/` + `!build/keep/` is a true conflict (dir rule + descendant
+    negation, Dropbox inheritance makes the negation inert). Warn at
+    generate time so the user sees it before reconcile runs."""
+    source = tmp_path / ".gitignore"
+    source.write_text("build/\n!build/keep/\n", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["generate", str(source)])
+
+    assert result.exit_code == 0, result.output
+    assert "!build/keep/" in result.output
+    assert "build/" in result.output
+    assert "masked by" in result.output
+
+
+def test_generate_warning_does_not_alter_file(tmp_path):
+    """The byte-for-byte invariant survives the warning — the warning is
+    informational, the file content is unchanged."""
+    text = "build/\n!build/keep/\n"
+    source = tmp_path / ".gitignore"
+    source.write_text(text, encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["generate", str(source)])
+
+    assert result.exit_code == 0, result.output
+    target = tmp_path / ".dropboxignore"
+    assert target.read_text(encoding="utf-8") == text
+
+
+def test_generate_stdout_warning_to_stderr_only(tmp_path):
+    """--stdout mode: stdout carries the verbatim content; the warning
+    goes to stderr so consumers piping the output downstream don't get
+    a polluted file. Click 8.3+ keeps result.stdout / result.stderr
+    separate by default."""
+    source = tmp_path / ".gitignore"
+    source.write_text("build/\n!build/keep/\n", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["generate", str(source), "--stdout"])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == "build/\n!build/keep/\n"
+    assert "masked by" in result.stderr
+
+
+def test_generate_no_warning_for_children_only_pattern(tmp_path):
+    """`build/*` + `!build/keep/` is the canonical git pattern for "exclude
+    all of build/ except build/keep" and now (post detector fix) takes
+    effect in dbxignore too — generate must not warn."""
+    source = tmp_path / ".gitignore"
+    source.write_text("build/*\n!build/keep/\n", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["generate", str(source)])
+
+    assert result.exit_code == 0, result.output
+    assert "masked by" not in result.output
+    assert "dropped negation" not in result.output

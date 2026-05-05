@@ -1522,13 +1522,60 @@ A short subsection in README §"Commands" — a small parity table mapping each 
 
 Touches: `README.md` §"Commands" (new sub-section after the command table).
 
+## 73. Local code-review hook (`.claude/settings.json`) over-fires on Bash commands that don't match the `if` filter
+
+**Surfaced 2026-05-05 in PR #111 work; multiple fired triggers in one session.**
+
+The local PreToolUse hook in `.claude/settings.json` is configured with `matcher: "Bash"` and `if: "Bash(gh pr create*)"` — intent: fire only when Claude is about to invoke `gh pr create`, requiring a `code-reviewer` pass + per-HEAD marker file before allowing the call. In practice the hook fires on Bash commands that contain neither `gh pr create` literally nor any obvious near-match.
+
+**Observed firings during PR #111 (all blocked despite no `gh pr create` in the literal command):**
+- `for subj in "..."; do printf ...; commit-check ...; done` — pre-flighting commit subjects.
+- `git log --pretty=format:'%s' origin/main..HEAD | while IFS= read -r msg; do ...; commit-check ...; done` — same intent, different shell idiom.
+
+**Observed non-firings in the same session** (these passed through cleanly):
+- `touch .git/.code-review-passed-<sha>` — single command, no compounding.
+- `git log --oneline origin/main..HEAD` — diagnostic.
+- `git push --force-with-lease` — no `gh pr` substring.
+- `gh pr edit 111 --title "..." --body "$(cat <<EOF ... EOF)"` — confirms `pr edit` is not affected, only `pr create`-adjacent invocations.
+
+The pattern of firings doesn't correlate cleanly with literal `gh pr create` substring presence. Best hypothesis: Claude Code's permission-rule matching has unexpected semantics when both `matcher` and `if` are set on the same hook entry (possibly the `if` becomes advisory / ignored, or matches more loosely than the documented prefix-glob spec). Could also be the harness doing token-shape analysis on commands that include identifiers like `commit` or shell constructs the rule engine treats as "PR-creation-adjacent."
+
+**Fix candidates:**
+
+- **Investigate Claude Code's permission-rule semantics + hook-firing source.** Read the source for how `if` is matched against tool input when `matcher` is also set. Possibly file an upstream issue if the matching is genuinely buggy. This is a research task, not a fix yet.
+- **Drop the `if` filter; check inside the script.** Replace the `if: "Bash(gh pr create*)"` field with a script-level guard: `case "$BASH_COMMAND" in *"gh pr create"*) ... ;; *) exit 0 ;; esac`. Loses the early-exit before the hook process spawns, but explicit and predictable. Trade ~1ms-per-Bash for correctness.
+- **Accept the over-firing and broaden the contract.** Treat the hook as "every code-modifying Bash needs a per-HEAD review marker," not just `gh pr create`. Higher friction but uniform — and arguably more conservative (catches rogue scripts that bypass `gh pr create`). Document in the hook comment.
+- **Defer.** Friction is real but bounded; current workaround is "touch the marker after each new commit." If multi-PR cadences increase the friction, revisit.
+
+**Urgency:** low-medium. Hook works as a safety net; the over-firing is annoying but not blocking. Bundle with the next `.claude/`-touching change.
+
+Touches: `.claude/settings.json` (hook config); investigative — possibly Claude Code source / docs.
+
+## 74. GitHub Actions pinned to mutable tags rather than SHAs
+
+**Surfaced 2026-05-05 in `code-reviewer` review of PR #111.**
+
+Every GitHub Action invocation in `.github/workflows/*.yml` pins to a major-version tag rather than a 40-char commit SHA: `actions/checkout@v4`, `commit-check/commit-check-action@v2.6.0`, `anthropics/claude-code-action@v1`, `pypa/gh-action-pypi-publish@release/v1`. Tags are mutable — the action repository owner can re-point a tag at new code without anyone consenting. SHAs are content-addressed and immutable. For a release-publishing pipeline (`pypa/gh-action-pypi-publish` runs on tag push and uploads to PyPI), the trust boundary is meaningful.
+
+The current convention is consistent (tags everywhere) — switching to SHAs would be a project-wide shift, not a one-off, and would require a maintenance practice for keeping pins current (Dependabot is the standard answer).
+
+**Fix candidates:**
+
+- **SHA-pin every action across all workflows; add a Dependabot config to keep pins current.** Mechanical change — for each `uses: foo/bar@vN` line, look up the SHA the tag points to today and replace. ~30 LOC of YAML edits + ~10 LOC of `.github/dependabot.yml`. Reviewers should sanity-check each SHA against the action's release-notes page. Once landed, contributing-docs should note the SHA-pin convention.
+- **SHA-pin only release-critical actions** (`pypa/gh-action-pypi-publish`); leave the rest on tags. Lower mechanical cost, narrower trust boundary improvement. Defensible if PyPI publish is the only consequential trust surface.
+- **Defer.** No observed compromise; tag pinning is the project's existing convention and matches most open-source practice. Filed for the day Anthropic, GitHub, or PyPa publishes a security advisory affecting one of the pinned actions.
+
+**Urgency:** low. Speculative security hardening; no observed incident or specific pressure.
+
+Touches: every file in `.github/workflows/` that uses third-party actions (currently `release.yml`, `test.yml`, `commit-check.yml`, plus the new `claude.yml` and `claude-code-review.yml` from PR #111); new `.github/dependabot.yml` for option 1.
+
 ---
 
 ## Status
 
 ### Open
 
-Twenty-five items. Twenty-three are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18). Item #34's third recurrence fired 2026-05-04 during PR #95 pre-flight; widening 5.0s → 7.0s → 10.0s all failed under full-suite load (different polls exhausted on each run), so the suggested band-aid fix shape was abandoned and #34 stays open pending root-cause diagnosis (the test passes in 0.27s in isolation but >7s in the full suite, so the cause lives in test-order interaction with an earlier test).
+Twenty-seven items. Twenty-four are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18); item #73 had multiple fired triggers in one session (the local PR-review hook over-fired on Bash commands that didn't match its declared `if` filter — friction not blocking). Item #34's third recurrence fired 2026-05-04 during PR #95 pre-flight; widening 5.0s → 7.0s → 10.0s all failed under full-suite load (different polls exhausted on each run), so the suggested band-aid fix shape was abandoned and #34 stays open pending root-cause diagnosis (the test passes in 0.27s in isolation but >7s in the full suite, so the cause lives in test-order interaction with an earlier test).
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
@@ -1555,6 +1602,8 @@ Twenty-five items. Twenty-three are passive (no concrete trigger requires action
 - **#70** — `dbxignore explain` always exits `0` regardless of verdict, so shell scripts can't branch on "is X ignored?" the way they can with `git check-ignore -v` (`0`/`1`/`128`). Stdout text is parseable today but awkward for cron / status-bar / pre-commit integrations. Body offers parity-with-git or a three-way split surfacing the dropped-negation case. Surfaced 2026-05-05 in conversation comparing the two diagnostic CLIs.
 - **#71** — `dbxignore check-ignore` alias for `explain`. Additive (no rename); gives git-fluent users the verb they expect without breaking existing `explain` callers. Click supports dual registration via decorator + `add_command`. Surfaced 2026-05-05 in a CLI-naming discussion. Bundles naturally with #72.
 - **#72** — README §"Command parity with git" subsection mapping each dbxignore command to its closest git counterpart (or "none"), with notes on deliberate non-mappings. Most consequential gap to call out: `dbxignore clear` is *not* `git rm --cached`-shaped — clearing markers triggers Dropbox to upload to cloud. Surfaced 2026-05-05 alongside #71. One PR can land both.
+- **#73** — Local code-review hook in `.claude/settings.json` over-fires: declared `if: "Bash(gh pr create*)"` filter is matching Bash commands that contain neither `gh pr create` literally nor any obvious near-match. Multiple fired triggers in PR #111 work (commit-check pre-flight loops blocked; simple `touch` / `git push` / `gh pr edit` passed through). Friction is real but bounded. Body lists empirical observations and three fix candidates (investigate Click semantics; replace `if` with in-script guard; broaden the contract). Surfaced 2026-05-05.
+- **#74** — GitHub Actions pinned to mutable major-version tags (`@v4`, `@v1`, `@v2.6.0`, `@release/v1`) rather than 40-char SHAs across all workflow files. Speculative security hardening — switching to SHAs would be a project-wide convention shift requiring a Dependabot maintenance practice. Surfaced 2026-05-05 in `code-reviewer` review of PR #111. No observed incident or specific pressure.
 
 ### Resolved (reverse chronological)
 

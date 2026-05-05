@@ -1569,13 +1569,31 @@ The current convention is consistent (tags everywhere) — switching to SHAs wou
 
 Touches: every file in `.github/workflows/` that uses third-party actions (currently `release.yml`, `test.yml`, `commit-check.yml`, plus the new `claude.yml` and `claude-code-review.yml` from PR #111); new `.github/dependabot.yml` for option 1.
 
+## 75. Cross-script Phase 4.5 extraction in manual-test-{ubuntu-vps,macos}.sh
+
+**Surfaced 2026-05-05 in `/simplify` review of PRs #114 + #115 (confidence 45).**
+
+`scripts/manual-test-ubuntu-vps.sh` and `scripts/manual-test-macos.sh` both define `phase_extended_cli()` covering Phase 4.5's eight test cases (4g–4n). Bodies are byte-identical except 4i (file-content-invariant comment is shorter on macOS). ~120 LOC duplicated between the two files. Could extract to `scripts/_phase_extended_cli.sh` and `source` it from both — saves ~120 LOC, keeps the two top-level scripts as thin per-platform wrappers.
+
+The reason this isn't urgent: when the platforms diverge in Phase 4.5 (e.g., a darwin-only `pluginkit` smoke check, or a Linux-only inotify-limit-aware fixture), the shared file becomes awkward — either it grows platform conditionals, or the divergence forces re-duplicating the case in one script. The Windows PowerShell script already can't share (different shell), so the extraction would never reach three-way reuse. With only two scripts sharing, the duplication-vs-conditional tradeoff is roughly even.
+
+**Fix candidates:**
+
+- **Extract Phase 4.5 to `scripts/_phase_extended_cli.sh`** sourced from both bash scripts at the right point in `main`. ~120 LOC saved at the cost of one shared file. Helpers (`assert_grep`, `assert_xattr_*`) need to be defined before the source line; that's already true today.
+- **Extract only the helpers into `scripts/_test_helpers.sh`** (less aggressive — extracts `assert_grep`, the color codes, the `pass`/`fail`/`abort` block, etc. without touching test cases). Saves ~30 LOC per script. Lower risk of platform-divergence pain.
+- **Defer.** Current duplication is bounded (~120 LOC across two files) and easy to grep across; no observed pain from the duplication itself.
+
+**Urgency:** low. Polish surfaced from `/simplify` review; defer until either (a) a third bash script lands (e.g., a FreeBSD/BSD variant) raising the duplication-cost ratio, or (b) the manual-test scripts become a more-frequently-edited surface where the duplication starts costing per-PR effort.
+
+Touches: `scripts/manual-test-ubuntu-vps.sh`, `scripts/manual-test-macos.sh`, new `scripts/_phase_extended_cli.sh` (option 1) or `scripts/_test_helpers.sh` (option 2).
+
 ---
 
 ## Status
 
 ### Open
 
-Twenty-seven items. Twenty-four are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18); item #73 had multiple fired triggers in one session (the local PR-review hook over-fired on Bash commands that didn't match its declared `if` filter — friction not blocking). Item #34's third recurrence fired 2026-05-04 during PR #95 pre-flight; widening 5.0s → 7.0s → 10.0s all failed under full-suite load (different polls exhausted on each run), so the suggested band-aid fix shape was abandoned and #34 stays open pending root-cause diagnosis (the test passes in 0.27s in isolation but >7s in the full suite, so the cause lives in test-order interaction with an earlier test).
+Twenty-eight items. Twenty-five are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18); item #73 had multiple fired triggers in one session (the local PR-review hook over-fired on Bash commands that didn't match its declared `if` filter — friction not blocking). Item #34's third recurrence fired 2026-05-04 during PR #95 pre-flight; widening 5.0s → 7.0s → 10.0s all failed under full-suite load (different polls exhausted on each run), so the suggested band-aid fix shape was abandoned and #34 stays open pending root-cause diagnosis (the test passes in 0.27s in isolation but >7s in the full suite, so the cause lives in test-order interaction with an earlier test).
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
@@ -1604,6 +1622,7 @@ Twenty-seven items. Twenty-four are passive (no concrete trigger requires action
 - **#72** — README §"Command parity with git" subsection mapping each dbxignore command to its closest git counterpart (or "none"), with notes on deliberate non-mappings. Most consequential gap to call out: `dbxignore clear` is *not* `git rm --cached`-shaped — clearing markers triggers Dropbox to upload to cloud. Surfaced 2026-05-05 alongside #71. One PR can land both.
 - **#73** — Local code-review hook in `.claude/settings.json` over-fires: declared `if: "Bash(gh pr create*)"` filter is matching Bash commands that contain neither `gh pr create` literally nor any obvious near-match. Multiple fired triggers in PR #111 work (commit-check pre-flight loops blocked; simple `touch` / `git push` / `gh pr edit` passed through). Friction is real but bounded. Body lists empirical observations and three fix candidates (investigate Click semantics; replace `if` with in-script guard; broaden the contract). Surfaced 2026-05-05.
 - **#74** — GitHub Actions pinned to mutable major-version tags (`@v4`, `@v1`, `@v2.6.0`, `@release/v1`) rather than 40-char SHAs across all workflow files. Speculative security hardening — switching to SHAs would be a project-wide convention shift requiring a Dependabot maintenance practice. Surfaced 2026-05-05 in `code-reviewer` review of PR #111. No observed incident or specific pressure.
+- **#75** — `phase_extended_cli()` body byte-identical between `manual-test-{ubuntu-vps,macos}.sh` (~120 LOC duplicated). Could extract to `scripts/_phase_extended_cli.sh` and `source` from both. Trade-off is duplication-vs-platform-conditional balance; only two scripts share (Windows is PowerShell). Surfaced 2026-05-05 in `/simplify` review of PRs #114 + #115.
 
 ### Resolved (reverse chronological)
 

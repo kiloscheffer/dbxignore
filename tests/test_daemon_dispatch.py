@@ -306,6 +306,31 @@ def test_dispatch_moved_non_rules_to_rules_reloads_dest(tmp_path, monkeypatch):
     assert reconcile_calls == [(root, proj)]
 
 
+def test_dispatch_moved_non_rules_to_rules_reloads_before_reconciling(tmp_path, monkeypatch):
+    """Atomic-save same-parent: the cache reload MUST happen before the
+    reconcile, otherwise the same-parent dedupe collapses to a single
+    reconcile call running against the stale cache and the new rules
+    don't take effect until another event or the hourly sweep."""
+    root = tmp_path.resolve()
+    cache = MagicMock()
+    call_order: list[str] = []
+    cache.reload_file = MagicMock(side_effect=lambda *a, **k: call_order.append("reload"))
+    monkeypatch.setattr(
+        daemon, "reconcile_subtree", lambda r, sub, c: call_order.append("reconcile")
+    )
+
+    proj = root / "proj"
+    proj.mkdir()
+    src = proj / ".dropboxignore.tmp"
+    dest = proj / ".dropboxignore"
+    dest.write_text("build/\n", encoding="utf-8")
+
+    ev = _stub_event("moved", str(src), dest_path=str(dest))
+    daemon._dispatch(ev, cache, roots=[root])
+
+    assert call_order == ["reload", "reconcile"]
+
+
 def test_dispatch_moved_rules_to_non_rules_does_not_reload_backup(tmp_path, monkeypatch):
     """Editor save-via-rename step: `.dropboxignore` -> `.dropboxignore~`.
     Dispatch must drop the old rule file from the cache and must NOT call

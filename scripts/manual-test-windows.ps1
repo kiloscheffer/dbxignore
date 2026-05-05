@@ -113,18 +113,20 @@ function Assert-AdsUnset {
     }
 }
 
-# Run a command, return $true if its exit code is 0.
-# Use for assertion-style checks where we don't want $ErrorActionPreference="Stop"
-# to halt on a non-zero exit. The trailing $LASTEXITCODE check handles native
-# executables; PowerShell's own cmdlet errors are still caught via try/catch.
+# Reset-TestDir <path> [<dropboxignore-content>] — removes and recreates a
+# test directory; optionally writes a .dropboxignore. The Phase 4.5 cases
+# share this setup; helper keeps the per-case body focused on what's
+# actually being tested.
 
-function Test-Exit0 {
-    param([scriptblock]$Block)
-    try {
-        & $Block 2>&1 | Out-Null
-        return ($LASTEXITCODE -eq 0)
-    } catch {
-        return $false
+function Reset-TestDir {
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [string]$DropboxignoreContent = $null
+    )
+    if (Test-Path $Path) { Remove-Item -Path $Path -Recurse -Force }
+    New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    if ($null -ne $DropboxignoreContent) {
+        Set-Content -Path (Join-Path $Path ".dropboxignore") -Value $DropboxignoreContent -Encoding utf8
     }
 }
 
@@ -277,12 +279,10 @@ function Test-Reconcile {
     Write-Phase "Phase 4 - reconcile / apply"
 
     $T = Join-Path $script:DropboxDir $TestSubdir
-    if (Test-Path $T) { Remove-Item -Path $T -Recurse -Force }
-    New-Item -ItemType Directory -Path $T -Force | Out-Null
+    Reset-TestDir -Path $T -DropboxignoreContent "*.tmp"
 
     # 4a. simple file rule
     Write-Note "4a - simple file rule (*.tmp)"
-    Set-Content -Path "$T\.dropboxignore" -Value "*.tmp" -Encoding utf8
     New-Item -ItemType File -Path "$T\foo.tmp" -Force | Out-Null
     New-Item -ItemType File -Path "$T\bar.txt" -Force | Out-Null
     dbxignore apply "$T" --yes 2>$null | Out-Null
@@ -371,8 +371,7 @@ function Test-ExtendedCli {
     Write-Phase "Phase 4.5 - extended CLI surface (init, generate, apply variants, clear)"
 
     $T = Join-Path $script:DropboxDir $TestSubdir
-    if (Test-Path $T) { Remove-Item -Path $T -Recurse -Force }
-    New-Item -ItemType Directory -Path $T -Force | Out-Null
+    Reset-TestDir -Path $T
 
     # 4g — dbxignore init
     Write-Note "4g - dbxignore init"
@@ -386,7 +385,7 @@ function Test-ExtendedCli {
 
     # 4h — dbxignore generate (byte-for-byte)
     Write-Note "4h - dbxignore generate (byte-for-byte)"
-    Remove-Item -Path $T -Recurse -Force; New-Item -ItemType Directory -Path $T -Force | Out-Null
+    Reset-TestDir -Path $T
     Set-Content -Path "$T\source.gitignore" -Value "node_modules/`n*.log" -Encoding utf8
     dbxignore generate "$T\source.gitignore" 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) { Write-Pass "4h - generate (rc=0)" } else { Write-Fail "4h - generate" }
@@ -399,7 +398,7 @@ function Test-ExtendedCli {
 
     # 4i — generate warns on dropped negation (PR #108)
     Write-Note "4i - generate emits stderr warning on dropped negation"
-    Remove-Item -Path $T -Recurse -Force; New-Item -ItemType Directory -Path $T -Force | Out-Null
+    Reset-TestDir -Path $T
     Set-Content -Path "$T\source.gitignore" -Value "build/`n!build/keep/" -Encoding utf8
     $genErr = "$env:TEMP\dbxignore-gen-warn.err"
     & dbxignore generate "$T\source.gitignore" --force 2> $genErr | Out-Null
@@ -419,8 +418,7 @@ function Test-ExtendedCli {
 
     # 4j — apply --dry-run does not mutate (PR #103)
     Write-Note "4j - apply --dry-run"
-    Remove-Item -Path $T -Recurse -Force; New-Item -ItemType Directory -Path $T -Force | Out-Null
-    Set-Content -Path "$T\.dropboxignore" -Value "*.tmp" -Encoding utf8
+    Reset-TestDir -Path $T -DropboxignoreContent "*.tmp"
     New-Item -ItemType File -Path "$T\foo.tmp" -Force | Out-Null
     $dryOut = "$env:TEMP\dbxignore-dry.out"
     dbxignore apply "$T" --dry-run *> $dryOut
@@ -440,23 +438,33 @@ function Test-ExtendedCli {
     dbxignore apply "$T" --yes *> $yesOut
     if ($LASTEXITCODE -eq 0) { Write-Pass "4k - apply --yes (rc=0)" } else { Write-Fail "4k - apply --yes" }
     Assert-AdsSet -Path "$T\foo.tmp" -Name "4k - apply --yes set marker"
-    if ((Get-Content $yesOut -Raw) -notmatch 'Continue\?') {
+    $yesContent = Get-Content $yesOut -Raw
+    if ($yesContent -notmatch 'Continue\?') {
         Write-Pass "4k - --yes skipped the prompt"
     } else {
-        Write-Note (Get-Content $yesOut -Raw)
+        Write-Note $yesContent
         Write-Fail "4k - --yes did not skip the prompt"
     }
 
     # 4l — apply on already-converged state says "Nothing to apply" (PR #107)
     Write-Note "4l - apply on no-op state"
     $noopOut = "$env:TEMP\dbxignore-noop.out"
-    # Pipe an empty $null into stdin so any prompt fails fast (we expect no prompt).
-    $null | & dbxignore apply "$T" *> $noopOut
+    # PowerShell can't redirect stdin from a file like bash's `< /dev/null`,
+    # and `$null | <native>` doesn't actually close stdin (PS pipes one $null
+    # object). Workaround: feed an empty string. If a regression makes the
+    # prompt fire, Click's confirm() consumes the trailing newline as the
+    # default ('n') → "Aborted" lands in stdout — we detect that explicitly
+    # below so the test fails with a clear reason rather than hanging.
+    '' | & dbxignore apply "$T" *> $noopOut
     if ($LASTEXITCODE -eq 0) { Write-Pass "4l - apply on no-op state (rc=0)" } else { Write-Fail "4l - apply on no-op state" }
-    if ((Get-Content $noopOut -Raw) -match 'Nothing to apply') {
+    $noopContent = Get-Content $noopOut -Raw
+    if ($noopContent -match 'Aborted') {
+        Write-Note $noopContent
+        Write-Fail "4l - prompt fired unexpectedly (got 'Aborted' from default-False prompt)"
+    } elseif ($noopContent -match 'Nothing to apply') {
         Write-Pass "4l - emits 'Nothing to apply (rules already in sync)'"
     } else {
-        Write-Note (Get-Content $noopOut -Raw)
+        Write-Note $noopContent
         Write-Fail "4l - did not emit 'Nothing to apply'"
     }
 
@@ -514,9 +522,7 @@ function Test-Daemon {
     # daemon's initial cache.load_root() reads a known rule set with no
     # leftover phase-4 conflicts. Same pattern as Linux/macOS.
     $T = Join-Path $script:DropboxDir $TestSubdir
-    if (Test-Path $T) { Remove-Item -Path $T -Recurse -Force }
-    New-Item -ItemType Directory -Path $T -Force | Out-Null
-    Set-Content -Path "$T\.dropboxignore" -Value "*.tmp" -Encoding utf8
+    Reset-TestDir -Path $T -DropboxignoreContent "*.tmp"
 
     $installOut = "$env:TEMP\dbxignore-install.out"
     dbxignore install *> $installOut
@@ -544,8 +550,7 @@ function Test-Daemon {
     # Wait for the daemon to bring its watchdog observer online. Same
     # poll-for-sentinel approach as Linux/macOS.
     $logPath = Join-Path $env:LOCALAPPDATA "dbxignore\daemon.log"
-    $dirCount = (Get-ChildItem -Recurse -Directory $script:DropboxDir -ErrorAction SilentlyContinue | Measure-Object).Count
-    Write-Note "watched subtree: $dirCount dirs in $script:DropboxDir"
+    Write-Note "watched root: $script:DropboxDir"
     Write-Note "waiting up to 180s for daemon initial sweep + observer ready..."
     $ready = $false
     for ($i = 0; $i -lt 180; $i++) {
@@ -607,16 +612,17 @@ function Test-Daemon {
     Write-Note "5e - clear refuses while daemon alive"
     $clearAliveOut = "$env:TEMP\dbxignore-clear-alive.out"
     dbxignore clear "$T" --yes *> $clearAliveOut
+    $clearAliveContent = Get-Content $clearAliveOut -Raw
     if ($LASTEXITCODE -eq 0) {
         Write-Fail "5e - clear should have refused while daemon alive"
-        Get-Content $clearAliveOut | ForEach-Object { Write-Note "    $_" }
+        $clearAliveContent -split "`n" | ForEach-Object { Write-Note "    $_" }
     } else {
         Write-Pass "5e - clear exited non-zero (refused)"
     }
-    if ((Get-Content $clearAliveOut -Raw) -match 'daemon is running') {
+    if ($clearAliveContent -match 'daemon is running') {
         Write-Pass "5e - refusal message names the daemon"
     } else {
-        Write-Note (Get-Content $clearAliveOut -Raw)
+        Write-Note $clearAliveContent
         Write-Fail "5e - refusal message unexpected"
     }
     dbxignore clear "$T" --force --yes 2>$null | Out-Null

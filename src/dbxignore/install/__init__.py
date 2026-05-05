@@ -8,12 +8,15 @@ import sys
 def install_service() -> None:
     if sys.platform == "win32":
         from dbxignore.install.windows_task import install_task
+
         install_task()
     elif sys.platform.startswith("linux"):
         from dbxignore.install.linux_systemd import install_unit
+
         install_unit()
     elif sys.platform == "darwin":
         from dbxignore.install.macos_launchd import install_agent
+
         install_agent()
     else:
         raise NotImplementedError(
@@ -25,12 +28,15 @@ def install_service() -> None:
 def uninstall_service() -> None:
     if sys.platform == "win32":
         from dbxignore.install.windows_task import uninstall_task
+
         uninstall_task()
     elif sys.platform.startswith("linux"):
         from dbxignore.install.linux_systemd import uninstall_unit
+
         uninstall_unit()
     elif sys.platform == "darwin":
         from dbxignore.install.macos_launchd import uninstall_agent
+
         uninstall_agent()
     else:
         raise NotImplementedError(

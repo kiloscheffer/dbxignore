@@ -61,8 +61,9 @@ def test_dispatch_rules_reloads_and_reconciles(tmp_path, monkeypatch):
     root = tmp_path.resolve()
     cache = MagicMock()
     reconcile_calls: list = []
-    monkeypatch.setattr(daemon, "reconcile_subtree",
-                        lambda r, sub, c: reconcile_calls.append((r, sub)))
+    monkeypatch.setattr(
+        daemon, "reconcile_subtree", lambda r, sub, c: reconcile_calls.append((r, sub))
+    )
 
     ignore_file = root / "proj" / ".dropboxignore"
     ignore_file.parent.mkdir()
@@ -79,8 +80,9 @@ def test_dispatch_dir_create_reconciles_that_dir(tmp_path, monkeypatch):
     root = tmp_path.resolve()
     cache = MagicMock()
     reconcile_calls: list = []
-    monkeypatch.setattr(daemon, "reconcile_subtree",
-                        lambda r, sub, c: reconcile_calls.append((r, sub)))
+    monkeypatch.setattr(
+        daemon, "reconcile_subtree", lambda r, sub, c: reconcile_calls.append((r, sub))
+    )
 
     new_dir = root / "proj" / "node_modules"
     new_dir.mkdir(parents=True)
@@ -96,8 +98,9 @@ def test_dispatch_deleted_rules_file_removes_from_cache(tmp_path, monkeypatch):
     root = tmp_path.resolve()
     cache = MagicMock()
     reconcile_calls: list = []
-    monkeypatch.setattr(daemon, "reconcile_subtree",
-                        lambda r, sub, c: reconcile_calls.append((r, sub)))
+    monkeypatch.setattr(
+        daemon, "reconcile_subtree", lambda r, sub, c: reconcile_calls.append((r, sub))
+    )
 
     ignore_file = root / "proj" / ".dropboxignore"
     ignore_file.parent.mkdir()
@@ -114,8 +117,9 @@ def test_dispatch_moved_non_rules_reconciles_both_parents(tmp_path, monkeypatch)
     root = tmp_path.resolve()
     cache = MagicMock()
     reconcile_calls: list = []
-    monkeypatch.setattr(daemon, "reconcile_subtree",
-                        lambda r, sub, c: reconcile_calls.append((r, sub)))
+    monkeypatch.setattr(
+        daemon, "reconcile_subtree", lambda r, sub, c: reconcile_calls.append((r, sub))
+    )
 
     (root / "old_dir").mkdir()
     (root / "new_dir").mkdir()
@@ -140,8 +144,9 @@ def test_dispatch_moved_non_rules_dest_outside_any_root(tmp_path, monkeypatch):
     root = tmp_path.resolve()
     cache = MagicMock()
     reconcile_calls: list = []
-    monkeypatch.setattr(daemon, "reconcile_subtree",
-                        lambda r, sub, c: reconcile_calls.append((r, sub)))
+    monkeypatch.setattr(
+        daemon, "reconcile_subtree", lambda r, sub, c: reconcile_calls.append((r, sub))
+    )
 
     (root / "old_dir").mkdir()
     old_file = root / "old_dir" / "foo.txt"
@@ -162,8 +167,9 @@ def test_handler_bypasses_debouncer_for_matched_dir_create(tmp_path, monkeypatch
     cache.match.return_value = True
     debouncer = MagicMock()
     reconcile_calls: list = []
-    monkeypatch.setattr(daemon, "reconcile_subtree",
-                        lambda r, sub, c: reconcile_calls.append((r, sub)))
+    monkeypatch.setattr(
+        daemon, "reconcile_subtree", lambda r, sub, c: reconcile_calls.append((r, sub))
+    )
 
     new_dir = root / "node_modules"
     new_dir.mkdir()
@@ -183,8 +189,9 @@ def test_handler_uses_debouncer_for_unmatched_dir_create(tmp_path, monkeypatch):
     cache.match.return_value = False
     debouncer = MagicMock()
     reconcile_calls: list = []
-    monkeypatch.setattr(daemon, "reconcile_subtree",
-                        lambda r, sub, c: reconcile_calls.append((r, sub)))
+    monkeypatch.setattr(
+        daemon, "reconcile_subtree", lambda r, sub, c: reconcile_calls.append((r, sub))
+    )
 
     new_dir = root / "src"
     new_dir.mkdir()
@@ -218,8 +225,9 @@ def test_dispatch_moved_rules_reloads_at_dest(tmp_path, monkeypatch):
     root = tmp_path.resolve()
     cache = MagicMock()
     reconcile_calls: list = []
-    monkeypatch.setattr(daemon, "reconcile_subtree",
-                        lambda r, sub, c: reconcile_calls.append((r, sub)))
+    monkeypatch.setattr(
+        daemon, "reconcile_subtree", lambda r, sub, c: reconcile_calls.append((r, sub))
+    )
 
     (root / "old_proj").mkdir()
     (root / "new_proj").mkdir()
@@ -395,8 +403,9 @@ def test_dispatch_moved_non_rules_to_rules_reloads_dest(tmp_path, monkeypatch):
     root = tmp_path.resolve()
     cache = MagicMock()
     reconcile_calls: list = []
-    monkeypatch.setattr(daemon, "reconcile_subtree",
-                        lambda r, sub, c: reconcile_calls.append((r, sub)))
+    monkeypatch.setattr(
+        daemon, "reconcile_subtree", lambda r, sub, c: reconcile_calls.append((r, sub))
+    )
 
     proj = root / "proj"
     proj.mkdir()
@@ -446,8 +455,9 @@ def test_dispatch_moved_rules_to_non_rules_does_not_reload_backup(tmp_path, monk
     root = tmp_path.resolve()
     cache = MagicMock()
     reconcile_calls: list = []
-    monkeypatch.setattr(daemon, "reconcile_subtree",
-                        lambda r, sub, c: reconcile_calls.append((r, sub)))
+    monkeypatch.setattr(
+        daemon, "reconcile_subtree", lambda r, sub, c: reconcile_calls.append((r, sub))
+    )
 
     proj = root / "proj"
     proj.mkdir()

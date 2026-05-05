@@ -24,7 +24,10 @@ def test_skips_descendants_of_already_ignored_directory(tmp_path, fake_markers, 
 
 
 def test_permission_error_is_logged_and_counted_not_raised(
-    tmp_path, monkeypatch, caplog, write_file,
+    tmp_path,
+    monkeypatch,
+    caplog,
+    write_file,
 ):
     import logging
 
@@ -35,12 +38,17 @@ def test_permission_error_is_logged_and_counted_not_raised(
     class FailingADS:
         def __init__(self):
             self._ignored = set()
-        def is_ignored(self, path): return False
+
+        def is_ignored(self, path):
+            return False
+
         def set_ignored(self, path):
             if path.name == "build":
                 raise PermissionError("locked")
             self._ignored.add(path.resolve())
-        def clear_ignored(self, path): self._ignored.discard(path.resolve())
+
+        def clear_ignored(self, path):
+            self._ignored.discard(path.resolve())
 
     failing = FailingADS()
     monkeypatch.setattr(reconcile, "markers", failing)
@@ -55,10 +63,7 @@ def test_permission_error_is_logged_and_counted_not_raised(
     err_path, err_msg = report.errors[0]
     assert err_path.name == "build"
     assert "locked" in err_msg
-    assert any(
-        r.levelname == "WARNING" and "locked" in r.message
-        for r in caplog.records
-    )
+    assert any(r.levelname == "WARNING" and "locked" in r.message for r in caplog.records)
 
 
 def test_file_not_found_during_walk_is_silently_skipped(tmp_path, monkeypatch, write_file):
@@ -68,8 +73,12 @@ def test_file_not_found_during_walk_is_silently_skipped(tmp_path, monkeypatch, w
     class DisappearingADS:
         def is_ignored(self, path):
             raise FileNotFoundError("gone")
-        def set_ignored(self, path): pass
-        def clear_ignored(self, path): pass
+
+        def set_ignored(self, path):
+            pass
+
+        def clear_ignored(self, path):
+            pass
 
     monkeypatch.setattr(reconcile, "markers", DisappearingADS())
 
@@ -82,9 +91,7 @@ def test_file_not_found_during_walk_is_silently_skipped(tmp_path, monkeypatch, w
     assert report.errors == []
 
 
-def test_sweep_clears_markers_when_dropboxignore_was_deleted_offline(
-    tmp_path, fake_markers
-):
+def test_sweep_clears_markers_when_dropboxignore_was_deleted_offline(tmp_path, fake_markers):
     """Offline-recovery integration: if a .dropboxignore was deleted while
     the daemon was down, the next startup sweep must clear every ADS marker
     it used to justify. No rules in cache + marker on disk = clear."""
@@ -123,8 +130,7 @@ def test_overridden_dropboxignore_logs_warning(tmp_path, fake_markers, caplog, w
     assert not fake_markers.is_ignored(tmp_path / ".dropboxignore")
     assert report.cleared >= 1
     assert any(
-        r.levelname == "WARNING" and ".dropboxignore" in r.message
-        and "overriding" in r.message
+        r.levelname == "WARNING" and ".dropboxignore" in r.message and "overriding" in r.message
         for r in caplog.records
     ), caplog.records
 

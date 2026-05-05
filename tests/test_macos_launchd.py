@@ -4,6 +4,7 @@ Cross-platform — tests plist generation via plistlib round-trip and
 launchctl command construction via subprocess argument capture. No
 real launchctl required.
 """
+
 from __future__ import annotations
 
 import plistlib
@@ -12,6 +13,7 @@ from pathlib import Path
 
 def test_build_plist_content_has_required_keys():
     from dbxignore.install import macos_launchd
+
     content = macos_launchd.build_plist_content(
         label="com.kiloscheffer.dbxignore",
         program_arguments=["/usr/local/bin/dbxignored"],
@@ -29,6 +31,7 @@ def test_build_plist_content_has_required_keys():
 
 def test_build_plist_content_emits_environment_variables_when_provided():
     from dbxignore.install import macos_launchd
+
     content = macos_launchd.build_plist_content(
         label="com.kiloscheffer.dbxignore",
         program_arguments=["/usr/local/bin/dbxignored"],
@@ -42,6 +45,7 @@ def test_build_plist_content_emits_environment_variables_when_provided():
 def test_build_plist_content_with_arguments_in_program():
     """Args after the executable should land as additional ProgramArguments entries."""
     from dbxignore.install import macos_launchd
+
     content = macos_launchd.build_plist_content(
         label="com.kiloscheffer.dbxignore",
         program_arguments=["/usr/local/bin/python3", "-m", "dbxignore", "daemon"],
@@ -49,13 +53,17 @@ def test_build_plist_content_with_arguments_in_program():
     )
     parsed = plistlib.loads(content)
     assert parsed["ProgramArguments"] == [
-        "/usr/local/bin/python3", "-m", "dbxignore", "daemon",
+        "/usr/local/bin/python3",
+        "-m",
+        "dbxignore",
+        "daemon",
     ]
 
 
 def test_service_target_includes_uid_and_label(monkeypatch):
     monkeypatch.setattr("os.getuid", lambda: 501, raising=False)
     from dbxignore.install import macos_launchd
+
     assert macos_launchd._service_target() == "gui/501/com.kiloscheffer.dbxignore"
 
 
@@ -72,15 +80,20 @@ def test_install_agent_writes_plist_and_calls_bootstrap(tmp_path, monkeypatch):
     )
 
     calls = []
+
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
+
         class R:
             returncode = 0
             stderr = ""
+
         return R()
+
     monkeypatch.setattr("subprocess.run", fake_run)
 
     from dbxignore.install import macos_launchd
+
     macos_launchd.install_agent()
 
     plist_path = tmp_path / "Library" / "LaunchAgents" / "com.kiloscheffer.dbxignore.plist"
@@ -106,15 +119,20 @@ def test_uninstall_agent_calls_bootout_and_removes_plist(tmp_path, monkeypatch):
     plist_path.write_bytes(b"<plist></plist>")
 
     calls = []
+
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
+
         class R:
             returncode = 0
             stderr = ""
+
         return R()
+
     monkeypatch.setattr("subprocess.run", fake_run)
 
     from dbxignore.install import macos_launchd
+
     macos_launchd.uninstall_agent()
 
     assert not plist_path.exists()

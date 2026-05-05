@@ -182,7 +182,9 @@ def _encode(state: State) -> dict:
             "time": state.last_error.time.isoformat(),
             "path": str(state.last_error.path),
             "message": state.last_error.message,
-        } if state.last_error else None,
+        }
+        if state.last_error
+        else None,
         "watched_roots": [str(p) for p in state.watched_roots],
     }
 
@@ -200,7 +202,9 @@ def _decode(raw: dict) -> State:
             time=_parse_dt(raw["last_error"]["time"]),
             path=Path(raw["last_error"]["path"]),
             message=raw["last_error"]["message"],
-        ) if raw.get("last_error") else None,
+        )
+        if raw.get("last_error")
+        else None,
         watched_roots=[Path(p) for p in raw.get("watched_roots", [])],
     )
 

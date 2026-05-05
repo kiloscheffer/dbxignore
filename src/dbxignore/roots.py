@@ -46,9 +46,7 @@ def _info_json_paths() -> list[Path]:
             if value:
                 candidates.append(Path(value) / "Dropbox" / "info.json")
         if not candidates:
-            logger.warning(
-                "Neither APPDATA nor LOCALAPPDATA set; cannot locate Dropbox info.json"
-            )
+            logger.warning("Neither APPDATA nor LOCALAPPDATA set; cannot locate Dropbox info.json")
         return candidates
     if sys.platform.startswith("linux") or sys.platform == "darwin":
         home = os.environ.get("HOME")

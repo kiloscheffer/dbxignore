@@ -96,9 +96,7 @@ def legacy_mode(monkeypatch):
     would land in the dual-attr mode and break ``assert_called_once_with``
     invariants in tests that pre-date item 58.
     """
-    monkeypatch.setattr(
-        mod, "_decision_cache", ([mod.ATTR_LEGACY], "legacy: test override")
-    )
+    monkeypatch.setattr(mod, "_decision_cache", ([mod.ATTR_LEGACY], "legacy: test override"))
     yield
     monkeypatch.setattr(mod, "_decision_cache", None)
 
@@ -112,9 +110,7 @@ def test_set_ignored_calls_setxattr_with_correct_args(tmp_path, monkeypatch, leg
     monkeypatch.setattr(xattr, "setxattr", mock_setxattr)
     mod.set_ignored(p)
 
-    mock_setxattr.assert_called_once_with(
-        str(p), mod.ATTR_LEGACY, mod._MARKER_VALUE, symlink=True
-    )
+    mock_setxattr.assert_called_once_with(str(p), mod.ATTR_LEGACY, mod._MARKER_VALUE, symlink=True)
 
 
 def test_set_ignored_propagates_unexpected_oserror(tmp_path, monkeypatch):
@@ -146,9 +142,7 @@ def test_clear_ignored_calls_removexattr_with_correct_args(tmp_path, monkeypatch
     monkeypatch.setattr(xattr, "removexattr", mock_removexattr)
     mod.clear_ignored(p)
 
-    mock_removexattr.assert_called_once_with(
-        str(p), mod.ATTR_LEGACY, symlink=True
-    )
+    mock_removexattr.assert_called_once_with(str(p), mod.ATTR_LEGACY, symlink=True)
 
 
 def test_clear_ignored_is_noop_when_attr_absent(tmp_path, monkeypatch):
@@ -173,9 +167,7 @@ def test_clear_ignored_propagates_unexpected_oserror(tmp_path, monkeypatch):
     p = tmp_path / "file.txt"
     p.touch()
 
-    monkeypatch.setattr(
-        xattr, "removexattr", MagicMock(side_effect=_oserr(errno.EACCES))
-    )
+    monkeypatch.setattr(xattr, "removexattr", MagicMock(side_effect=_oserr(errno.EACCES)))
     with pytest.raises(OSError) as exc_info:
         mod.clear_ignored(p)
     assert exc_info.value.errno == errno.EACCES
@@ -211,12 +203,12 @@ def _fake_pluginkit(stdout: str = "", side_effect: Exception | None = None):
     used to test the "unknown" pluginkit state (FileNotFoundError on non-macOS
     hosts, TimeoutExpired on a hung pluginkit).
     """
+
     def fake(args, **kwargs):
         if side_effect is not None:
             raise side_effect
-        return subprocess.CompletedProcess(
-            args=args, returncode=0, stdout=stdout, stderr=""
-        )
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
+
     return fake
 
 
@@ -320,9 +312,7 @@ def test_detected_attr_name_legacy_when_extension_disabled_overrides_path(
     assert mod._detected_attr_name() == mod.ATTR_LEGACY
 
 
-def test_detected_attr_name_fileprovider_external_drive(
-    tmp_path, monkeypatch, reset_attr_cache
-):
+def test_detected_attr_name_fileprovider_external_drive(tmp_path, monkeypatch, reset_attr_cache):
     """External-drive File Provider: info.json path is `/Volumes/<Drive>/...`
     (mounted external drive) and pluginkit shows the extension allowed.
     Per Dropbox's docs, File Provider supports external drives via an
@@ -457,9 +447,7 @@ def test_detected_attr_names_writes_both_when_pluginkit_times_out(
 # ---- Caching ----------------------------------------------------------------
 
 
-def test_detected_attr_name_caches_first_result(
-    tmp_path, monkeypatch, reset_attr_cache
-):
+def test_detected_attr_name_caches_first_result(tmp_path, monkeypatch, reset_attr_cache):
     """First call invokes both `subprocess.run` (pluginkit) and the
     info.json read; subsequent calls hit the cache.
 
@@ -478,7 +466,8 @@ def test_detected_attr_name_caches_first_result(
         nonlocal pluginkit_calls
         pluginkit_calls += 1
         return subprocess.CompletedProcess(
-            args=args, returncode=0,
+            args=args,
+            returncode=0,
             stdout="     com.getdropbox.dropbox.fileprovider(250.4.3245)\n",
             stderr="",
         )
@@ -570,9 +559,7 @@ def test_clear_ignored_removes_fileprovider_attr_in_fileprovider_mode(
     monkeypatch.setattr(xattr, "removexattr", mock_removexattr)
     mod.clear_ignored(p)
 
-    mock_removexattr.assert_called_once_with(
-        str(p), mod.ATTR_FILEPROVIDER, symlink=True
-    )
+    mock_removexattr.assert_called_once_with(str(p), mod.ATTR_FILEPROVIDER, symlink=True)
 
 
 # ---- Dual-attribute (both-mode) end-to-end ----------------------------------
@@ -595,9 +582,7 @@ def test_set_ignored_writes_both_attrs_in_both_mode(tmp_path, monkeypatch, both_
     assert called_names == [mod.ATTR_LEGACY, mod.ATTR_FILEPROVIDER]
 
 
-def test_is_ignored_returns_true_if_first_attr_set_in_both_mode(
-    tmp_path, monkeypatch, both_mode
-):
+def test_is_ignored_returns_true_if_first_attr_set_in_both_mode(tmp_path, monkeypatch, both_mode):
     """If the legacy attr is set, is_ignored short-circuits without reading
     the second — short-circuit semantics matter when the user is on legacy
     sync; we want an early True rather than two getxattr calls per file."""
@@ -611,9 +596,7 @@ def test_is_ignored_returns_true_if_first_attr_set_in_both_mode(
     mock_getxattr.assert_called_once_with(str(p), mod.ATTR_LEGACY, symlink=True)
 
 
-def test_is_ignored_returns_true_if_second_attr_set_in_both_mode(
-    tmp_path, monkeypatch, both_mode
-):
+def test_is_ignored_returns_true_if_second_attr_set_in_both_mode(tmp_path, monkeypatch, both_mode):
     """First attr ENOATTR, second attr present → True. Exercises the
     fall-through path that's the whole point of writing both."""
     p = tmp_path / "file.txt"
@@ -641,9 +624,7 @@ def test_is_ignored_returns_false_if_both_attrs_absent_in_both_mode(
     assert mock_getxattr.call_count == 2
 
 
-def test_clear_ignored_removes_both_attrs_in_both_mode(
-    tmp_path, monkeypatch, both_mode
-):
+def test_clear_ignored_removes_both_attrs_in_both_mode(tmp_path, monkeypatch, both_mode):
     """clear_ignored issues two removexattr calls — one per attr — and
     treats per-attr ENOATTR as a no-op (so a half-marked path that only
     ever had one attr written gets cleaned up regardless)."""

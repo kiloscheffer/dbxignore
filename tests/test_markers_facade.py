@@ -25,6 +25,7 @@ def test_markers_unsupported_platform_raises(monkeypatch):
     # returning the stale module cached on the package (Python looks up
     # sub-module attributes on the parent package before checking sys.modules).
     import dbxignore as _pkg
+
     monkeypatch.delattr(_pkg, "markers", raising=False)
 
     from dbxignore import markers

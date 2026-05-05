@@ -1587,13 +1587,38 @@ The reason this isn't urgent: when the platforms diverge in Phase 4.5 (e.g., a d
 
 Touches: `scripts/manual-test-ubuntu-vps.sh`, `scripts/manual-test-macos.sh`, new `scripts/_phase_extended_cli.sh` (option 1) or `scripts/_test_helpers.sh` (option 2).
 
+## 76. Conflict detector skips negations whose pattern starts with a glob
+
+**Surfaced 2026-05-05 in code review of the daemon classification path.**
+
+`literal_prefix()` in `rules_conflicts.py` returns `None` for any pattern whose first segment contains a glob metacharacter (`**/foo/bar/`, `foo*/bar/`, `[ab]/c/`). `_detect_conflicts` skips such negations at the `prefix is None` early-exit, and `RuleCache.match()` only suppresses entries listed in `_dropped`. So a sequence like
+
+```
+**/foo/
+!**/foo/bar/
+```
+
+reports `a/foo/bar` as not-ignored (last-match-wins on the negation), even though Dropbox's directory inheritance from the marked `a/foo/` makes the negation inert on disk regardless. `dbxignore status` shows zero conflicts; `explain` returns the negation without the `[dropped]` annotation.
+
+The on-disk marker behavior is correct — `reconcile._reconcile_path` evaluates `match()` per file, and every file under `a/foo/` inherits the include verdict from the matched ancestor. The bug surface is the diagnostic layer: anything that introspects rule semantics through `match()` / `explain()` (status output, third-party tooling, the conflict warning log) is misled. Pinned today as a documented limitation by `tests/test_rules_conflicts.py::test_detect_skips_glob_prefix_negation`.
+
+**Fix candidates:**
+
+- **Conservative drop.** Treat any negation whose `literal_prefix()` returns `None` as inert when an earlier rule in the same root could mark a `**`-reachable directory. Mirrors the "inheritance is inescapable" stance already encoded for literal-prefix patterns. Flips the existing test pin from documenting a limitation to verifying the fix; cheapest and matches the detector's existing posture.
+- **Targeted detection.** For each glob-prefix negation, walk the filesystem under the relevant ancestor and run earlier includes against discovered candidate ancestors. Accurate but turns a static analysis into an I/O-bound one.
+- **Warn-only.** Keep current `match()` behavior, but log a WARNING and surface in `dbxignore status` whenever a glob-prefix negation is present. Cheapest possible; punts the inert-or-not call to the user.
+
+**Urgency:** medium-low. Real rule sets do exhibit this — `**/foo/` patterns are idiomatic for "anywhere in the tree" — but the user-facing impact is constrained to diagnostic output, not marker correctness. Worth fixing the next time the rules-conflict layer is touched.
+
+Touches: `src/dbxignore/rules_conflicts.py` (`literal_prefix`, `_detect_conflicts`); possibly `src/dbxignore/rules.py` (only if conservative-drop needs additional cache state); `tests/test_rules_conflicts.py::test_detect_skips_glob_prefix_negation` (flip the assertion or rewrite as a fix-verification test).
+
 ---
 
 ## Status
 
 ### Open
 
-Twenty-eight items. Twenty-five are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18); item #73 had multiple fired triggers in one session (the local PR-review hook over-fired on Bash commands that didn't match its declared `if` filter — friction not blocking). Item #34's third recurrence fired 2026-05-04 during PR #95 pre-flight; widening 5.0s → 7.0s → 10.0s all failed under full-suite load (different polls exhausted on each run), so the suggested band-aid fix shape was abandoned and #34 stays open pending root-cause diagnosis (the test passes in 0.27s in isolation but >7s in the full suite, so the cause lives in test-order interaction with an earlier test).
+Twenty-nine items. Twenty-six are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18); item #73 had multiple fired triggers in one session (the local PR-review hook over-fired on Bash commands that didn't match its declared `if` filter — friction not blocking). Item #34's third recurrence fired 2026-05-04 during PR #95 pre-flight; widening 5.0s → 7.0s → 10.0s all failed under full-suite load (different polls exhausted on each run), so the suggested band-aid fix shape was abandoned and #34 stays open pending root-cause diagnosis (the test passes in 0.27s in isolation but >7s in the full suite, so the cause lives in test-order interaction with an earlier test).
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
@@ -1623,6 +1648,7 @@ Twenty-eight items. Twenty-five are passive (no concrete trigger requires action
 - **#73** — Local code-review hook in `.claude/settings.json` over-fires: declared `if: "Bash(gh pr create*)"` filter is matching Bash commands that contain neither `gh pr create` literally nor any obvious near-match. Multiple fired triggers in PR #111 work (commit-check pre-flight loops blocked; simple `touch` / `git push` / `gh pr edit` passed through). Friction is real but bounded. Body lists empirical observations and three fix candidates (investigate Click semantics; replace `if` with in-script guard; broaden the contract). Surfaced 2026-05-05.
 - **#74** — GitHub Actions pinned to mutable major-version tags (`@v4`, `@v1`, `@v2.6.0`, `@release/v1`) rather than 40-char SHAs across all workflow files. Speculative security hardening — switching to SHAs would be a project-wide convention shift requiring a Dependabot maintenance practice. Surfaced 2026-05-05 in `code-reviewer` review of PR #111. No observed incident or specific pressure.
 - **#75** — `phase_extended_cli()` body byte-identical between `manual-test-{ubuntu-vps,macos}.sh` (~120 LOC duplicated). Could extract to `scripts/_phase_extended_cli.sh` and `source` from both. Trade-off is duplication-vs-platform-conditional balance; only two scripts share (Windows is PowerShell). Surfaced 2026-05-05 in `/simplify` review of PRs #114 + #115.
+- **#76** — Conflict detector skips negations whose pattern starts with a glob (`**/foo/bar/`, `foo*/bar/`); `RuleCache.match()` then reports such paths as not-ignored even though Dropbox inheritance makes them ignored on disk. Marker behavior is correct (reconcile evaluates per-file `match()`); the bug surface is `status` / `explain` diagnostics. Three fix candidates filed in the body (conservative drop / targeted detection / warn-only). Surfaced 2026-05-05 in code review of the daemon classification path.
 
 ### Resolved (reverse chronological)
 

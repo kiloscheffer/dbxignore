@@ -261,6 +261,28 @@ def test_classify_moved_dest_is_rule_file_classifies_as_rules(tmp_path):
     assert classified_root == root
 
 
+def test_classify_moved_into_rules_keys_on_dest_for_debounce_coalesce(tmp_path):
+    """Atomic-save editors generate a unique tmp filename per save (vim's
+    `4913`, mktemp randomness, kakoune's `<pid>`-suffixed tmp). The classify
+    key must be derived from the destination rule-file path so a burst of
+    saves of the same `.dropboxignore` coalesces in the RULES debounce
+    window; keying on src would assign every save a distinct token."""
+    root = tmp_path.resolve()
+    proj = root / "proj"
+    proj.mkdir()
+    dest = proj / ".dropboxignore"
+    dest.write_text("build/\n", encoding="utf-8")
+
+    save_a = _stub_event("moved", str(proj / "4913"), dest_path=str(dest))
+    save_b = _stub_event("moved", str(proj / "8231"), dest_path=str(dest))
+
+    _, key_a, _, _ = daemon._classify(save_a, roots=[root])
+    _, key_b, _, _ = daemon._classify(save_b, roots=[root])
+
+    assert key_a == key_b
+    assert key_a == str(dest).lower()
+
+
 def test_dispatch_moved_non_rules_to_rules_reloads_dest(tmp_path, monkeypatch):
     """Atomic-save: rename `.dropboxignore.tmp` -> `.dropboxignore`. Cache
     must reload at the dest; src was never cached so remove_file is a no-op."""
@@ -286,9 +308,10 @@ def test_dispatch_moved_non_rules_to_rules_reloads_dest(tmp_path, monkeypatch):
 
 def test_dispatch_moved_rules_to_non_rules_does_not_reload_backup(tmp_path, monkeypatch):
     """Editor save-via-rename step: `.dropboxignore` -> `.dropboxignore~`.
-    Cache must drop the old rule file and must NOT load the backup as if it
-    were rules — `_build_sequence` iterates every cached entry, so a stray
-    `.dropboxignore~` cache entry would pollute conflict detection."""
+    Dispatch must drop the old rule file from the cache and must NOT call
+    `cache.reload_file` on the backup. Pins the dispatch contract only;
+    the downstream `_build_sequence` cleanliness is a consequence covered
+    by the rule-cache layer."""
     root = tmp_path.resolve()
     cache = MagicMock()
     reconcile_calls: list = []

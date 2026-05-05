@@ -206,6 +206,70 @@ def test_rulecache_flags_double_star_alone_under_children_pattern(tmp_path):
     assert conflicts[0].dropped_pattern == "!build/keep/**"
 
 
+def test_rulecache_no_cross_file_conflict_for_children_only_pattern(tmp_path):
+    """Cross-file analogue of the children-only pattern: parent
+    `.dropboxignore` with `build/*`, child `.dropboxignore` inside
+    `build/` with `!keep/`. Mirrors the within-file fix — no conflict.
+    Pins the runtime cross-file path with the new strict-ancestor logic.
+    """
+    root = tmp_path
+    (root / "build").mkdir()
+    (root / ".dropboxignore").write_text("build/*\n", encoding="utf-8")
+    (root / "build" / ".dropboxignore").write_text(
+        "!keep/\n", encoding="utf-8"
+    )
+
+    cache = RuleCache()
+    cache.load_root(root)
+
+    assert cache.conflicts() == []
+
+
+def test_rulecache_cross_file_conflict_for_directory_rule(tmp_path):
+    """Cross-file regression guard: parent `.dropboxignore` with `build/`,
+    child `.dropboxignore` inside `build/` with `!keep/`. The directory-rule
+    form still flags as a true cross-file conflict — Dropbox inheritance
+    via the marked `build/` overrides the nested negation.
+    """
+    root = tmp_path
+    (root / "build").mkdir()
+    (root / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+    (root / "build" / ".dropboxignore").write_text(
+        "!keep/\n", encoding="utf-8"
+    )
+
+    cache = RuleCache()
+    cache.load_root(root)
+
+    conflicts = cache.conflicts()
+    assert len(conflicts) == 1
+    assert conflicts[0].dropped_pattern == "!keep/"
+    assert conflicts[0].masking_pattern == "build/"
+
+
+def test_rulecache_sandwich_revives_conflict(tmp_path):
+    """Sandwich: include → negation → include → negation-target. The middle
+    negation un-masks the ancestor, but a later include re-masks it, so
+    the last-match-wins scan should report a conflict for the final
+    negation. This pins the load-bearing semantic of the new
+    `_find_masking_include` (last match per ancestor, not first include).
+    """
+    root = tmp_path
+    (root / ".dropboxignore").write_text(
+        "build/*\n!build/keep/\nbuild/\n!build/keep/foo.txt\n",
+        encoding="utf-8",
+    )
+    cache = RuleCache()
+    cache.load_root(root)
+
+    # The last earlier rule matching `build/keep` is `build/` (line 3,
+    # include); that re-marks the ancestor, so `!build/keep/foo.txt`
+    # (line 4) is dropped.
+    conflicts = cache.conflicts()
+    dropped = {c.dropped_pattern for c in conflicts}
+    assert "!build/keep/foo.txt" in dropped
+
+
 def test_rulecache_clears_conflicts_on_reload_without_conflict(tmp_path):
     root = tmp_path
     ignore_file = root / ".dropboxignore"

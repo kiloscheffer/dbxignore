@@ -13,7 +13,7 @@ dynamic = ["version"]
 dependencies = [
     "watchdog>=4.0",
     "pathspec>=0.12",
-    "click>=8.1",
+    "click>=8.2",
     "rich-click>=1.8",
     "psutil>=5.9",
     "xattr>=1.0; sys_platform == 'darwin'",

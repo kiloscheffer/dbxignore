@@ -113,27 +113,35 @@ def _resolve_gitignore_arg(path: Path) -> Path:
     return path
 
 
-def _compute_source_conflicts(source: Path) -> list:
+def _compute_source_conflicts(source: Path) -> list[rules.Conflict]:
     """Run the static conflict detector against a single rule-source file.
 
     The source is mounted at its own directory so the detector can operate
     on a self-contained rule sequence. ``log_warnings=False`` suppresses the
     `rules.py` per-conflict WARNING — `generate` emits its own user-facing
     message via ``_emit_generate_conflict_warning``. Used by `cli.generate`
-    to flag dropped negations at authoring time.
+    to flag dropped negations at authoring time. Caller is responsible for
+    catching `OSError` from ``source.parent.resolve()`` — conflict detection
+    is informational, so generate must not break the byte-for-byte invariant
+    if a transient I/O issue (permission, symlink loop) arises here.
     """
     cache = RuleCache()
     cache.load_external(source, source.parent.resolve(), log_warnings=False)
     return cache.conflicts()
 
 
-def _emit_generate_conflict_warning(source: Path, conflicts: list) -> None:
+def _emit_generate_conflict_warning(
+    source: Path, conflicts: list[rules.Conflict]
+) -> None:
     """Echo dropped-negation warnings to stderr.
 
     The byte-for-byte invariant of `generate` is preserved — this is purely
-    informational. The user can edit the source (often by switching
-    ``parent/`` to ``parent/*``, which in dbxignore takes effect through
-    pathspec last-match-wins) if they want the negations to apply.
+    informational. The user can edit the source if they want the negations
+    to apply. The common fix is to switch a directory rule like ``parent/``
+    to the children-only form ``parent/*``: the children-only form does not
+    mark ``parent`` itself, so ``parent`` doesn't propagate inheritance, and
+    pathspec's last-match-wins then lets a later ``!parent/keep/`` override
+    the include for that one child.
     """
     n = len(conflicts)
     click.echo(
@@ -949,7 +957,18 @@ def generate(path: Path, output: Path | None, stdout: bool, force: bool) -> None
     # set. Computed once and reused for both the --stdout and file-write
     # branches; the warning text always goes to stderr so stdout consumers
     # get clean verbatim content.
-    conflicts = _compute_source_conflicts(source)
+    # OSError on the resolve()/load path (permission denied, symlink loop)
+    # must NOT break generate — conflict detection is informational, the
+    # byte-for-byte file output is the load-bearing contract.
+    try:
+        conflicts = _compute_source_conflicts(source)
+    except OSError as exc:
+        click.echo(
+            f"warning: could not run conflict check on {source}: {exc}; "
+            "proceeding with generate",
+            err=True,
+        )
+        conflicts = []
 
     if stdout:
         if conflicts:

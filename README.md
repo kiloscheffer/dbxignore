@@ -282,9 +282,26 @@ A polybar module reading the daemon state could grep `state=\S+` for the at-a-gl
 
 Dropbox marks files and folders as ignored using xattrs. When a folder carries the ignore marker, Dropbox does not sync that folder or anything inside it — children inherit the ignored state regardless of whether they individually carry the marker. This matters for gitignore-style negation rules in your `.dropboxignore`.
 
-If you write a negation whose target lives under a directory ignored by an earlier rule — the canonical case is `build/` followed by `!build/keep/` — the negation cannot take effect. Dropbox will ignore `build/keep/` because `build/` is ignored, no matter what xattr we put on the child. dbxignore detects this at the moment you save the `.dropboxignore`, logs a WARNING naming both rules, and drops the conflicted negation from the active rule set.
+A negation can only re-include a path if no strict ancestor directory of that path is marked ignored. The case dbxignore drops is when an earlier rule marks a directory and a later negation tries to re-include something inside that directory:
 
-Negations that don't conflict with an ignored ancestor work normally. For example:
+```
+build/         # marks the directory build/ itself
+!build/keep/   # ← dropped: build/ is already ignored, inheritance wins
+```
+
+dbxignore detects this at the moment you save the `.dropboxignore`, logs a WARNING naming both rules, and drops the conflicted negation from the active rule set.
+
+The git-canonical pattern for "exclude all of `build/` except `build/keep`" works because it marks only the *children* of `build/`, not `build/` itself:
+
+```
+build/*        # marks immediate children of build/ (build/keep, build/foo, ...)
+!build/keep/   # negation overrides for build/keep specifically
+!build/keep/** # re-includes everything under build/keep
+```
+
+`build/` is not marked, `build/keep` is not marked (the negation overrides via pathspec last-match-wins), and Dropbox syncs both. If you write the directory-rule form `build/` and meant the children-only form `build/*`, switch the trailing `/` to `/*`.
+
+Other negations that don't conflict with an ignored ancestor work normally. For example:
 
 ```
 *.log
@@ -293,7 +310,9 @@ Negations that don't conflict with an ignored ancestor work normally. For exampl
 
 Here nothing marks a parent directory as ignored (`*.log` matches files, not dirs), so the negation works — `important.log` gets synced, the other `.log` files don't.
 
-**Limitation.** Detection uses static analysis on the rule's literal path prefix. Negations that begin with a glob (`!**/keep/`, `!*/cache/`) have no literal anchor to analyze and are accepted without conflict-check — if they land under an ignored ancestor at runtime, they silently fail to take effect. If you need guaranteed semantics, prefer negations with a literal prefix.
+**Detection limitations:**
+- Static analysis uses the rule's literal path prefix. Negations that begin with a glob (`!**/keep/`, `!*/cache/`) have no literal anchor to analyze and are accepted without conflict-check; if they land under an ignored ancestor at runtime, they silently fail to take effect. If you need guaranteed semantics, prefer negations with a literal prefix.
+- `dbxignore generate` runs the same conflict check on the source file at write time and emits a stderr warning listing any dropped negations. The check is scoped to the source file alone — cross-file conflicts (a `.dropboxignore` higher up the tree masking a negation in this one) only surface at runtime via `dbxignore status` and `dbxignore explain`.
 
 ## Using `.gitignore` rules
 

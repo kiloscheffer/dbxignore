@@ -1474,13 +1474,29 @@ The contract being verified: a glob-prefix negation like `!**/foo/` should still
 
 Touches: `tests/test_rules_reload_explain.py` (new test).
 
+## 70. `dbxignore explain` lacks verdict-driven exit codes for shell scripting
+
+`dbxignore explain <path>` is the diagnostic counterpart to `git check-ignore -v <path>` — both answer "which rule decides this path's ignored state, and where does it live?" — but the two diverge on shell-scriptability. `git check-ignore` sets exit codes by verdict (`0` = ignored, `1` = not ignored, `128` = fatal), so `if git check-ignore X; then ...` works in scripts. `dbxignore explain` always exits `0` on success, regardless of whether the path is ignored, has only dropped matches, or has no matches at all. Callers must parse stdout text ("no match for X" vs. annotated rules) to extract the verdict, which is awkward for cron / status-bar / pre-commit-style integrations.
+
+The existing primitive `RuleCache.match(path)` already returns the post-drops final verdict (last-match-wins on non-dropped rules), so the implementation can read the verdict directly rather than re-deriving from explain output.
+
+**Fix candidates:**
+
+- **Parity with `git check-ignore`** (preferred): exit `0` if `cache.match(path)` is True, exit `1` otherwise. Single boolean verdict, scriptable via `if dbxignore explain X; then ...`. ~5 LOC in `cli.explain` plus a couple of test cases in `test_cli_status_list_explain.py` covering ignored / not-ignored / no-match paths.
+- **Three-way split** that surfaces the dbxignore-specific dropped case: exit `0` = ignored, `1` = not ignored with no dropped negations, `2` = not ignored but had dropped negations (signal: "your rule didn't take effect"). Richer than git's shape but distinguishes "expected not ignored" from "negation was inert here." Slight risk of over-engineering — the dropped case is already signalled in stdout via the `[dropped]` annotation.
+- **Defer.** Stdout text is parseable today; no observed scripting demand. Filed for the day someone wants to wire `dbxignore explain` into a pre-commit hook, status-bar widget condition, or cron sanity check.
+
+**Urgency:** low. Polish; preserves CLI consistency with the broader gitignore-tooling ecosystem.
+
+Touches: `src/dbxignore/cli.py` (`explain` exit-code branches); `tests/test_cli_status_list_explain.py` (verdict-driven exit code coverage); README §"Commands" row for `explain` (document exit codes if changed).
+
 ---
 
 ## Status
 
 ### Open
 
-Twenty-two items. Twenty are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18). Item #34's third recurrence fired 2026-05-04 during PR #95 pre-flight; widening 5.0s → 7.0s → 10.0s all failed under full-suite load (different polls exhausted on each run), so the suggested band-aid fix shape was abandoned and #34 stays open pending root-cause diagnosis (the test passes in 0.27s in isolation but >7s in the full suite, so the cause lives in test-order interaction with an earlier test).
+Twenty-three items. Twenty-one are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18). Item #34's third recurrence fired 2026-05-04 during PR #95 pre-flight; widening 5.0s → 7.0s → 10.0s all failed under full-suite load (different polls exhausted on each run), so the suggested band-aid fix shape was abandoned and #34 stays open pending root-cause diagnosis (the test passes in 0.27s in isolation but >7s in the full suite, so the cause lives in test-order interaction with an earlier test).
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
@@ -1504,6 +1520,7 @@ Twenty-two items. Twenty are passive (no concrete trigger requires action); item
 - **#67** — `apply --from-gitignore` does not pass `log_warnings=False` to `RuleCache.load_external`, so conflict WARNINGs land on stderr — inconsistent with the regular `apply` path that routes through `_load_cache` (PR #92's `a6fb74b` extracted that helper specifically to suppress per-mutation conflict WARNINGs). One-line fix.
 - **#68** — `dbxignore status --summary` runs the full `_load_cache(discovered).conflicts()` walk every poll. Status-bar widgets polling at high cadence pay an rglob over `.dropboxignore` files per tick. Three fix candidates filed in the body (skip conflict walk in summary mode / cache count in state.json / mtime-gated rebuild). Surfaced by `/simplify` review of PR #99's hoist, no user report yet.
 - **#69** — No real-pathspec regression test for glob-prefix negations through the post-PR-#108 detector branch. `tests/test_rules_conflicts.py::test_detect_skips_glob_prefix_negation` covers the `literal_prefix() == None` early-exit via the shim, but doesn't pin that the new `is_directory_negation` / strict-ancestor branch is correctly bypassed for `!**/foo/`. Defensive lock-down against future `literal_prefix()` refactors. Surfaced by `pr-test-analyzer` review of PR #108.
+- **#70** — `dbxignore explain` always exits `0` regardless of verdict, so shell scripts can't branch on "is X ignored?" the way they can with `git check-ignore -v` (`0`/`1`/`128`). Stdout text is parseable today but awkward for cron / status-bar / pre-commit integrations. Body offers parity-with-git or a three-way split surfacing the dropped-negation case. Surfaced 2026-05-05 in conversation comparing the two diagnostic CLIs.
 
 ### Resolved (reverse chronological)
 

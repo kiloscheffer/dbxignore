@@ -113,6 +113,47 @@ def _resolve_gitignore_arg(path: Path) -> Path:
     return path
 
 
+def _compute_source_conflicts(source: Path) -> list:
+    """Run the static conflict detector against a single rule-source file.
+
+    The source is mounted at its own directory so the detector can operate
+    on a self-contained rule sequence. ``log_warnings=False`` suppresses the
+    `rules.py` per-conflict WARNING — `generate` emits its own user-facing
+    message via ``_emit_generate_conflict_warning``. Used by `cli.generate`
+    to flag dropped negations at authoring time.
+    """
+    cache = RuleCache()
+    cache.load_external(source, source.parent.resolve(), log_warnings=False)
+    return cache.conflicts()
+
+
+def _emit_generate_conflict_warning(source: Path, conflicts: list) -> None:
+    """Echo dropped-negation warnings to stderr.
+
+    The byte-for-byte invariant of `generate` is preserved — this is purely
+    informational. The user can edit the source (often by switching
+    ``parent/`` to ``parent/*``, which in dbxignore takes effect through
+    pathspec last-match-wins) if they want the negations to apply.
+    """
+    n = len(conflicts)
+    click.echo(
+        f"warning: {source} contains {n} dropped negation"
+        f"{'' if n == 1 else 's'} that will not take effect at runtime:",
+        err=True,
+    )
+    for c in conflicts:
+        click.echo(
+            f"  line {c.dropped_line}: {c.dropped_pattern}  "
+            f"-- masked by line {c.masking_line}: {c.masking_pattern}",
+            err=True,
+        )
+    click.echo(
+        "Negations whose target lives under a directory matched by an "
+        "earlier include cannot be re-included (Dropbox inheritance).",
+        err=True,
+    )
+
+
 def _read_and_validate_rule_source(source: Path) -> str:
     """Read `source` as UTF-8 and verify it parses as a pathspec.
 
@@ -904,7 +945,15 @@ def generate(path: Path, output: Path | None, stdout: bool, force: bool) -> None
     text = _read_and_validate_rule_source(source)
     lines = text.splitlines()
 
+    # Detect dropped negations against the source as a self-contained rule
+    # set. Computed once and reused for both the --stdout and file-write
+    # branches; the warning text always goes to stderr so stdout consumers
+    # get clean verbatim content.
+    conflicts = _compute_source_conflicts(source)
+
     if stdout:
+        if conflicts:
+            _emit_generate_conflict_warning(source, conflicts)
         click.echo(text, nl=False)
         return
 
@@ -930,6 +979,9 @@ def generate(path: Path, output: Path | None, stdout: bool, force: bool) -> None
             "reconcile will not see it",
             err=True,
         )
+
+    if conflicts:
+        _emit_generate_conflict_warning(source, conflicts)
 
     rule_count = sum(
         1 for line in lines

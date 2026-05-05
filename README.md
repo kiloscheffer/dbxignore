@@ -2,20 +2,21 @@
 
 Hierarchical `.dropboxignore` files for Dropbox. Drop a `.dropboxignore` into any folder under your Dropbox root and matching paths get the Dropbox ignore marker set automatically — no more `node_modules/` cluttering your sync. Windows (NTFS alternate data streams), Linux (`user.*` xattrs), and macOS (xattrs) supported.
 
-## Upgrading from v0.2.x
+## Contents
 
-The project was renamed from `dropboxignore` to `dbxignore` in v0.3.0
-(the old name collides with an unrelated 2019 PyPI project). Upgrade is
-a one-time manual step:
-
-```bash
-dropboxignore uninstall --purge   # on v0.2.x — removes state, logs, service
-pip install dbxignore              # or: uv pip install dbxignore
-dbxignore install                  # registers the new service under new names
-```
-
-Your `.dropboxignore` rule files carry over untouched — they're never
-modified by install/uninstall.
+- [Requirements](#requirements)
+- [Install (Windows, from source)](#install-windows-from-source)
+- [Install (Linux)](#install-linux)
+- [Install (macOS)](#install-macos)
+- [Install (.exe)](#install-exe)
+- [Platform support](#platform-support)
+- [`.dropboxignore` syntax](#dropboxignore-syntax)
+- [Commands](#commands)
+- [Behaviour](#behaviour)
+- [Using `.gitignore` rules](#using-gitignore-rules)
+- [Configuration](#configuration)
+- [Backlog](#backlog)
+- [License](#license)
 
 ## Requirements
 
@@ -32,7 +33,8 @@ dbxignore install
 
 `dbxignore install` registers a Task Scheduler entry that launches the daemon (`pythonw -m dbxignore daemon`) at every user logon.
 
-### If install fails with "ERROR_CLOUD_FILE_INCOMPATIBLE_HARDLINKS"
+<details>
+<summary>If install fails with "ERROR_CLOUD_FILE_INCOMPATIBLE_HARDLINKS"</summary>
 
 Windows users whose `AppData` is OneDrive-synced (Files On-Demand) can hit:
 
@@ -51,6 +53,8 @@ uv tool install --link-mode=copy git+https://github.com/kiloscheffer/dbxignore
 ```
 
 Or set it as a session-wide default before the install: `$env:UV_LINK_MODE = "copy"`. Either form works for `uv tool upgrade` too.
+
+</details>
 
 ## Install (Linux)
 
@@ -85,15 +89,18 @@ dbxignore on macOS supports both Dropbox sync modes and auto-detects which one i
 - **Legacy mode** — Dropbox folder at `~/Dropbox`, ignored files marked via the `com.dropbox.ignored` extended attribute. Synced by Dropbox's own daemon.
 - **File Provider mode** — Dropbox folder at `~/Library/CloudStorage/Dropbox/`, ignored files marked via the `com.apple.fileprovider.ignore#P` extended attribute (per [Dropbox's docs](https://help.dropbox.com/sync/ignored-files)). Synced by Apple's File Provider extension; default for installs since 2023.
 
-The macOS xattr backend detects File Provider mode by the presence of `~/Library/CloudStorage/Dropbox/` at module-load time and selects the matching attribute name. No user action required — the daemon picks the right one automatically. The daemon registers as a launchd User Agent in either case.
+The macOS xattr backend detects File Provider mode by the presence of `~/Library/CloudStorage/Dropbox/` at module-load time and selects the matching attribute name. No user action required — the daemon picks the active one automatically. The daemon registers as a launchd User Agent in either case.
 
-If you want to verify your mode manually:
+<details>
+<summary>Verify your sync mode manually</summary>
 
 ```bash
 fileproviderctl dump 2>&1 | grep -q "com.getdropbox.dropbox.fileprovider" \
     && echo "File Provider mode" \
     || echo "Legacy mode"
 ```
+
+</details>
 
 Install:
 
@@ -105,7 +112,8 @@ dbxignore install                    # writes ~/Library/LaunchAgents/com.kilosch
 
 `dbxignore install` requires that you've logged into the macOS GUI at least once since the last reboot — the GUI domain that LaunchAgents bootstrap into isn't initialized until a graphical login. SSH-on-fresh-boot installs fail with `Bootstrap failed: 5: Input/output error`. Log into the GUI, then retry.
 
-### Pre-built binaries (arm64 only)
+<details>
+<summary>Pre-built binaries (arm64 only)</summary>
 
 Pre-built Mach-O binaries are arm64 (Apple Silicon). Intel Mac users: install via PyPI — the wheel is universal Python.
 
@@ -124,6 +132,8 @@ xattr -d com.apple.quarantine /usr/local/bin/dbxignored
 dbxignore install
 ```
 
+</details>
+
 To uninstall:
 
 ```bash
@@ -141,8 +151,7 @@ Files written:
 ```
 
 Notes:
-- A symlink matched by a `.dropboxignore` rule is marked on the **link itself**, not its target. macOS allows xattrs on symlinks; Linux refuses with `EPERM` and emits a WARNING. So on macOS the marker lands silently and successfully — matching the design intent better than the Linux behavior.
-- macOS support is new in v0.4 and covers both Dropbox sync modes (legacy and File Provider — auto-detected at module-load time; see the compatibility note at the top of this section). If you hit anything unexpected, please file an issue.
+- A symlink matched by a `.dropboxignore` rule is marked on the **link itself**, not its target.
 
 ## Install (.exe)
 
@@ -152,11 +161,11 @@ Notes:
 
 ## Platform support
 
-| Platform | Marker mechanism                  | Daemon mechanism                | Tested |
-|----------|-----------------------------------|---------------------------------|--------|
-| Windows 10 / 11 | NTFS Alternate Data Streams | Task Scheduler (user task)      | yes (since v0.1) |
-| Linux (Ubuntu 22.04 / 24.04 + most modern distros with systemd user session) | `user.com.dropbox.ignored` xattr | systemd user unit | yes (since v0.2) |
-| macOS (Apple Silicon; Intel via PyPI) | `com.dropbox.ignored` xattr (legacy mode) or `com.apple.fileprovider.ignore#P` (File Provider mode — default since 2023; auto-detected) | launchd User Agent | new in v0.4 — please report issues |
+| Platform | Marker mechanism                  | Daemon mechanism                |
+|----------|-----------------------------------|---------------------------------|
+| Windows 10 / 11 | NTFS Alternate Data Streams | Task Scheduler (user task)      |
+| Linux (Ubuntu 22.04 / 24.04 + most modern distros with systemd user session) | `user.com.dropbox.ignored` xattr | systemd user unit |
+| macOS (Apple Silicon; Intel via PyPI) | `com.dropbox.ignored` xattr (legacy mode) or `com.apple.fileprovider.ignore#P` (File Provider mode — default since 2023; auto-detected) | launchd User Agent |
 
 ## `.dropboxignore` syntax
 
@@ -209,7 +218,7 @@ dbxignore init --stdout           # preview without writing
 dbxignore init --force            # overwrite an existing file
 ```
 
-The header of the generated file lists which marker-bait directories were detected in your tree at depth ≤ 3 (e.g., `# Detected in this tree at depth <= 3: node_modules, __pycache__`). All template patterns are emitted as active rules; the header is the cue for which ones are immediately load-bearing. Edit the file afterward to remove patterns that don't apply to your tree — strong starter is easier to edit-down than a sparse one is to edit-up.
+The header of the generated file lists which marker-bait directories were detected in your tree at depth ≤ 3 (e.g., `# Detected in this tree at depth <= 3: node_modules, __pycache__`). All template patterns are emitted as active rules; the header is the cue for which ones are immediately load-bearing. Edit the file afterward to remove patterns that don't apply to your tree.
 
 ### Applying rules
 
@@ -222,7 +231,7 @@ dbxignore apply ~/Dropbox/proj    # scope to a subtree
 dbxignore apply --from-gitignore ~/Dropbox/proj/.gitignore --yes
 ```
 
-A confirmation prompt fires by default. Marking a previously-synced path causes Dropbox to remove the path from your cloud Dropbox and from every other linked device — local copies on this device are preserved, but the cloud copy and the copies on other devices are gone until the marker is cleared. Clearing a stale marker (a path that was ignored but no longer matches any rule) goes the other direction: Dropbox uploads the local copy back to cloud and re-syncs it everywhere. The prompt summarizes both counts and asks before any marker is mutated. Pass `--yes` for scripted use.
+A confirmation prompt fires by default and summarizes how many paths will be marked or cleared. Both directions are destructive — see [Behaviour](#behaviour) for what marker mutations do to cloud sync. Pass `--yes` for scripted use.
 
 If `apply` finds nothing to mark and nothing to clear (the steady-state case where the daemon has already converged the tree), it exits with `Nothing to apply (rules already in sync).` and skips the prompt.
 
@@ -291,15 +300,15 @@ build/         # marks the directory build/ itself
 
 dbxignore detects this at the moment you save the `.dropboxignore`, logs a WARNING naming both rules, and drops the conflicted negation from the active rule set.
 
-The git-canonical pattern for "exclude all of `build/` except `build/keep`" works because it marks only the *children* of `build/`, not `build/` itself:
+The git-canonical pattern works because it marks only the *children* of `build/`, not `build/` itself:
 
 ```
-build/*        # marks immediate children of build/ (build/keep, build/foo, ...)
-!build/keep/   # negation overrides for build/keep specifically
-!build/keep/** # re-includes everything under build/keep
+build/*        # marks immediate children
+!build/keep/   # except this one
+!build/keep/** # re-include everything under it
 ```
 
-`build/` is not marked, `build/keep` is not marked (the negation overrides via pathspec last-match-wins), and Dropbox syncs both. If you wrote the directory-rule form `build/` only because you wanted to except a child via negation, switch the trailing `/` to `/*` — the two forms have different semantics (the directory-rule form marks `build/` itself; the children-only form does not), so only switch when the negation is the load-bearing reason for the rule.
+If you wrote `build/` only to except a child, switch the trailing `/` to `/*` — the two forms differ (`build/` marks the directory itself; `build/*` does not), so only switch when the negation is the load-bearing reason for the rule.
 
 Other negations that don't conflict with an ignored ancestor work normally. For example:
 
@@ -321,17 +330,10 @@ A `.gitignore` and a `.dropboxignore` use the same pattern grammar (the same `pa
 **`dbxignore generate <path>`** writes a `.dropboxignore` derived byte-for-byte from a source file. `<path>` may be a file or a directory; if a directory, `.gitignore` inside it is the source.
 
 ```
-dbxignore generate ~/Dropbox/myproject/.gitignore
-# wrote 4 rules to /home/me/Dropbox/myproject/.dropboxignore
-
-dbxignore generate ~/Dropbox/myproject
-# (same — auto-finds .gitignore in the directory)
-
-dbxignore generate ~/Dropbox/myproject/.gitignore --stdout | less
-# previews without writing
-
-dbxignore generate ~/Dropbox/myproject/.gitignore --force
-# overwrites an existing .dropboxignore
+dbxignore generate ~/Dropbox/proj/.gitignore           # writes ~/Dropbox/proj/.dropboxignore
+dbxignore generate ~/Dropbox/proj                      # same — auto-finds .gitignore
+dbxignore generate ~/Dropbox/proj/.gitignore --stdout  # preview without writing
+dbxignore generate ~/Dropbox/proj/.gitignore --force   # overwrite an existing .dropboxignore
 ```
 
 The destination path is `<dir>/.dropboxignore` by default; use `-o <path>` to redirect. Without `--force`, an existing `.dropboxignore` at the target is left in place and the command exits non-zero.
@@ -366,10 +368,11 @@ Environment variables read at daemon startup:
 | `DBXIGNORE_DEBOUNCE_RULES_MS` | `100` | Debounce window for `.dropboxignore` file events. |
 | `DBXIGNORE_DEBOUNCE_DIRS_MS` | `0` | Debounce for directory-creation events (`0` = react immediately, no coalescing). |
 | `DBXIGNORE_DEBOUNCE_OTHER_MS` | `500` | Debounce for other file events. |
-| `DBXIGNORE_LOG_LEVEL` | `INFO` | Daemon log level. Accepts `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive). Unknown values fall back to `INFO`. Affects `dbxignore daemon` only — CLI commands use the top-level `--verbose` / `-v` flag (DEBUG when set, INFO otherwise). See [Log levels](#log-levels) below for what each level surfaces. |
+| `DBXIGNORE_LOG_LEVEL` | `INFO` | Daemon log level. Accepts `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive). Unknown values fall back to `INFO`. Affects `dbxignore daemon` only — CLI commands use the top-level `--verbose` / `-v` flag (DEBUG when set, INFO otherwise). See **Log levels** below for what each level surfaces. |
 | `DBXIGNORE_ROOT` | *(unset)* | Escape hatch for non-stock Dropbox installs: overrides `info.json` discovery and treats the given absolute path as the sole Dropbox root. If the path doesn't exist, a WARNING is logged and no roots are returned (so `dbxignore apply` exits with "No Dropbox roots found"). |
 
-### Log levels
+<details>
+<summary>Log levels</summary>
 
 The daemon and CLI have separate log-config knobs:
 
@@ -415,6 +418,11 @@ dbxignore -v explain ~/Dropbox/build/keep
 
 Persisting a non-default level across managed-daemon restarts requires a platform-specific override and is not covered here — it's rarely the right move (DEBUG floods the daemon log fast). For one-off investigations, the foreground-run pattern above is the recommended path.
 
+</details>
+
+<details>
+<summary>Log and state file locations</summary>
+
 Logs (rotated, 25 MB total):
 - Windows — `%LOCALAPPDATA%\dbxignore\daemon.log`.
 - Linux — two sinks, same records. The rotating file at `$XDG_STATE_HOME/dbxignore/daemon.log` (fallback `~/.local/state/dbxignore/daemon.log`) is authoritative for offline debugging and bug-report bundling; `journalctl --user -u dbxignore.service` surfaces the same records via systemd-journald for live tailing and cross-service filtering.
@@ -425,9 +433,11 @@ State:
 - Linux — `$XDG_STATE_HOME/dbxignore/state.json` (fallback `~/.local/state/dbxignore/state.json`).
 - macOS — `~/Library/Application Support/dbxignore/state.json` (split from the log dir to match Apple's app-data conventions).
 
+</details>
+
 ## Backlog
 
-Open items, planned work, and the historical record of fixes are tracked in [BACKLOG.md](BACKLOG.md).
+Open items and planned work are tracked in [BACKLOG.md](BACKLOG.md).
 
 ## License
 

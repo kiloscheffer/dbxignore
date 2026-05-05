@@ -173,7 +173,7 @@ Touches: `.github/workflows/release.yml` (add PyPI upload step); PyPI account (o
 
 ## 12. Rename the PyPI distribution + CLI + Python package from `dropboxignore` to `dbxignore`
 
-The PyPI name `dropboxignore` is taken by [`MichalKarol/dropboxignore`](https://github.com/MichalKarol/dropboxignore) (a 2019 Selective-Sync-based tool, last release 2019-08 — likely dormant but PyPI name-reuse policy is strict). PyPI takeover is slow and unreliable; renaming is the pragmatic path.
+The PyPI name `dropboxignore` is taken by an unrelated 2019 project (last release 2019-08 — likely dormant but PyPI name-reuse policy is strict). PyPI takeover is slow and unreliable.
 
 Decision: adopt `dbxignore` — uses Dropbox's own `dbx` abbreviation (as in `dbxcli`, `dbx.com`), shorter, trademark-safer than the full `dropbox` word, and clearly differentiates from the older project.
 
@@ -488,7 +488,7 @@ Requires:
 **Fix candidates:**
 
 - **Defer indefinitely.** The current workaround is one shell command; users who hit it can copy-paste from the README. The $99/year cost + the secret-management complexity is a real ongoing burden.
-- **Adopt** if Gatekeeper-bypass friction becomes a frequently-reported pain point or if a more polished install story becomes load-bearing for adoption.
+- **Adopt** if Gatekeeper-bypass friction becomes a frequently-reported pain point or if a friction-free install story becomes load-bearing for adoption.
 
 **Urgency:** lowest of the four v0.4 followups. Worth filing for visibility but not for action absent a concrete user-pain signal.
 

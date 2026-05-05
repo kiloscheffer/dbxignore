@@ -89,6 +89,19 @@ assert_xattr_unset() {
     if [ "$v" = "missing" ]; then pass "$name"; else fail "$name (unexpected ${v} on $p)"; fi
 }
 
+# assert_grep <file> <pattern> <name> — PASS if pattern is in file, else FAIL
+# and dump the file content as a note. Used by Phase 4.5's many "did the
+# command emit the expected stderr/stdout text?" assertions.
+assert_grep() {
+    local file="$1" pattern="$2" name="$3"
+    if grep -q -- "$pattern" "$file" 2>/dev/null; then
+        pass "$name"
+    else
+        note "$(cat "$file" 2>/dev/null || echo '(file missing)')"
+        fail "$name"
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Phase 0 — pre-flight
 # ---------------------------------------------------------------------------
@@ -367,12 +380,8 @@ phase_extended_cli() {
     else
         fail "4i — generate"
     fi
-    if grep -q 'dropped negation' /tmp/dbx-gen-warn.err && grep -q '!build/keep/' /tmp/dbx-gen-warn.err; then
-        pass "4i — generate stderr lists dropped negation"
-    else
-        note "stderr: $(cat /tmp/dbx-gen-warn.err)"
-        fail "4i — generate stderr did not flag the conflict"
-    fi
+    assert_grep /tmp/dbx-gen-warn.err 'dropped negation' "4i — generate stderr says 'dropped negation'"
+    assert_grep /tmp/dbx-gen-warn.err '!build/keep/'    "4i — generate stderr names the negation"
     if diff -q "$T/.dropboxignore" "$T/source.gitignore" >/dev/null 2>&1; then
         pass "4i — file content unchanged despite warning"
     else
@@ -389,12 +398,8 @@ phase_extended_cli() {
     else
         fail "4j — apply --dry-run"
     fi
-    if grep -q 'would mark:' /tmp/dbx-dry.out && grep -q 'would_mark=1' /tmp/dbx-dry.out; then
-        pass "4j — dry-run output shape (would mark + would_mark=N)"
-    else
-        note "$(cat /tmp/dbx-dry.out)"
-        fail "4j — dry-run output unexpected"
-    fi
+    assert_grep /tmp/dbx-dry.out 'would mark:'   "4j — dry-run lists 'would mark:' line"
+    assert_grep /tmp/dbx-dry.out 'would_mark=1'  "4j — dry-run summary has would_mark=1"
     assert_xattr_unset "$T/foo.tmp" "4j — dry-run did not mutate marker"
 
     # 4k — apply --yes runs without prompting (PR #107)
@@ -419,12 +424,7 @@ phase_extended_cli() {
     else
         fail "4l — apply on no-op state"
     fi
-    if grep -q 'Nothing to apply' /tmp/dbx-noop.out; then
-        pass "4l — emits 'Nothing to apply (rules already in sync)'"
-    else
-        note "$(cat /tmp/dbx-noop.out)"
-        fail "4l — did not emit 'Nothing to apply'"
-    fi
+    assert_grep /tmp/dbx-noop.out 'Nothing to apply' "4l — emits 'Nothing to apply (rules already in sync)'"
 
     # 4m — detector regression: build/* + !build/keep/ no conflict (PR #108)
     note "4m — detector fix: build/* + !build/keep/ no conflict"
@@ -440,8 +440,10 @@ phase_extended_cli() {
     assert_xattr_set   "$T/build/foo.tmp" "4m — build/foo.tmp marked (build/* matches)"
     assert_xattr_unset "$T/build/keep"    "4m — build/keep NOT marked (negation now effective post-fix)"
     assert_xattr_unset "$T/build"         "4m — build/ NOT marked (children-only rule)"
-    if dbxignore status 2>&1 | grep -qE 'rule conflicts \([1-9]'; then
-        note "$(dbxignore status 2>&1 | grep -A 5 'rule conflicts')"
+    # status should report 0 conflicts for this rule set (the negation IS effective).
+    local status_out; status_out="$(dbxignore status 2>&1)"
+    if printf '%s\n' "$status_out" | grep -qE 'rule conflicts \([1-9]'; then
+        note "$(printf '%s\n' "$status_out" | grep -A 5 'rule conflicts')"
         fail "4m — status reports >=1 conflicts (regression: detector fix didn't apply)"
     else
         pass "4m — status reports no conflicts (detector fix applied)"
@@ -583,12 +585,7 @@ phase_daemon() {
     else
         pass "5e — clear exited non-zero (refused)"
     fi
-    if grep -q 'daemon is running' /tmp/dbx-clear-alive.out; then
-        pass "5e — refusal message names the daemon"
-    else
-        note "$(cat /tmp/dbx-clear-alive.out)"
-        fail "5e — refusal message unexpected"
-    fi
+    assert_grep /tmp/dbx-clear-alive.out 'daemon is running' "5e — refusal message names the daemon"
     if dbxignore clear "$T" --force --yes >/dev/null 2>&1; then
         pass "5e — clear --force overrides daemon-alive guard"
     else

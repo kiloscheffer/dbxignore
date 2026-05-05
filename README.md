@@ -186,7 +186,7 @@ __pycache__/
 target/
 
 # build output
-/dist/
+/dist/*
 /build/
 
 # except this one specific artifact we want to share

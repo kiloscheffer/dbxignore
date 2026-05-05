@@ -78,7 +78,9 @@ class Conflict:
     masking_pattern: str      # raw pattern text (e.g. "build/")
 
 
-def _ancestors_of(prefix: str, ancestor_dir: Path, root: Path) -> list[Path]:
+def _ancestors_of(
+    prefix: str, ancestor_dir: Path, root: Path, *, strict: bool = False
+) -> list[Path]:
     """Yield absolute ancestor directory paths for a negation's literal prefix.
 
     The negation's literal prefix is relative to its own ``.dropboxignore``
@@ -88,6 +90,13 @@ def _ancestors_of(prefix: str, ancestor_dir: Path, root: Path) -> list[Path]:
 
     Example: prefix=``build/keep/``, ancestor_dir=``/root``, root=``/root``
     yields ``[/root/build/keep, /root/build, /root]``.
+
+    With ``strict=True``, the target itself is omitted — only directories
+    strictly above the prefix are returned (``[/root/build, /root]`` for the
+    same example). Used for directory negations where the negation's own
+    rule overrides any earlier include's effect on the target via pathspec
+    last-match-wins; the conflict only exists if a *strict* ancestor is
+    marked, since Dropbox's directory inheritance is the inescapable case.
     """
     # Resolve the prefix against its scoping directory and strip the trailing
     # slash so we can navigate via Path.parent.
@@ -99,8 +108,13 @@ def _ancestors_of(prefix: str, ancestor_dir: Path, root: Path) -> list[Path]:
     # so without resolution a symlink or `..` component could fool both into
     # disagreeing on path identity and missing valid ancestors.
     target = (ancestor_dir / prefix.rstrip("/")).resolve()
+    if strict:
+        if target == root or not target.is_relative_to(root):
+            return []
+        current = target.parent
+    else:
+        current = target
     results: list[Path] = []
-    current = target
     while True:
         results.append(current)
         if current == root:
@@ -118,23 +132,32 @@ def _ancestors_of(prefix: str, ancestor_dir: Path, root: Path) -> list[Path]:
 def _find_masking_include(
     earlier_entries: list, ancestors: list[Path]
 ) -> object | None:
-    """Return the first earlier include whose pattern matches any ancestor.
+    """Return an earlier include that effectively marks any ancestor.
 
-    The ancestor is expressed as a path relative to each include's
-    ``ancestor_dir`` (directory-shaped, with trailing slash), so pathspec's
-    directory-rule matching fires.
+    For each ancestor, find the *last* earlier rule (include or negation)
+    that matches it; if that last match is an include, the ancestor is
+    marked at this point in the sequence and we report it as the masking
+    rule. If a negation later in the earlier-sequence overrides the
+    include for that specific ancestor, no conflict is reported from that
+    ancestor — pathspec's last-match-wins semantics is what matters.
+
+    Earlier behavior considered only includes; that produced false
+    positives like `build/*` + `!build/keep/` + `!build/keep/**`, where
+    the second rule keeps build/keep unmarked and the third rule's
+    descendants are reachable.
     """
-    for earlier in earlier_entries:
-        if not earlier.pattern.include:
-            continue
-        for anc in ancestors:
+    for anc in ancestors:
+        last_match = None
+        for earlier in earlier_entries:
             try:
                 rel = anc.relative_to(earlier.ancestor_dir).as_posix() + "/"
             except ValueError:
                 # This ancestor isn't under the earlier rule's scope.
                 continue
             if earlier.pattern.match_file(rel) is not None:
-                return earlier
+                last_match = earlier
+        if last_match is not None and last_match.pattern.include:
+            return last_match
     return None
 
 
@@ -170,7 +193,17 @@ def _detect_conflicts(
             # applies to directories. A rule like `*.log` + `!important.log`
             # has no ancestor-inheritance conflict to flag.
             continue
-        ancestors = _ancestors_of(prefix, entry.ancestor_dir, root)
+        # Directory negation (`!build/keep/`): raw equals the literal prefix,
+        # so the negation's own rule overrides earlier includes for the
+        # target itself via pathspec last-match-wins. Only strict ancestors
+        # (parents of the target) can mask. For broader negations like
+        # `!build/keep/**` or `!build/keep/foo.txt`, raw extends past the
+        # literal prefix; the prefix directory is itself a strict ancestor
+        # of the negation's actual targets, so include it in the walk.
+        is_directory_negation = raw.rstrip() == prefix
+        ancestors = _ancestors_of(
+            prefix, entry.ancestor_dir, root, strict=is_directory_negation
+        )
 
         masking = _find_masking_include(sequence[:i], ancestors)
         if masking is None:

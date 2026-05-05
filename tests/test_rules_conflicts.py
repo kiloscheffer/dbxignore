@@ -1,4 +1,13 @@
-"""Unit tests for the gitignore conflict-detection helpers in rules.py."""
+"""Unit tests for the gitignore conflict-detection helpers in rules.py.
+
+These tests use a `_FakePattern` shim that models trailing-slash
+directory-rule semantics and exact non-directory matches. It does NOT
+model gitwildmatch features like `build/*` (children-only). For coverage
+of the children-only patterns and the post-PR-#108 strict-ancestor /
+last-match-wins semantics, see the higher-fidelity tests against real
+pathspec in `tests/test_rules_reload_explain.py` (the
+`test_rulecache_*conflict*` block).
+"""
 
 from __future__ import annotations
 

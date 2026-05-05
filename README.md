@@ -299,7 +299,7 @@ build/*        # marks immediate children of build/ (build/keep, build/foo, ...)
 !build/keep/** # re-includes everything under build/keep
 ```
 
-`build/` is not marked, `build/keep` is not marked (the negation overrides via pathspec last-match-wins), and Dropbox syncs both. If you write the directory-rule form `build/` and meant the children-only form `build/*`, switch the trailing `/` to `/*`.
+`build/` is not marked, `build/keep` is not marked (the negation overrides via pathspec last-match-wins), and Dropbox syncs both. If you wrote the directory-rule form `build/` only because you wanted to except a child via negation, switch the trailing `/` to `/*` — the two forms have different semantics (the directory-rule form marks `build/` itself; the children-only form does not), so only switch when the negation is the load-bearing reason for the rule.
 
 Other negations that don't conflict with an ignored ancestor work normally. For example:
 

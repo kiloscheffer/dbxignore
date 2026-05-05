@@ -18,6 +18,7 @@ def _stage_info(monkeypatch, tmp_path, fixture_name: str | None):
         env_var = "HOME"
     else:
         import pytest
+
         pytest.skip(f"unsupported platform {sys.platform}")
 
     dropbox_dir.mkdir(parents=True)
@@ -112,9 +113,7 @@ def test_discover_env_override_empty_string_falls_back_to_info_json(monkeypatch,
     assert roots.discover() == [Path(r"C:\Dropbox")]
 
 
-def test_discover_env_override_missing_path_warns_and_returns_empty(
-    monkeypatch, tmp_path, caplog
-):
+def test_discover_env_override_missing_path_warns_and_returns_empty(monkeypatch, tmp_path, caplog):
     """If DBXIGNORE_ROOT points at a nonexistent path, return [] with a
     WARNING — so the CLI's "No Dropbox roots found" surfaces rather than a
     silent no-op sweep that leaves the user puzzled."""
@@ -129,8 +128,7 @@ def test_discover_env_override_missing_path_warns_and_returns_empty(
 
     assert result == []
     assert any(
-        "DBXIGNORE_ROOT" in rec.message and str(missing) in rec.message
-        for rec in caplog.records
+        "DBXIGNORE_ROOT" in rec.message and str(missing) in rec.message for rec in caplog.records
     ), [rec.message for rec in caplog.records]
 
 
@@ -161,6 +159,7 @@ def test_discover_finds_info_json_via_localappdata(monkeypatch, tmp_path):
     """LOCALAPPDATA fallback fires when APPDATA's candidate doesn't exist."""
     if sys.platform != "win32":
         import pytest
+
         pytest.skip("LOCALAPPDATA is Windows-only")
 
     # Stage info.json under LOCALAPPDATA only.
@@ -183,6 +182,7 @@ def test_discover_appdata_wins_over_localappdata(monkeypatch, tmp_path):
     """When both candidates exist, APPDATA (per-user install) takes priority."""
     if sys.platform != "win32":
         import pytest
+
         pytest.skip("LOCALAPPDATA is Windows-only")
 
     # Stage personal at APPDATA, business at LOCALAPPDATA — different content
@@ -207,14 +207,13 @@ def test_discover_appdata_wins_over_localappdata(monkeypatch, tmp_path):
     assert roots.discover() == [Path(r"C:\Dropbox")]
 
 
-def test_discover_warns_with_both_candidates_when_neither_exists(
-    monkeypatch, tmp_path, caplog
-):
+def test_discover_warns_with_both_candidates_when_neither_exists(monkeypatch, tmp_path, caplog):
     """If both env vars are set but neither file exists, the WARNING message
     names both candidate paths — so a user who hits this in the wild knows
     both standard locations were checked."""
     if sys.platform != "win32":
         import pytest
+
         pytest.skip("LOCALAPPDATA is Windows-only")
 
     import logging

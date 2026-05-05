@@ -36,9 +36,7 @@ logger = logging.getLogger(__name__)
 _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
-def _resolve_under_roots(
-    raw_path: str | None, roots: list[Path]
-) -> tuple[Path, Path] | None:
+def _resolve_under_roots(raw_path: str | None, roots: list[Path]) -> tuple[Path, Path] | None:
     """Return ``(root, resolved_path)`` if ``raw_path`` is under a watched root.
 
     Resolution is deferred until after ``find_containing`` succeeds — the
@@ -74,9 +72,7 @@ def _moved_dest_under_root(event: Any, roots: list[Path]) -> tuple[Path, Path] |
     return dest_root, dest_path.resolve()
 
 
-def _classify(
-    event: Any, roots: list[Path]
-) -> tuple[EventKind, str, Path, Path] | None:
+def _classify(event: Any, roots: list[Path]) -> tuple[EventKind, str, Path, Path] | None:
     """Classify a watchdog event and return ``(kind, key, root, resolved_src)``.
 
     ``roots`` MUST already be resolved (see ``_discover_roots`` in cli.py
@@ -232,9 +228,7 @@ def _configured_logging() -> Iterator[None]:
         # `DBXIGNORE_LOG_LEVEL=DEUG` shows up verbatim, not lower-cased.
         unknown_level = level_name_raw if level_name_raw else None
 
-    formatter = logging.Formatter(
-        "%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     log_dir = _log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -300,9 +294,7 @@ def _is_other_live_daemon(pid: int | None) -> bool:
 
 
 class _WatchdogHandler(FileSystemEventHandler):
-    def __init__(
-        self, debouncer: Debouncer, roots: list[Path], cache: RuleCache
-    ) -> None:
+    def __init__(self, debouncer: Debouncer, roots: list[Path], cache: RuleCache) -> None:
         self._debouncer = debouncer
         self._roots = roots
         self._cache = cache
@@ -339,14 +331,13 @@ def run(stop_event: threading.Event | None = None) -> None:
         # Refuse to run if another daemon is already running.
         prior = state_module.read()
         if prior is not None and _is_other_live_daemon(prior.daemon_pid):
-            logger.error(
-                "daemon already running (pid=%d); refusing to start", prior.daemon_pid
-            )
+            logger.error("daemon already running (pid=%d); refusing to start", prior.daemon_pid)
             return
 
         def _signal_handler(signum, _frame):
             logger.info("received signal %s, shutting down", signum)
             stop_event.set()
+
         for s in (signal.SIGINT, signal.SIGTERM):
             with contextlib.suppress(ValueError, AttributeError):
                 signal.signal(s, _signal_handler)
@@ -398,9 +389,7 @@ def run(stop_event: threading.Event | None = None) -> None:
             logger.info("daemon stopped")
 
 
-def _sweep_once(
-    roots: list[Path], cache: RuleCache, daemon_started: dt.datetime
-) -> None:
+def _sweep_once(roots: list[Path], cache: RuleCache, daemon_started: dt.datetime) -> None:
     sweep_start = time.perf_counter()
 
     # Phase 1: refresh the rule cache. Sequential — load_root mutates the
@@ -413,9 +402,7 @@ def _sweep_once(
     # don't contend. Single-root skips the pool to stay simple.
     if len(roots) > 1:
         with ThreadPoolExecutor(max_workers=len(roots)) as pool:
-            reports = list(
-                pool.map(lambda r: reconcile_subtree(r, r, cache), roots)
-            )
+            reports = list(pool.map(lambda r: reconcile_subtree(r, r, cache), roots))
     elif roots:
         reports = [reconcile_subtree(roots[0], roots[0], cache)]
     else:
@@ -428,7 +415,10 @@ def _sweep_once(
 
     logger.info(
         "sweep completed: marked=%d cleared=%d errors=%d duration=%.2fs",
-        total_marked, total_cleared, total_errors, wall_duration,
+        total_marked,
+        total_cleared,
+        total_errors,
+        wall_duration,
     )
 
     now = dt.datetime.now(dt.UTC)

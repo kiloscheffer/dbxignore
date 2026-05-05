@@ -10,6 +10,7 @@ user has logged into the macOS GUI at least once since the last reboot.
 SSH-on-fresh-boot installs fail with "Bootstrap failed: 5: Input/output
 error". Documented in the README.
 """
+
 from __future__ import annotations
 
 import logging
@@ -106,11 +107,7 @@ def build_plist_content(
 def install_agent() -> None:
     exe, args = detect_invocation()
     program_args = [str(exe)] + (args.split() if args else [])
-    environment = {
-        name: os.environ[name]
-        for name in _FORWARDED_ENV_VARS
-        if os.environ.get(name)
-    }
+    environment = {name: os.environ[name] for name in _FORWARDED_ENV_VARS if os.environ.get(name)}
     log_dir = state_module.user_log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -130,7 +127,8 @@ def install_agent() -> None:
     # expected — swallow.
     subprocess.run(  # noqa: S603 — hardcoded args, no user data
         ["launchctl", "bootout", _service_target()],
-        check=False, capture_output=True,
+        check=False,
+        capture_output=True,
     )
     _run_launchctl(["launchctl", "bootstrap", _domain(), str(path)])
     logger.info("Bootstrapped %s into %s", LABEL, _domain())
@@ -140,7 +138,8 @@ def uninstall_agent() -> None:
     # Bootout — missing service is fine, swallow.
     subprocess.run(  # noqa: S603 — hardcoded args, no user data
         ["launchctl", "bootout", _service_target()],
-        check=False, capture_output=True,
+        check=False,
+        capture_output=True,
     )
     path = _plist_path()
     if path.exists():

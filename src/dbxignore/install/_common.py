@@ -6,6 +6,7 @@ binary → PATH shim → `python3 -m dbxignore daemon` fallback). Originally
 inline in linux_systemd.py; extracted here when macos_launchd.py needed
 the same logic.
 """
+
 from __future__ import annotations
 
 import shutil

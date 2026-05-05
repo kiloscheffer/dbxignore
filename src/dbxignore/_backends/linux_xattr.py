@@ -14,6 +14,7 @@ Symlink note: the Linux VFS refuses ``user.*`` xattrs on symlinks with
 ``False`` cleanly because ``getxattr`` on a user.* xattr of a symlink
 returns ``ENODATA``.
 """
+
 from __future__ import annotations
 
 import errno

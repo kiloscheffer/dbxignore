@@ -45,9 +45,7 @@ def test_load_root_reloads_when_size_changes(tmp_path, write_file):
     assert cache.match(tmp_path / "dist") is True
 
 
-def test_load_root_reloads_when_mtime_changes_but_size_matches(
-    tmp_path, write_file
-):
+def test_load_root_reloads_when_mtime_changes_but_size_matches(tmp_path, write_file):
     """Same byte count, different content — size check alone wouldn't
     catch this. mtime_ns must be part of the stat tuple."""
     ignore = write_file(tmp_path / ".dropboxignore", "build/\n")  # 7 bytes

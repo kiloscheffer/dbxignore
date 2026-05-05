@@ -91,15 +91,17 @@ def test_daemon_reacts_to_dropboxignore_add_and_remove(tmp_path, monkeypatch):
     t = threading.Thread(target=daemon.run, args=(stop,), daemon=True)
     t.start()
     try:
-        assert _wait_for_daemon_watching(log_path), \
+        assert _wait_for_daemon_watching(log_path), (
             "daemon never logged 'watching roots:' within 3s"
+        )
 
         # Phase 1: rule + directory → marker set.
         (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
         (tmp_path / "build").mkdir()
 
-        assert _poll_until(lambda: markers.is_ignored(tmp_path / "build")), \
+        assert _poll_until(lambda: markers.is_ignored(tmp_path / "build")), (
             "build/ was not marked ignored within 2s"
+        )
 
         # Phase 2: rule removed → marker cleared.
         (tmp_path / ".dropboxignore").write_text("", encoding="utf-8")
@@ -139,9 +141,7 @@ def test_daemon_drops_conflicted_negation(tmp_path, monkeypatch):
         assert _poll_until(lambda: markers.is_ignored(tmp_path / "build"))
 
         # Phase 2 — add a conflicted negation; child must NOT un-ignore.
-        (tmp_path / ".dropboxignore").write_text(
-            "build/\n!build/keep/\n", encoding="utf-8"
-        )
+        (tmp_path / ".dropboxignore").write_text("build/\n!build/keep/\n", encoding="utf-8")
         (tmp_path / "build" / "keep").mkdir()
         assert _poll_until(
             lambda: markers.is_ignored(tmp_path / "build" / "keep"),
@@ -149,8 +149,7 @@ def test_daemon_drops_conflicted_negation(tmp_path, monkeypatch):
         ), "conflicted negation should not un-ignore build/keep/"
 
         assert _poll_until(
-            lambda: "!build/keep/" in log_path.read_text()
-            and "masked by" in log_path.read_text(),
+            lambda: "!build/keep/" in log_path.read_text() and "masked by" in log_path.read_text(),
             timeout_s=3.0,
         ), "daemon.log should contain the conflict WARNING"
     finally:

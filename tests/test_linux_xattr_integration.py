@@ -69,6 +69,7 @@ def test_is_ignored_on_nonexistent_path_raises_filenotfound(tmp_path):
 
 def test_requires_absolute_path(tmp_path):
     from pathlib import Path
+
     rel = Path("relative/path.txt")
     with pytest.raises(ValueError, match="absolute"):
         linux_xattr.is_ignored(rel)

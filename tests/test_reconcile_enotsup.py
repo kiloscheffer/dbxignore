@@ -105,9 +105,7 @@ def test_enotsup_on_clear_is_reported_not_raised(
     assert any(p.resolve() == target.resolve() for p, _ in report.errors)
 
 
-def test_enotsup_on_directory_clear_prunes_subtree(
-    fake_markers, tmp_path, write_file, monkeypatch
-):
+def test_enotsup_on_directory_clear_prunes_subtree(fake_markers, tmp_path, write_file, monkeypatch):
     """A still-marked directory whose clear fails with ENOTSUP must prune.
 
     The walk-pruning filter treats truthy returns as "ignored, prune".

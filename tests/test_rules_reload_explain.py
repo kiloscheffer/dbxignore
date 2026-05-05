@@ -52,9 +52,7 @@ def test_explain_empty_for_non_matching_path(tmp_path, write_file):
     assert cache.explain(tmp_path / "src") == []
 
 
-def test_explain_line_numbers_with_interleaved_blank_and_comment_lines(
-    tmp_path, write_file
-):
+def test_explain_line_numbers_with_interleaved_blank_and_comment_lines(tmp_path, write_file):
     """explain() must report the source line number from the file, not the
     pattern's index in pathspec's internal list. Regression guard for the
     one-pass pattern-entry build — a count-mismatch between active source
@@ -62,11 +60,11 @@ def test_explain_line_numbers_with_interleaved_blank_and_comment_lines(
     patterns) must not shift the reported line number."""
     write_file(
         tmp_path / ".dropboxignore",
-        "# header\n"            # line 1 — top-level comment
-        "\n"                    # line 2 — blank
-        "build/\n"              # line 3 — target rule
-        "   # indented\n"       # line 4 — pathspec treats this as an active pattern
-        "*.log\n"               # line 5 — another target rule
+        "# header\n"  # line 1 — top-level comment
+        "\n"  # line 2 — blank
+        "build/\n"  # line 3 — target rule
+        "   # indented\n"  # line 4 — pathspec treats this as an active pattern
+        "*.log\n",  # line 5 — another target rule
     )
     (tmp_path / "build").mkdir()
     (tmp_path / "a.log").touch()
@@ -101,16 +99,13 @@ def test_load_file_survives_malformed_pattern(tmp_path, write_file, caplog):
     # No rules loaded; match is defensively False.
     assert cache.match(tmp_path / "anything") is False
     assert any(
-        r.levelname == "WARNING" and "Invalid .dropboxignore" in r.message
-        for r in caplog.records
+        r.levelname == "WARNING" and "Invalid .dropboxignore" in r.message for r in caplog.records
     )
 
 
 def test_rulecache_populates_conflicts_on_load(tmp_path):
     root = tmp_path
-    (root / ".dropboxignore").write_text(
-        "build/\n!build/keep/\n", encoding="utf-8"
-    )
+    (root / ".dropboxignore").write_text("build/\n!build/keep/\n", encoding="utf-8")
     cache = RuleCache()
     cache.load_root(root)
 
@@ -129,9 +124,7 @@ def test_rulecache_no_conflict_for_children_only_pattern(tmp_path):
     build/ except build/keep" and should NOT be flagged.
     """
     root = tmp_path
-    (root / ".dropboxignore").write_text(
-        "build/*\n!build/keep/\n", encoding="utf-8"
-    )
+    (root / ".dropboxignore").write_text("build/*\n!build/keep/\n", encoding="utf-8")
     cache = RuleCache()
     cache.load_root(root)
 
@@ -160,9 +153,7 @@ def test_rulecache_still_flags_directory_rule_negation(tmp_path):
     descendants inherit). Must continue to flag as conflict.
     """
     root = tmp_path
-    (root / ".dropboxignore").write_text(
-        "build/\n!build/keep/\n", encoding="utf-8"
-    )
+    (root / ".dropboxignore").write_text("build/\n!build/keep/\n", encoding="utf-8")
     cache = RuleCache()
     cache.load_root(root)
 
@@ -177,9 +168,7 @@ def test_rulecache_flags_descendant_negation_under_children_pattern(tmp_path):
     foo.txt due to Dropbox's inheritance. Conflict expected.
     """
     root = tmp_path
-    (root / ".dropboxignore").write_text(
-        "build/*\n!build/keep/foo.txt\n", encoding="utf-8"
-    )
+    (root / ".dropboxignore").write_text("build/*\n!build/keep/foo.txt\n", encoding="utf-8")
     cache = RuleCache()
     cache.load_root(root)
 
@@ -195,9 +184,7 @@ def test_rulecache_flags_double_star_alone_under_children_pattern(tmp_path):
     above where rule 2 keeps build/keep unmarked.
     """
     root = tmp_path
-    (root / ".dropboxignore").write_text(
-        "build/*\n!build/keep/**\n", encoding="utf-8"
-    )
+    (root / ".dropboxignore").write_text("build/*\n!build/keep/**\n", encoding="utf-8")
     cache = RuleCache()
     cache.load_root(root)
 
@@ -215,9 +202,7 @@ def test_rulecache_no_cross_file_conflict_for_children_only_pattern(tmp_path):
     root = tmp_path
     (root / "build").mkdir()
     (root / ".dropboxignore").write_text("build/*\n", encoding="utf-8")
-    (root / "build" / ".dropboxignore").write_text(
-        "!keep/\n", encoding="utf-8"
-    )
+    (root / "build" / ".dropboxignore").write_text("!keep/\n", encoding="utf-8")
 
     cache = RuleCache()
     cache.load_root(root)
@@ -234,9 +219,7 @@ def test_rulecache_cross_file_conflict_for_directory_rule(tmp_path):
     root = tmp_path
     (root / "build").mkdir()
     (root / ".dropboxignore").write_text("build/\n", encoding="utf-8")
-    (root / "build" / ".dropboxignore").write_text(
-        "!keep/\n", encoding="utf-8"
-    )
+    (root / "build" / ".dropboxignore").write_text("!keep/\n", encoding="utf-8")
 
     cache = RuleCache()
     cache.load_root(root)
@@ -305,9 +288,7 @@ def test_rulecache_conflicts_do_not_leak_across_roots(tmp_path):
     root_b = tmp_path / "b"
     root_a.mkdir()
     root_b.mkdir()
-    (root_a / ".dropboxignore").write_text(
-        "build/\n!build/keep/\n", encoding="utf-8"
-    )
+    (root_a / ".dropboxignore").write_text("build/\n!build/keep/\n", encoding="utf-8")
     (root_b / ".dropboxignore").write_text("build/\n", encoding="utf-8")
 
     cache = RuleCache()
@@ -327,9 +308,7 @@ def test_rulecache_detects_cross_file_conflict(tmp_path):
     root = tmp_path
     (root / "build").mkdir()
     (root / ".dropboxignore").write_text("build/\n", encoding="utf-8")
-    (root / "build" / ".dropboxignore").write_text(
-        "!keep/\n", encoding="utf-8"
-    )
+    (root / "build" / ".dropboxignore").write_text("!keep/\n", encoding="utf-8")
 
     cache = RuleCache()
     cache.load_root(root)
@@ -348,9 +327,7 @@ def test_match_treats_dropped_negation_as_absent(tmp_path):
     build/keep/ is matched via the include (gitignore semantics with the
     negation absent)."""
     root = tmp_path
-    (root / ".dropboxignore").write_text(
-        "build/\n!build/keep/\n", encoding="utf-8"
-    )
+    (root / ".dropboxignore").write_text("build/\n!build/keep/\n", encoding="utf-8")
     (root / "build").mkdir()
     (root / "build" / "keep").mkdir()
     cache = RuleCache()
@@ -365,9 +342,7 @@ def test_match_honors_non_conflicted_negation(tmp_path):
     """*.log + !important.log: the negation is NOT dropped (no ignored
     ancestor), so important.log is excluded and others are included."""
     root = tmp_path
-    (root / ".dropboxignore").write_text(
-        "*.log\n!important.log\n", encoding="utf-8"
-    )
+    (root / ".dropboxignore").write_text("*.log\n!important.log\n", encoding="utf-8")
     (root / "important.log").touch()
     (root / "debug.log").touch()
     cache = RuleCache()
@@ -382,19 +357,16 @@ def test_recompute_logs_warning_per_conflict(tmp_path, caplog):
     import logging
 
     root = tmp_path
-    (root / ".dropboxignore").write_text(
-        "build/\n!build/keep/\n", encoding="utf-8"
-    )
+    (root / ".dropboxignore").write_text("build/\n!build/keep/\n", encoding="utf-8")
     cache = RuleCache()
 
     with caplog.at_level(logging.WARNING, logger="dbxignore.rules"):
         cache.load_root(root)
 
     warnings = [
-        r for r in caplog.records
-        if r.levelno == logging.WARNING
-        and r.name == "dbxignore.rules"
-        and "negation" in r.message
+        r
+        for r in caplog.records
+        if r.levelno == logging.WARNING and r.name == "dbxignore.rules" and "negation" in r.message
     ]
     assert len(warnings) == 1
     msg = warnings[0].message
@@ -405,9 +377,7 @@ def test_recompute_logs_warning_per_conflict(tmp_path, caplog):
 
 def test_explain_includes_dropped_negation_with_flag(tmp_path):
     root = tmp_path
-    (root / ".dropboxignore").write_text(
-        "build/\n!build/keep/\n", encoding="utf-8"
-    )
+    (root / ".dropboxignore").write_text("build/\n!build/keep/\n", encoding="utf-8")
     (root / "build").mkdir()
     (root / "build" / "keep").mkdir()
     cache = RuleCache()
@@ -430,9 +400,7 @@ def test_explain_is_dropped_false_for_non_conflicted_negation(tmp_path):
     """*.log + !important.log has no conflict — the negation should appear
     in explain() with is_dropped=False."""
     root = tmp_path
-    (root / ".dropboxignore").write_text(
-        "*.log\n!important.log\n", encoding="utf-8"
-    )
+    (root / ".dropboxignore").write_text("*.log\n!important.log\n", encoding="utf-8")
     (root / "important.log").touch()
     cache = RuleCache()
     cache.load_root(root)

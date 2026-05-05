@@ -1,4 +1,5 @@
 """Unit tests for the shared install detect_invocation helper."""
+
 from __future__ import annotations
 
 import sys
@@ -17,6 +18,7 @@ def test_detect_invocation_returns_frozen_executable_when_already_dbxignored(mon
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(daemon_exe))
     from dbxignore.install import _common
+
     exe, args = _common.detect_invocation()
     assert exe == daemon_exe
     assert args == ""
@@ -38,6 +40,7 @@ def test_detect_invocation_finds_dbxignored_sibling_from_dbxignore(monkeypatch, 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(cli_exe))
     from dbxignore.install import _common
+
     exe, args = _common.detect_invocation()
     assert exe == daemon_exe
     assert args == ""
@@ -59,6 +62,7 @@ def test_detect_invocation_falls_back_to_daemon_subcommand_when_sibling_missing(
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(cli_exe))
     from dbxignore.install import _common
+
     exe, args = _common.detect_invocation()
     assert exe == cli_exe
     assert args == "daemon"
@@ -70,6 +74,7 @@ def test_detect_invocation_falls_back_to_python_module(monkeypatch):
         "shutil.which", lambda name: "/usr/bin/python3" if name == "python3" else None
     )
     from dbxignore.install import _common
+
     exe, args = _common.detect_invocation()
     assert exe == Path("/usr/bin/python3")
     assert args == "-m dbxignore daemon"
@@ -77,12 +82,15 @@ def test_detect_invocation_falls_back_to_python_module(monkeypatch):
 
 def test_detect_invocation_uses_path_shim_when_present(monkeypatch):
     monkeypatch.delattr(sys, "frozen", raising=False)
+
     def fake_which(name):
         if name == "dbxignored":
             return "/home/u/.local/bin/dbxignored"
         return None
+
     monkeypatch.setattr("shutil.which", fake_which)
     from dbxignore.install import _common
+
     exe, args = _common.detect_invocation()
     assert exe == Path("/home/u/.local/bin/dbxignored")
     assert args == ""

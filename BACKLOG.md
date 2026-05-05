@@ -1490,13 +1490,45 @@ The existing primitive `RuleCache.match(path)` already returns the post-drops fi
 
 Touches: `src/dbxignore/cli.py` (`explain` exit-code branches); `tests/test_cli_status_list_explain.py` (verdict-driven exit code coverage); README §"Commands" row for `explain` (document exit codes if changed).
 
+## 71. `dbxignore check-ignore` alias for `explain` (git-parity discoverability)
+
+Users coming from git look for the diagnostic-equivalent verb at the name they already know — `git check-ignore -v <path>`. Today they have to discover that dbxignore calls the same operation `explain`. Adding `check-ignore` as an additional name for the existing `explain` command (not a rename) gives those users a faster path in without breaking anyone who already has `explain` in muscle memory or scripts.
+
+The aliasing is additive and reversible. No semantics change; both names invoke the same callback. The output format and exit codes (see #70) are inherited unchanged.
+
+**Fix candidates:**
+
+- **Decorator-based dual registration**: factor `explain`'s implementation into a helper, register two thin command wrappers (`@main.command(name="explain")` and `@main.command(name="check-ignore")`) that both delegate to it. ~10 LOC. Help text on both can cross-reference each other.
+- **Click `add_command` with second name**: register `explain_cmd` once via the decorator, then `main.add_command(explain_cmd, name="check-ignore")`. Simpler diff but the help-text de-duplication is implicit — `--help` may show one entry or two depending on click's introspection. Verify before settling.
+- **Custom `Group` subclass with alias resolution**: heavier; only worth it if more aliases follow. Filed under YAGNI.
+- **Defer.** Discoverability gap is real but mild; users find `explain` via `dbxignore --help` either way.
+
+**Urgency:** low. Polish; gentle nudge toward CLI parity with the broader gitignore-tooling ecosystem (the same nudge that motivates the `.dropboxignore`-uses-gitignore-syntax design choice).
+
+Touches: `src/dbxignore/cli.py` (alias registration); `tests/test_cli_status_list_explain.py` (assert both names work and produce identical output); README §"Commands" row for `explain` (mention the alias).
+
+## 72. README "Command parity with git" subsection
+
+Users coming from git form expectations about what dbxignore's commands do based on the verb. Some align cleanly (`init`, `status`); some are dbxignore-specific (`apply`, `clear`, `daemon`); and some have a deceptively close git counterpart with materially different consequences. The strongest example is `dbxignore clear` — its closest analogue is `git rm --cached`, but the consequences are inverted: git's command removes from index (cheap, local-only), dbxignore's clears markers and triggers Dropbox to upload to cloud (potentially gigabytes, propagates to other devices). A user assuming parallel semantics could trigger an unintended large upload.
+
+A short subsection in README §"Commands" — a small parity table mapping each dbxignore command to its closest git counterpart (or "none"), with a one-line note on intentional divergences — makes the design choices visible. Three benefits: (1) git-fluent users find the right verb faster, (2) users get a heads-up where the semantics diverge despite a similar verb, (3) future contributors have a stable rationale for why some commands match git's names and others don't.
+
+**Fix candidates:**
+
+- **Add the table** as a sub-section under README §"Commands". ~30 lines of markdown. Companion to #71 (the `check-ignore` alias) — the table can document the aliasing and the deliberate non-mappings in one place.
+- **Defer.** Current `--help` output suffices for command discovery; this is for design-rationale visibility, not for getting users unstuck.
+
+**Urgency:** low. Pure docs polish. Bundle naturally with #71 (one PR can land both: introduce the alias, document the parity table).
+
+Touches: `README.md` §"Commands" (new sub-section after the command table).
+
 ---
 
 ## Status
 
 ### Open
 
-Twenty-three items. Twenty-one are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18). Item #34's third recurrence fired 2026-05-04 during PR #95 pre-flight; widening 5.0s → 7.0s → 10.0s all failed under full-suite load (different polls exhausted on each run), so the suggested band-aid fix shape was abandoned and #34 stays open pending root-cause diagnosis (the test passes in 0.27s in isolation but >7s in the full suite, so the cause lives in test-order interaction with an earlier test).
+Twenty-five items. Twenty-three are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18). Item #34's third recurrence fired 2026-05-04 during PR #95 pre-flight; widening 5.0s → 7.0s → 10.0s all failed under full-suite load (different polls exhausted on each run), so the suggested band-aid fix shape was abandoned and #34 stays open pending root-cause diagnosis (the test passes in 0.27s in isolation but >7s in the full suite, so the cause lives in test-order interaction with an earlier test).
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
@@ -1521,6 +1553,8 @@ Twenty-three items. Twenty-one are passive (no concrete trigger requires action)
 - **#68** — `dbxignore status --summary` runs the full `_load_cache(discovered).conflicts()` walk every poll. Status-bar widgets polling at high cadence pay an rglob over `.dropboxignore` files per tick. Three fix candidates filed in the body (skip conflict walk in summary mode / cache count in state.json / mtime-gated rebuild). Surfaced by `/simplify` review of PR #99's hoist, no user report yet.
 - **#69** — No real-pathspec regression test for glob-prefix negations through the post-PR-#108 detector branch. `tests/test_rules_conflicts.py::test_detect_skips_glob_prefix_negation` covers the `literal_prefix() == None` early-exit via the shim, but doesn't pin that the new `is_directory_negation` / strict-ancestor branch is correctly bypassed for `!**/foo/`. Defensive lock-down against future `literal_prefix()` refactors. Surfaced by `pr-test-analyzer` review of PR #108.
 - **#70** — `dbxignore explain` always exits `0` regardless of verdict, so shell scripts can't branch on "is X ignored?" the way they can with `git check-ignore -v` (`0`/`1`/`128`). Stdout text is parseable today but awkward for cron / status-bar / pre-commit integrations. Body offers parity-with-git or a three-way split surfacing the dropped-negation case. Surfaced 2026-05-05 in conversation comparing the two diagnostic CLIs.
+- **#71** — `dbxignore check-ignore` alias for `explain`. Additive (no rename); gives git-fluent users the verb they expect without breaking existing `explain` callers. Click supports dual registration via decorator + `add_command`. Surfaced 2026-05-05 in a CLI-naming discussion. Bundles naturally with #72.
+- **#72** — README §"Command parity with git" subsection mapping each dbxignore command to its closest git counterpart (or "none"), with notes on deliberate non-mappings. Most consequential gap to call out: `dbxignore clear` is *not* `git rm --cached`-shaped — clearing markers triggers Dropbox to upload to cloud. Surfaced 2026-05-05 alongside #71. One PR can land both.
 
 ### Resolved (reverse chronological)
 

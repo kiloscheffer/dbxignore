@@ -255,11 +255,21 @@ function Test-CliSurface {
     $verdOut = (dbxignored --version 2>&1) -join "`n"
     if ($verdOut -match '^dbxignored, version ') { Write-Pass "dbxignored --version" } else { Write-Fail "dbxignored --version (got: $verdOut)" }
 
-    $first = (dbxignored --help 2>&1)[0]
-    if ($first -eq "Usage: dbxignored [OPTIONS]") {
+    # Strip ANSI escapes — rich-click decorates the Usage line; PS 7+'s
+    # `e regex literal handles it. Mirror the substring shape from
+    # tests/test_cli_entrypoints.py: "dbxignored" + "[OPTIONS]" present,
+    # "COMMAND" / "[ARGS]" absent (a regression that accidentally adds
+    # subcommands to the daemon entry surfaces here).
+    $rawHelp   = (dbxignored --help 2>&1) -join "`n"
+    $plainHelp = $rawHelp -replace "`e\[[0-9;]*m", ""
+    $usageLine = ($plainHelp -split "`r?`n" | Where-Object { $_ -match 'Usage:' } | Select-Object -First 1)
+    if (($usageLine -match 'dbxignored') -and
+        ($usageLine -match '\[OPTIONS\]') -and
+        ($usageLine -notmatch 'COMMAND') -and
+        ($usageLine -notmatch '\[ARGS\]')) {
         Write-Pass "dbxignored --help has clean Usage line"
     } else {
-        Write-Fail "dbxignored --help first line: $first"
+        Write-Fail "dbxignored --help Usage line: $usageLine"
     }
 
     $helpOut = (dbxignore --help 2>&1) -join "`n"

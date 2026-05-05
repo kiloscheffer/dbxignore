@@ -292,11 +292,21 @@ phase_cli_surface() {
     dbxignore  --version 2>&1 | grep -qE '^dbxignore, version '  && pass "dbxignore --version"  || fail "dbxignore --version"
     dbxignored --version 2>&1 | grep -qE '^dbxignored, version ' && pass "dbxignored --version" || fail "dbxignored --version"
 
-    local first; first="$(dbxignored --help 2>&1 | head -n1)"
-    if [ "$first" = "Usage: dbxignored [OPTIONS]" ]; then
+    # Strip ANSI: rich-click colorizes the Usage line on POSIX TTYs (TERM
+    # is set), but not on Windows. Mirror the Python test's substring shape
+    # in tests/test_cli_entrypoints.py — assert "dbxignored" + "[OPTIONS]"
+    # are present and "COMMAND" / "[ARGS]" are absent (so a regression that
+    # accidentally adds subcommands to the daemon entry surfaces here).
+    local plain usage_line
+    plain="$(dbxignored --help 2>&1 | sed $'s/\e\\[[0-9;]*m//g')"
+    usage_line="$(printf '%s\n' "$plain" | grep -m1 'Usage:' || true)"
+    if [[ "$usage_line" == *"dbxignored"* ]] \
+       && [[ "$usage_line" == *"[OPTIONS]"* ]] \
+       && [[ "$usage_line" != *"COMMAND"* ]] \
+       && [[ "$usage_line" != *"[ARGS]"* ]]; then
         pass "dbxignored --help has clean Usage line"
     else
-        fail "dbxignored --help first line: $first"
+        fail "dbxignored --help Usage line: $usage_line"
     fi
 
     dbxignore --help 2>&1 | grep -q 'apply' && pass "dbxignore --help lists subcommands" || fail "dbxignore --help missing subcommands"

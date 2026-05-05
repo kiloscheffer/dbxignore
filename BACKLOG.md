@@ -1538,11 +1538,11 @@ The local PreToolUse hook in `.claude/settings.json` is configured with `matcher
 - `git push --force-with-lease` — no `gh pr` substring.
 - `gh pr edit 111 --title "..." --body "$(cat <<EOF ... EOF)"` — confirms `pr edit` is not affected, only `pr create`-adjacent invocations.
 
-The pattern of firings doesn't correlate cleanly with literal `gh pr create` substring presence. Best hypothesis: Click permission-rule matching has unexpected semantics when both `matcher` and `if` are set on the same hook entry (possibly the `if` becomes advisory / ignored, or matches more loosely than the documented prefix-glob spec). Could also be Claude Code's harness doing token-shape analysis on commands that include identifiers like `commit` or shell constructs the rule engine treats as "PR-creation-adjacent."
+The pattern of firings doesn't correlate cleanly with literal `gh pr create` substring presence. Best hypothesis: Claude Code's permission-rule matching has unexpected semantics when both `matcher` and `if` are set on the same hook entry (possibly the `if` becomes advisory / ignored, or matches more loosely than the documented prefix-glob spec). Could also be the harness doing token-shape analysis on commands that include identifiers like `commit` or shell constructs the rule engine treats as "PR-creation-adjacent."
 
 **Fix candidates:**
 
-- **Investigate Click permission rule semantics + Claude Code's hook-firing source.** Read the source for how `if` is matched against tool input when `matcher` is also set. Possibly file an upstream issue if the matching is genuinely buggy. This is a research task, not a fix yet.
+- **Investigate Claude Code's permission-rule semantics + hook-firing source.** Read the source for how `if` is matched against tool input when `matcher` is also set. Possibly file an upstream issue if the matching is genuinely buggy. This is a research task, not a fix yet.
 - **Drop the `if` filter; check inside the script.** Replace the `if: "Bash(gh pr create*)"` field with a script-level guard: `case "$BASH_COMMAND" in *"gh pr create"*) ... ;; *) exit 0 ;; esac`. Loses the early-exit before the hook process spawns, but explicit and predictable. Trade ~1ms-per-Bash for correctness.
 - **Accept the over-firing and broaden the contract.** Treat the hook as "every code-modifying Bash needs a per-HEAD review marker," not just `gh pr create`. Higher friction but uniform — and arguably more conservative (catches rogue scripts that bypass `gh pr create`). Document in the hook comment.
 - **Defer.** Friction is real but bounded; current workaround is "touch the marker after each new commit." If multi-PR cadences increase the friction, revisit.

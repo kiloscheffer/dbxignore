@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def _daemon_name() -> str:
@@ -11,7 +15,9 @@ def _daemon_name() -> str:
     return "dbxignored.exe" if sys.platform == "win32" else "dbxignored"
 
 
-def test_detect_invocation_returns_frozen_executable_when_already_dbxignored(monkeypatch, tmp_path):
+def test_detect_invocation_returns_frozen_executable_when_already_dbxignored(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """User invoked `dbxignored install` directly: sys.executable IS the daemon shim."""
     daemon_exe = tmp_path / _daemon_name()
     daemon_exe.write_text("")
@@ -24,7 +30,9 @@ def test_detect_invocation_returns_frozen_executable_when_already_dbxignored(mon
     assert args == ""
 
 
-def test_detect_invocation_finds_dbxignored_sibling_from_dbxignore(monkeypatch, tmp_path):
+def test_detect_invocation_finds_dbxignored_sibling_from_dbxignore(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """User invoked `dbxignore install` (frozen): resolve to the `dbxignored` sibling.
 
     Common case for v0.4 macOS / Windows installs — both binaries ship together
@@ -47,8 +55,8 @@ def test_detect_invocation_finds_dbxignored_sibling_from_dbxignore(monkeypatch, 
 
 
 def test_detect_invocation_falls_back_to_daemon_subcommand_when_sibling_missing(
-    monkeypatch, tmp_path
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """No `dbxignored` sibling: invoke ourselves with the `daemon` subcommand.
 
     Defensive case — the PyInstaller specs always emit both binaries, so this
@@ -68,7 +76,7 @@ def test_detect_invocation_falls_back_to_daemon_subcommand_when_sibling_missing(
     assert args == "daemon"
 
 
-def test_detect_invocation_falls_back_to_python_module(monkeypatch):
+def test_detect_invocation_falls_back_to_python_module(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delattr(sys, "frozen", raising=False)
     monkeypatch.setattr(
         "shutil.which", lambda name: "/usr/bin/python3" if name == "python3" else None
@@ -80,10 +88,10 @@ def test_detect_invocation_falls_back_to_python_module(monkeypatch):
     assert args == "-m dbxignore daemon"
 
 
-def test_detect_invocation_uses_path_shim_when_present(monkeypatch):
+def test_detect_invocation_uses_path_shim_when_present(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delattr(sys, "frozen", raising=False)
 
-    def fake_which(name):
+    def fake_which(name: str) -> str | None:
         if name == "dbxignored":
             return "/home/u/.local/bin/dbxignored"
         return None

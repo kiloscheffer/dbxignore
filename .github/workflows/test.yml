@@ -25,6 +25,9 @@ jobs:
       - name: Lint
         run: uv run ruff check
 
+      - name: Type check
+        run: uv run mypy .
+
       - name: Unit tests (cross-platform)
         run: uv run pytest -m "not windows_only and not linux_only and not macos_only" -v
 

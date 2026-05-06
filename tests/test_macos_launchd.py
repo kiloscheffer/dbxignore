@@ -9,9 +9,13 @@ from __future__ import annotations
 
 import plistlib
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import pytest
 
 
-def test_build_plist_content_has_required_keys():
+def test_build_plist_content_has_required_keys() -> None:
     from dbxignore.install import macos_launchd
 
     content = macos_launchd.build_plist_content(
@@ -29,7 +33,7 @@ def test_build_plist_content_has_required_keys():
     assert "EnvironmentVariables" not in parsed
 
 
-def test_build_plist_content_emits_environment_variables_when_provided():
+def test_build_plist_content_emits_environment_variables_when_provided() -> None:
     from dbxignore.install import macos_launchd
 
     content = macos_launchd.build_plist_content(
@@ -42,7 +46,7 @@ def test_build_plist_content_emits_environment_variables_when_provided():
     assert parsed["EnvironmentVariables"] == {"DBXIGNORE_ROOT": "/Users/kilo/Dropbox"}
 
 
-def test_build_plist_content_with_arguments_in_program():
+def test_build_plist_content_with_arguments_in_program() -> None:
     """Args after the executable should land as additional ProgramArguments entries."""
     from dbxignore.install import macos_launchd
 
@@ -60,14 +64,16 @@ def test_build_plist_content_with_arguments_in_program():
     ]
 
 
-def test_service_target_includes_uid_and_label(monkeypatch):
+def test_service_target_includes_uid_and_label(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("os.getuid", lambda: 501, raising=False)
     from dbxignore.install import macos_launchd
 
     assert macos_launchd._service_target() == "gui/501/com.kiloscheffer.dbxignore"
 
 
-def test_install_agent_writes_plist_and_calls_bootstrap(tmp_path, monkeypatch):
+def test_install_agent_writes_plist_and_calls_bootstrap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr("os.getuid", lambda: 501, raising=False)
     monkeypatch.setattr(
@@ -79,9 +85,9 @@ def test_install_agent_writes_plist_and_calls_bootstrap(tmp_path, monkeypatch):
         lambda: tmp_path / "logs",
     )
 
-    calls = []
+    calls: list[list[str]] = []
 
-    def fake_run(cmd, **kwargs):
+    def fake_run(cmd: list[str], **kwargs: object) -> object:
         calls.append(cmd)
 
         class R:
@@ -109,7 +115,9 @@ def test_install_agent_writes_plist_and_calls_bootstrap(tmp_path, monkeypatch):
     assert bootstrap_calls[0][3] == str(plist_path)
 
 
-def test_uninstall_agent_calls_bootout_and_removes_plist(tmp_path, monkeypatch):
+def test_uninstall_agent_calls_bootout_and_removes_plist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr("os.getuid", lambda: 501, raising=False)
 
@@ -118,9 +126,9 @@ def test_uninstall_agent_calls_bootout_and_removes_plist(tmp_path, monkeypatch):
     plist_path = plist_dir / "com.kiloscheffer.dbxignore.plist"
     plist_path.write_bytes(b"<plist></plist>")
 
-    calls = []
+    calls: list[list[str]] = []
 
-    def fake_run(cmd, **kwargs):
+    def fake_run(cmd: list[str], **kwargs: object) -> object:
         calls.append(cmd)
 
         class R:

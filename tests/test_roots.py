@@ -1,25 +1,29 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 from dbxignore import roots
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def _stage_info(monkeypatch, tmp_path, fixture_name: str | None):
+def _stage_info(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fixture_name: str | None) -> None:
     """Stage a fake Dropbox info.json at the platform's documented location."""
+    # Skip on unsupported platforms first so mypy's flow narrowing sees the
+    # win32/linux variables as always bound below (pytest.skip is NoReturn,
+    # but mypy's strict mode under host=darwin doesn't always pick that up
+    # when it's the tail of an if/elif/else).
+    if sys.platform != "win32" and not sys.platform.startswith("linux"):
+        pytest.skip(f"unsupported platform {sys.platform}")
     if sys.platform == "win32":
         base = tmp_path / "AppData"
         dropbox_dir = base / "Dropbox"
         env_var = "APPDATA"
-    elif sys.platform.startswith("linux"):
+    else:
         base = tmp_path / "home"
         dropbox_dir = base / ".dropbox"
         env_var = "HOME"
-    else:
-        import pytest
-
-        pytest.skip(f"unsupported platform {sys.platform}")
 
     dropbox_dir.mkdir(parents=True)
     if fixture_name is not None:
@@ -34,7 +38,7 @@ def _stage_info(monkeypatch, tmp_path, fixture_name: str | None):
         monkeypatch.delenv("LOCALAPPDATA", raising=False)
 
 
-def _clear_platform_env(monkeypatch):
+def _clear_platform_env(monkeypatch: pytest.MonkeyPatch) -> None:
     if sys.platform == "win32":
         monkeypatch.delenv("APPDATA", raising=False)
         # Clear LOCALAPPDATA too — `_info_json_paths` checks both Windows
@@ -46,39 +50,41 @@ def _clear_platform_env(monkeypatch):
         monkeypatch.delenv("HOME", raising=False)
 
 
-def test_discover_personal_only(monkeypatch, tmp_path):
+def test_discover_personal_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _stage_info(monkeypatch, tmp_path, "info_personal.json")
     result = roots.discover()
     assert result == [Path(r"C:\Dropbox")]
 
 
-def test_discover_personal_and_business(monkeypatch, tmp_path):
+def test_discover_personal_and_business(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _stage_info(monkeypatch, tmp_path, "info_personal_business.json")
     result = roots.discover()
     assert result == [Path(r"C:\Dropbox"), Path(r"C:\Dropbox (Work)")]
 
 
-def test_discover_missing_info_file(monkeypatch, tmp_path):
+def test_discover_missing_info_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _stage_info(monkeypatch, tmp_path, fixture_name=None)
     assert roots.discover() == []
 
 
-def test_discover_malformed_json(monkeypatch, tmp_path):
+def test_discover_malformed_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _stage_info(monkeypatch, tmp_path, "info_malformed.json")
     assert roots.discover() == []
 
 
-def test_discover_no_platform_env(monkeypatch):
+def test_discover_no_platform_env(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_platform_env(monkeypatch)
     assert roots.discover() == []
 
 
-def test_discover_json_not_object(monkeypatch, tmp_path):
+def test_discover_json_not_object(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _stage_info(monkeypatch, tmp_path, "info_not_object.json")
     assert roots.discover() == []
 
 
-def test_discover_env_override_returns_env_path(monkeypatch, tmp_path):
+def test_discover_env_override_returns_env_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """DBXIGNORE_ROOT set to an existing dir returns [Path(env)],
     bypassing info.json entirely."""
     fake_root = tmp_path / "custom-dropbox"
@@ -90,7 +96,9 @@ def test_discover_env_override_returns_env_path(monkeypatch, tmp_path):
     assert roots.discover() == [fake_root]
 
 
-def test_discover_env_override_wins_over_info_json(monkeypatch, tmp_path):
+def test_discover_env_override_wins_over_info_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """When both DBXIGNORE_ROOT and a valid info.json are present, the
     env var wins — the whole point of the escape hatch."""
     fake_root = tmp_path / "custom-dropbox"
@@ -104,7 +112,9 @@ def test_discover_env_override_wins_over_info_json(monkeypatch, tmp_path):
     assert result != [Path(r"C:\Dropbox")]  # would be the info.json answer
 
 
-def test_discover_env_override_empty_string_falls_back_to_info_json(monkeypatch, tmp_path):
+def test_discover_env_override_empty_string_falls_back_to_info_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """DBXIGNORE_ROOT="" is indistinguishable from unset in practice
     (shell quirks), so treat it as unset and fall back to info.json."""
     _stage_info(monkeypatch, tmp_path, "info_personal.json")
@@ -113,7 +123,9 @@ def test_discover_env_override_empty_string_falls_back_to_info_json(monkeypatch,
     assert roots.discover() == [Path(r"C:\Dropbox")]
 
 
-def test_discover_env_override_missing_path_warns_and_returns_empty(monkeypatch, tmp_path, caplog):
+def test_discover_env_override_missing_path_warns_and_returns_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """If DBXIGNORE_ROOT points at a nonexistent path, return [] with a
     WARNING — so the CLI's "No Dropbox roots found" surfaces rather than a
     silent no-op sweep that leaves the user puzzled."""
@@ -132,7 +144,7 @@ def test_discover_env_override_missing_path_warns_and_returns_empty(monkeypatch,
     ), [rec.message for rec in caplog.records]
 
 
-def test_discover_non_utf8_bytes(monkeypatch, tmp_path):
+def test_discover_non_utf8_bytes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     if sys.platform == "win32":
         base = tmp_path / "AppData"
         dropbox_dir = base / "Dropbox"
@@ -155,7 +167,9 @@ def test_discover_non_utf8_bytes(monkeypatch, tmp_path):
 # in priority order (APPDATA first); discover picks the first existing one.
 
 
-def test_discover_finds_info_json_via_localappdata(monkeypatch, tmp_path):
+def test_discover_finds_info_json_via_localappdata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """LOCALAPPDATA fallback fires when APPDATA's candidate doesn't exist."""
     if sys.platform != "win32":
         import pytest
@@ -178,7 +192,9 @@ def test_discover_finds_info_json_via_localappdata(monkeypatch, tmp_path):
     assert roots.discover() == [Path(r"C:\Dropbox")]
 
 
-def test_discover_appdata_wins_over_localappdata(monkeypatch, tmp_path):
+def test_discover_appdata_wins_over_localappdata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """When both candidates exist, APPDATA (per-user install) takes priority."""
     if sys.platform != "win32":
         import pytest
@@ -207,7 +223,9 @@ def test_discover_appdata_wins_over_localappdata(monkeypatch, tmp_path):
     assert roots.discover() == [Path(r"C:\Dropbox")]
 
 
-def test_discover_warns_with_both_candidates_when_neither_exists(monkeypatch, tmp_path, caplog):
+def test_discover_warns_with_both_candidates_when_neither_exists(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """If both env vars are set but neither file exists, the WARNING message
     names both candidate paths — so a user who hits this in the wild knows
     both standard locations were checked."""

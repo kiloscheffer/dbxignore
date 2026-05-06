@@ -9,12 +9,16 @@ paths.
 import os
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from dbxignore import cli, state
+from tests.conftest import FakeMarkers
 
 
-def _setup_marked_tree(tmp_path: Path, fake_markers, monkeypatch) -> dict[str, Path]:
+def _setup_marked_tree(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> dict[str, Path]:
     """Build a small tree with one marked dir, one marked file, and a
     .dropboxignore + state.json. Returns the relevant paths for assertions.
 
@@ -48,7 +52,9 @@ def _setup_marked_tree(tmp_path: Path, fake_markers, monkeypatch) -> dict[str, P
     }
 
 
-def test_clear_clears_markers(tmp_path, fake_markers, monkeypatch):
+def test_clear_clears_markers(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Happy path: --yes skips confirmation; markers on disk are cleared."""
     paths = _setup_marked_tree(tmp_path, fake_markers, monkeypatch)
     runner = CliRunner()
@@ -60,7 +66,9 @@ def test_clear_clears_markers(tmp_path, fake_markers, monkeypatch):
     assert not fake_markers.is_ignored(paths["marked_file"])
 
 
-def test_clear_leaves_dropboxignore_and_state_json_untouched(tmp_path, fake_markers, monkeypatch):
+def test_clear_leaves_dropboxignore_and_state_json_untouched(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Inverse-of-apply: rule files and state.json survive a clear."""
     paths = _setup_marked_tree(tmp_path, fake_markers, monkeypatch)
     di_content = paths["dropboxignore"].read_text(encoding="utf-8")
@@ -74,7 +82,9 @@ def test_clear_leaves_dropboxignore_and_state_json_untouched(tmp_path, fake_mark
     assert paths["state_json"].read_text(encoding="utf-8") == sj_content
 
 
-def test_clear_refuses_when_daemon_alive(tmp_path, fake_markers, monkeypatch):
+def test_clear_refuses_when_daemon_alive(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The daemon would re-apply markers — refuse with exit 2 + guidance."""
     paths = _setup_marked_tree(tmp_path, fake_markers, monkeypatch)
     # Set up a state.json with a pid; pin is_daemon_alive=True.
@@ -92,7 +102,9 @@ def test_clear_refuses_when_daemon_alive(tmp_path, fake_markers, monkeypatch):
     assert fake_markers.is_ignored(paths["marked_dir"])
 
 
-def test_clear_force_overrides_daemon_alive(tmp_path, fake_markers, monkeypatch):
+def test_clear_force_overrides_daemon_alive(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """--force lets the user override the daemon-alive guard knowingly."""
     paths = _setup_marked_tree(tmp_path, fake_markers, monkeypatch)
     s = state.State(daemon_pid=os.getpid())
@@ -107,7 +119,9 @@ def test_clear_force_overrides_daemon_alive(tmp_path, fake_markers, monkeypatch)
     assert not fake_markers.is_ignored(paths["marked_dir"])
 
 
-def test_clear_dry_run_prints_but_does_not_clear(tmp_path, fake_markers, monkeypatch):
+def test_clear_dry_run_prints_but_does_not_clear(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """--dry-run lists candidates without touching markers; --yes is implied
     not needed because nothing actually changes."""
     paths = _setup_marked_tree(tmp_path, fake_markers, monkeypatch)
@@ -123,7 +137,9 @@ def test_clear_dry_run_prints_but_does_not_clear(tmp_path, fake_markers, monkeyp
     assert fake_markers.is_ignored(paths["marked_file"])
 
 
-def test_clear_path_arg_scopes_to_subtree(tmp_path, fake_markers, monkeypatch):
+def test_clear_path_arg_scopes_to_subtree(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Optional PATH arg restricts the walk to that subtree, parallel to apply."""
     root = tmp_path
     monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
@@ -150,7 +166,9 @@ def test_clear_path_arg_scopes_to_subtree(tmp_path, fake_markers, monkeypatch):
     assert fake_markers.is_ignored(file_b)
 
 
-def test_clear_path_outside_roots_errors(tmp_path, fake_markers, monkeypatch):
+def test_clear_path_outside_roots_errors(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A path not under any root is a CLI error (exit 2), not a silent no-op."""
     root = tmp_path / "dropbox"
     root.mkdir()
@@ -168,7 +186,9 @@ def test_clear_path_outside_roots_errors(tmp_path, fake_markers, monkeypatch):
     assert "not under any Dropbox root" in result.output
 
 
-def test_clear_no_markers_prints_message(tmp_path, fake_markers, monkeypatch):
+def test_clear_no_markers_prints_message(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Clean tree: distinct message instead of cleared=0 (more readable)."""
     root = tmp_path
     monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
@@ -183,7 +203,9 @@ def test_clear_no_markers_prints_message(tmp_path, fake_markers, monkeypatch):
     assert "No markers to clear" in result.output
 
 
-def test_clear_confirmation_aborts_on_no(tmp_path, fake_markers, monkeypatch):
+def test_clear_confirmation_aborts_on_no(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Without --yes, the prompt fires; saying 'n' aborts without clearing."""
     paths = _setup_marked_tree(tmp_path, fake_markers, monkeypatch)
 
@@ -196,7 +218,9 @@ def test_clear_confirmation_aborts_on_no(tmp_path, fake_markers, monkeypatch):
     assert fake_markers.is_ignored(paths["marked_file"])
 
 
-def test_clear_confirmation_proceeds_on_yes(tmp_path, fake_markers, monkeypatch):
+def test_clear_confirmation_proceeds_on_yes(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Without --yes, saying 'y' to the prompt clears the markers."""
     paths = _setup_marked_tree(tmp_path, fake_markers, monkeypatch)
 

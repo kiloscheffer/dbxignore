@@ -20,9 +20,12 @@ from __future__ import annotations
 import errno
 import logging
 import os
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from . import require_absolute as _require_absolute
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +48,7 @@ def is_ignored(path: Path) -> bool:
     """
     _require_absolute(path)
     try:
-        value = os.getxattr(os.fspath(path), ATTR_NAME, follow_symlinks=False)
+        value = os.getxattr(os.fspath(path), ATTR_NAME, follow_symlinks=False)  # type: ignore[attr-defined, unused-ignore]
     except OSError as exc:
         if exc.errno in _NO_ATTR_ERRNOS:
             return False
@@ -66,7 +69,7 @@ def set_ignored(path: Path) -> None:
     contract.
     """
     _require_absolute(path)
-    os.setxattr(os.fspath(path), ATTR_NAME, _MARKER_VALUE, follow_symlinks=False)
+    os.setxattr(os.fspath(path), ATTR_NAME, _MARKER_VALUE, follow_symlinks=False)  # type: ignore[attr-defined, unused-ignore]
 
 
 def clear_ignored(path: Path) -> None:
@@ -78,7 +81,7 @@ def clear_ignored(path: Path) -> None:
     """
     _require_absolute(path)
     try:
-        os.removexattr(os.fspath(path), ATTR_NAME, follow_symlinks=False)
+        os.removexattr(os.fspath(path), ATTR_NAME, follow_symlinks=False)  # type: ignore[attr-defined, unused-ignore]
     except OSError as exc:
         if exc.errno in _NO_ATTR_ERRNOS:
             logger.debug("clear_ignored: xattr absent on %s", path)

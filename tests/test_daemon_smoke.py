@@ -1,6 +1,8 @@
 import sys
 import threading
 import time
+from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
@@ -15,7 +17,7 @@ if sys.platform != "win32":
     )
 
 
-def _poll_until(fn, timeout_s: float = 2.0, interval_s: float = 0.05) -> bool:
+def _poll_until(fn: Callable[[], bool], timeout_s: float = 2.0, interval_s: float = 0.05) -> bool:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         if fn():
@@ -24,9 +26,11 @@ def _poll_until(fn, timeout_s: float = 2.0, interval_s: float = 0.05) -> bool:
     return False
 
 
-def test_daemon_reacts_to_dropboxignore_and_directory_creation(tmp_path, monkeypatch):
+def test_daemon_reacts_to_dropboxignore_and_directory_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Redirect roots.discover() to our fake dropbox root.
-    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])
+    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])  # type: ignore[attr-defined, unused-ignore]
     # Ensure the singleton check reads a fresh state path under tmp_path.
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
 

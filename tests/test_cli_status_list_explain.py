@@ -2,12 +2,16 @@ import datetime as dt
 import os
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from dbxignore import cli, state
+from tests.conftest import FakeMarkers
 
 
-def test_status_reports_no_state_when_file_missing(tmp_path, monkeypatch):
+def test_status_reports_no_state_when_file_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(state, "default_path", lambda: tmp_path / "missing.json")
     monkeypatch.setattr(cli, "_discover_roots", lambda: [])
     runner = CliRunner()
@@ -16,7 +20,7 @@ def test_status_reports_no_state_when_file_missing(tmp_path, monkeypatch):
     assert "not running" in result.output.lower() or "no state" in result.output.lower()
 
 
-def test_status_reports_running_daemon(tmp_path, monkeypatch):
+def test_status_reports_running_daemon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     s = state.State(
         daemon_pid=os.getpid(),
         daemon_started=dt.datetime.now(dt.UTC),
@@ -39,7 +43,9 @@ def test_status_reports_running_daemon(tmp_path, monkeypatch):
     assert "7" in result.output
 
 
-def test_list_prints_paths_with_ads_set(tmp_path, fake_markers, monkeypatch):
+def test_list_prints_paths_with_ads_set(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
@@ -52,7 +58,7 @@ def test_list_prints_paths_with_ads_set(tmp_path, fake_markers, monkeypatch):
     assert str(tmp_path / "b") not in result.output
 
 
-def test_explain_prints_matching_rule(tmp_path, monkeypatch):
+def test_explain_prints_matching_rule(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".dropboxignore").write_text("# h\nbuild/\n", encoding="utf-8")
     (tmp_path / "build").mkdir()
     monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
@@ -64,7 +70,7 @@ def test_explain_prints_matching_rule(tmp_path, monkeypatch):
     assert ".dropboxignore:2" in result.output or "line 2" in result.output
 
 
-def test_explain_no_match_output(tmp_path, monkeypatch):
+def test_explain_no_match_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
     (tmp_path / "src").mkdir()
     monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
@@ -75,7 +81,9 @@ def test_explain_no_match_output(tmp_path, monkeypatch):
     assert "no match" in result.output.lower()
 
 
-def test_list_does_not_descend_into_ignored_directories(tmp_path, fake_markers, monkeypatch):
+def test_list_does_not_descend_into_ignored_directories(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
     (tmp_path / "build").mkdir()
     (tmp_path / "build" / "deep").mkdir()
@@ -95,13 +103,13 @@ def test_list_does_not_descend_into_ignored_directories(tmp_path, fake_markers, 
 # ---- status --summary (followup item 60) ------------------------------------
 
 
-def test_format_summary_no_state_returns_minimal_line():
+def test_format_summary_no_state_returns_minimal_line() -> None:
     """No state.json → only `state=no_state conflicts=N` is meaningful."""
     assert cli._format_summary(None, alive=False, conflicts_count=0) == "state=no_state conflicts=0"
     assert cli._format_summary(None, alive=True, conflicts_count=3) == "state=no_state conflicts=3"
 
 
-def test_format_summary_running_includes_pid_and_counts():
+def test_format_summary_running_includes_pid_and_counts() -> None:
     """state.json + alive PID → `state=running pid=N marked=N cleared=N errors=N conflicts=N`."""
     s = state.State(
         daemon_pid=12345,
@@ -114,7 +122,7 @@ def test_format_summary_running_includes_pid_and_counts():
     )
 
 
-def test_format_summary_not_running_uses_same_pid_field():
+def test_format_summary_not_running_uses_same_pid_field() -> None:
     """state.json present but daemon dead → state=not_running, same pid= field
     (parsing stays uniform; the not_running token tells the consumer the pid
     is stale)."""
@@ -129,7 +137,7 @@ def test_format_summary_not_running_uses_same_pid_field():
     )
 
 
-def test_format_summary_no_pid_omits_pid_field():
+def test_format_summary_no_pid_omits_pid_field() -> None:
     """state.json present but daemon_pid is None (rare edge: state.json from
     a partial write) → omit pid=, force state=not_running."""
     s = state.State(daemon_pid=None)
@@ -138,7 +146,9 @@ def test_format_summary_no_pid_omits_pid_field():
     )
 
 
-def test_status_summary_flag_emits_single_line(tmp_path, monkeypatch):
+def test_status_summary_flag_emits_single_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """`dbxignore status --summary` produces exactly one line on stdout
     (the public-API contract for status-bar widgets).
 
@@ -177,7 +187,9 @@ def test_status_summary_flag_emits_single_line(tmp_path, monkeypatch):
     assert "conflicts=0" in line
 
 
-def test_status_summary_no_state_emits_no_state_token(tmp_path, monkeypatch):
+def test_status_summary_no_state_emits_no_state_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """No state.json + no roots → `state=no_state conflicts=0` and nothing else."""
     monkeypatch.setattr(state, "default_path", lambda: tmp_path / "missing.json")
     monkeypatch.setattr(cli, "_discover_roots", lambda: [])
@@ -188,7 +200,7 @@ def test_status_summary_no_state_emits_no_state_token(tmp_path, monkeypatch):
     assert result.output.strip() == "state=no_state conflicts=0"
 
 
-def test_status_lists_rule_conflicts(tmp_path, monkeypatch):
+def test_status_lists_rule_conflicts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`status` surfaces RuleCache conflicts alongside daemon pid / sweep info."""
     import click.testing
 
@@ -206,7 +218,9 @@ def test_status_lists_rule_conflicts(tmp_path, monkeypatch):
     assert "masked by" in result.output
 
 
-def test_status_omits_conflicts_section_when_empty(tmp_path, monkeypatch):
+def test_status_omits_conflicts_section_when_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import click.testing
 
     root = tmp_path
@@ -219,7 +233,9 @@ def test_status_omits_conflicts_section_when_empty(tmp_path, monkeypatch):
     assert "rule conflicts" not in result.output
 
 
-def test_status_column_aligns_conflicts_with_varying_pattern_lengths(tmp_path, monkeypatch):
+def test_status_column_aligns_conflicts_with_varying_pattern_lengths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Multi-conflict output column-aligns the 'masked by' prefix and trailing
     fields even when dropped patterns differ in length. Regression backstop:
     a future "simplification" back to fixed two-space separators would fail
@@ -251,7 +267,9 @@ def test_status_column_aligns_conflicts_with_varying_pattern_lengths(tmp_path, m
     )
 
 
-def test_explain_annotates_dropped_negations(tmp_path, monkeypatch):
+def test_explain_annotates_dropped_negations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import click.testing
 
     root = tmp_path
@@ -270,7 +288,9 @@ def test_explain_annotates_dropped_negations(tmp_path, monkeypatch):
     assert "!build/keep/" in result.output
 
 
-def test_status_does_not_log_conflict_warning_to_stderr(tmp_path, monkeypatch, caplog):
+def test_status_does_not_log_conflict_warning_to_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """`status` surfaces conflicts via stdout (the `rule conflicts (N):`
     section). The WARNING emitted by `_recompute_conflicts` on the daemon
     path would double up the info on stderr; CLI one-shots suppress it."""

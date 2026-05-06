@@ -13,8 +13,13 @@ import os
 import sys
 import threading
 import time
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
 
 pytestmark = pytest.mark.linux_only
 
@@ -25,7 +30,7 @@ if not sys.platform.startswith("linux"):
     )
 
 
-def _xattr_supported(path) -> bool:
+def _xattr_supported(path: Path) -> bool:
     probe = path / ".xattr_probe"
     probe.touch()
     try:
@@ -38,12 +43,12 @@ def _xattr_supported(path) -> bool:
 
 
 @pytest.fixture(autouse=True)
-def _require_xattr_fs(tmp_path):
+def _require_xattr_fs(tmp_path: Path) -> None:
     if not _xattr_supported(tmp_path):
         pytest.skip(f"tmp_path {tmp_path} rejects user.* xattrs")
 
 
-def _poll_until(fn, timeout_s: float = 2.0, interval_s: float = 0.05) -> bool:
+def _poll_until(fn: Callable[[], bool], timeout_s: float = 2.0, interval_s: float = 0.05) -> bool:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         if fn():
@@ -52,7 +57,7 @@ def _poll_until(fn, timeout_s: float = 2.0, interval_s: float = 0.05) -> bool:
     return False
 
 
-def _wait_for_daemon_watching(log_path, timeout_s: float = 3.0) -> bool:
+def _wait_for_daemon_watching(log_path: Path, timeout_s: float = 3.0) -> bool:
     """Block until the daemon emits its ``watching roots: …`` line.
 
     On Linux, watchdog's inotify watches only observe events that fire
@@ -69,7 +74,9 @@ def _wait_for_daemon_watching(log_path, timeout_s: float = 3.0) -> bool:
     )
 
 
-def test_daemon_reacts_to_dropboxignore_add_and_remove(tmp_path, monkeypatch):
+def test_daemon_reacts_to_dropboxignore_add_and_remove(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Adding a rule marks a matching path; removing the rule clears it.
 
     Deliberately avoids the Windows smoke's negation case (``!build/keep/``)
@@ -82,7 +89,7 @@ def test_daemon_reacts_to_dropboxignore_add_and_remove(tmp_path, monkeypatch):
     """
     from dbxignore import daemon, markers
 
-    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])
+    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])  # type: ignore[attr-defined, unused-ignore]
     # Route state.json + daemon.log off the real per-user XDG dir.
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     log_path = tmp_path / "state" / "dbxignore" / "daemon.log"
@@ -115,7 +122,7 @@ def test_daemon_reacts_to_dropboxignore_add_and_remove(tmp_path, monkeypatch):
         t.join(timeout=5.0)
 
 
-def test_daemon_drops_conflicted_negation(tmp_path, monkeypatch):
+def test_daemon_drops_conflicted_negation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Adding `!build/keep/` after `build/` triggers the conflict-detection
     layer: the negation is dropped from the active rule set at rule-load
     time. `build/keep/` stays marked (either directly or via inheritance),
@@ -125,7 +132,7 @@ def test_daemon_drops_conflicted_negation(tmp_path, monkeypatch):
     """
     from dbxignore import daemon, markers
 
-    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])
+    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])  # type: ignore[attr-defined, unused-ignore]
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     log_path = tmp_path / "state" / "dbxignore" / "daemon.log"
 

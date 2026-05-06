@@ -13,9 +13,13 @@ if not sys.platform.startswith("linux"):
     pytest.skip("user.* xattrs are Linux-only in v0.2", allow_module_level=True)
 
 from dbxignore._backends import linux_xattr  # noqa: E402, I001  # must come after sys.platform skip guard
+from typing import TYPE_CHECKING  # noqa: E402  # after skip guard
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
-def _xattr_supported(path) -> bool:
+def _xattr_supported(path: Path) -> bool:
     """Probe whether the filesystem under `path` accepts user.* xattrs."""
     probe = path / ".xattr_probe"
     probe.touch()
@@ -29,12 +33,12 @@ def _xattr_supported(path) -> bool:
 
 
 @pytest.fixture(autouse=True)
-def _require_xattr_fs(tmp_path):
+def _require_xattr_fs(tmp_path: Path) -> None:
     if not _xattr_supported(tmp_path):
         pytest.skip(f"tmp_path {tmp_path} rejects user.* xattrs — cannot test")
 
 
-def test_roundtrip_on_file(tmp_path):
+def test_roundtrip_on_file(tmp_path: Path) -> None:
     p = tmp_path / "file.txt"
     p.touch()
     assert linux_xattr.is_ignored(p) is False
@@ -44,7 +48,7 @@ def test_roundtrip_on_file(tmp_path):
     assert linux_xattr.is_ignored(p) is False
 
 
-def test_roundtrip_on_directory(tmp_path):
+def test_roundtrip_on_directory(tmp_path: Path) -> None:
     d = tmp_path / "subdir"
     d.mkdir()
     assert linux_xattr.is_ignored(d) is False
@@ -54,20 +58,20 @@ def test_roundtrip_on_directory(tmp_path):
     assert linux_xattr.is_ignored(d) is False
 
 
-def test_clear_is_idempotent_on_unmarked_path(tmp_path):
+def test_clear_is_idempotent_on_unmarked_path(tmp_path: Path) -> None:
     p = tmp_path / "unmarked.txt"
     p.touch()
     linux_xattr.clear_ignored(p)
     assert linux_xattr.is_ignored(p) is False
 
 
-def test_is_ignored_on_nonexistent_path_raises_filenotfound(tmp_path):
+def test_is_ignored_on_nonexistent_path_raises_filenotfound(tmp_path: Path) -> None:
     p = tmp_path / "does-not-exist.txt"
     with pytest.raises(FileNotFoundError):
         linux_xattr.is_ignored(p)
 
 
-def test_requires_absolute_path(tmp_path):
+def test_requires_absolute_path(tmp_path: Path) -> None:
     from pathlib import Path
 
     rel = Path("relative/path.txt")
@@ -79,7 +83,7 @@ def test_requires_absolute_path(tmp_path):
         linux_xattr.clear_ignored(rel)
 
 
-def test_set_on_symlink_raises_permission_error(tmp_path):
+def test_set_on_symlink_raises_permission_error(tmp_path: Path) -> None:
     """Linux refuses user.* xattrs on symlinks (EPERM).
 
     set_ignored(symlink) must raise PermissionError so reconcile's existing

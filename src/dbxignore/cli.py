@@ -586,7 +586,7 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
     override. Prompts before clearing unless `--yes` is set.
     """
     s = state.read()
-    if not force and state.daemon_is_running(s):
+    if not force and s is not None and state.daemon_is_running(s):
         click.echo(
             f"error: daemon is running (pid={s.daemon_pid}). "
             f"The next sweep would re-apply markers.",

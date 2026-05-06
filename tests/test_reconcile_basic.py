@@ -1,8 +1,13 @@
+from pathlib import Path
+
 from dbxignore import reconcile
 from dbxignore.rules import RuleCache
+from tests.conftest import FakeMarkers, WriteFile
 
 
-def test_sets_ads_on_matching_directory(tmp_path, fake_markers, write_file):
+def test_sets_ads_on_matching_directory(
+    tmp_path: Path, fake_markers: FakeMarkers, write_file: WriteFile
+) -> None:
     write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
     (tmp_path / "src").mkdir()
@@ -19,7 +24,9 @@ def test_sets_ads_on_matching_directory(tmp_path, fake_markers, write_file):
     assert report.errors == []
 
 
-def test_clears_ads_when_no_longer_matching(tmp_path, fake_markers, write_file):
+def test_clears_ads_when_no_longer_matching(
+    tmp_path: Path, fake_markers: FakeMarkers, write_file: WriteFile
+) -> None:
     (tmp_path / "build").mkdir()
     fake_markers.set_ignored(tmp_path / "build")  # pre-existing marker
     write_file(tmp_path / ".dropboxignore", "")  # no rules
@@ -33,7 +40,9 @@ def test_clears_ads_when_no_longer_matching(tmp_path, fake_markers, write_file):
     assert report.cleared == 1
 
 
-def test_no_ops_when_state_already_correct(tmp_path, fake_markers, write_file):
+def test_no_ops_when_state_already_correct(
+    tmp_path: Path, fake_markers: FakeMarkers, write_file: WriteFile
+) -> None:
     write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
     fake_markers.set_ignored(tmp_path / "build")
@@ -50,7 +59,9 @@ def test_no_ops_when_state_already_correct(tmp_path, fake_markers, write_file):
     assert report.cleared == 0
 
 
-def test_matches_files_not_just_directories(tmp_path, fake_markers, write_file):
+def test_matches_files_not_just_directories(
+    tmp_path: Path, fake_markers: FakeMarkers, write_file: WriteFile
+) -> None:
     write_file(tmp_path / ".dropboxignore", "*.log\n")
     (tmp_path / "a.log").touch()
     (tmp_path / "b.txt").touch()

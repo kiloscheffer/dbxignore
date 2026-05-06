@@ -10,23 +10,27 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import pytest
 
 
-def test_user_log_dir_equals_user_state_dir_on_linux(monkeypatch):
+def test_user_log_dir_equals_user_state_dir_on_linux(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
     from dbxignore import state
 
     assert state.user_log_dir() == state.user_state_dir()
 
 
-def test_user_log_dir_equals_user_state_dir_on_windows(monkeypatch):
+def test_user_log_dir_equals_user_state_dir_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
     from dbxignore import state
 
     assert state.user_log_dir() == state.user_state_dir()
 
 
-def test_user_log_dir_under_library_logs_on_darwin(monkeypatch):
+def test_user_log_dir_under_library_logs_on_darwin(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "darwin")
     from dbxignore import state
 

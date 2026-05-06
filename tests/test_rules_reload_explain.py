@@ -1,7 +1,12 @@
+from pathlib import Path
+
+import pytest
+
 from dbxignore.rules import RuleCache
+from tests.conftest import WriteFile
 
 
-def test_reload_file_picks_up_new_pattern(tmp_path, write_file):
+def test_reload_file_picks_up_new_pattern(tmp_path: Path, write_file: WriteFile) -> None:
     write_file(tmp_path / ".dropboxignore", "")
     (tmp_path / "build").mkdir()
 
@@ -15,7 +20,7 @@ def test_reload_file_picks_up_new_pattern(tmp_path, write_file):
     assert cache.match(tmp_path / "build") is True
 
 
-def test_remove_file_drops_its_rules(tmp_path, write_file):
+def test_remove_file_drops_its_rules(tmp_path: Path, write_file: WriteFile) -> None:
     write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
 
@@ -27,7 +32,7 @@ def test_remove_file_drops_its_rules(tmp_path, write_file):
     assert cache.match(tmp_path / "build") is False
 
 
-def test_explain_returns_matching_rule(tmp_path, write_file):
+def test_explain_returns_matching_rule(tmp_path: Path, write_file: WriteFile) -> None:
     write_file(tmp_path / ".dropboxignore", "# header\nbuild/\n*.log\n")
     (tmp_path / "build").mkdir()
 
@@ -42,7 +47,7 @@ def test_explain_returns_matching_rule(tmp_path, write_file):
     assert matches[0].negation is False
 
 
-def test_explain_empty_for_non_matching_path(tmp_path, write_file):
+def test_explain_empty_for_non_matching_path(tmp_path: Path, write_file: WriteFile) -> None:
     write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "src").mkdir()
 
@@ -52,7 +57,9 @@ def test_explain_empty_for_non_matching_path(tmp_path, write_file):
     assert cache.explain(tmp_path / "src") == []
 
 
-def test_explain_line_numbers_with_interleaved_blank_and_comment_lines(tmp_path, write_file):
+def test_explain_line_numbers_with_interleaved_blank_and_comment_lines(
+    tmp_path: Path, write_file: WriteFile
+) -> None:
     """explain() must report the source line number from the file, not the
     pattern's index in pathspec's internal list. Regression guard for the
     one-pass pattern-entry build — a count-mismatch between active source
@@ -83,7 +90,9 @@ def test_explain_line_numbers_with_interleaved_blank_and_comment_lines(tmp_path,
     assert log_matches[0].pattern == "*.log"
 
 
-def test_load_file_survives_malformed_pattern(tmp_path, write_file, caplog):
+def test_load_file_survives_malformed_pattern(
+    tmp_path: Path, write_file: WriteFile, caplog: pytest.LogCaptureFixture
+) -> None:
     """A .dropboxignore with a line pathspec can't compile must log a
     warning and leave the cache in a sane state, not raise."""
     import logging
@@ -103,7 +112,7 @@ def test_load_file_survives_malformed_pattern(tmp_path, write_file, caplog):
     )
 
 
-def test_rulecache_populates_conflicts_on_load(tmp_path):
+def test_rulecache_populates_conflicts_on_load(tmp_path: Path) -> None:
     root = tmp_path
     (root / ".dropboxignore").write_text("build/\n!build/keep/\n", encoding="utf-8")
     cache = RuleCache()
@@ -116,7 +125,7 @@ def test_rulecache_populates_conflicts_on_load(tmp_path):
     assert c.masking_pattern == "build/"
 
 
-def test_rulecache_no_conflict_for_children_only_pattern(tmp_path):
+def test_rulecache_no_conflict_for_children_only_pattern(tmp_path: Path) -> None:
     """`build/*` matches children of build/, not build/ itself. So
     `!build/keep/` is effective via pathspec last-match-wins — build/keep
     is in the include's match set, but the negation overrides for that
@@ -131,7 +140,7 @@ def test_rulecache_no_conflict_for_children_only_pattern(tmp_path):
     assert cache.conflicts() == []
 
 
-def test_rulecache_no_conflict_three_rule_git_canonical(tmp_path):
+def test_rulecache_no_conflict_three_rule_git_canonical(tmp_path: Path) -> None:
     """Three-rule git-canonical pattern: `build/*` + `!build/keep/` +
     `!build/keep/**`. All three should be effective. Rule 3's effect
     depends on rule 2 keeping build/keep unmarked; the detector must
@@ -147,7 +156,7 @@ def test_rulecache_no_conflict_three_rule_git_canonical(tmp_path):
     assert cache.conflicts() == []
 
 
-def test_rulecache_still_flags_directory_rule_negation(tmp_path):
+def test_rulecache_still_flags_directory_rule_negation(tmp_path: Path) -> None:
     """Regression guard: `build/` + `!build/keep/` is the case where Dropbox
     inheritance makes the negation truly inert (build/ marks the dir; all
     descendants inherit). Must continue to flag as conflict.
@@ -162,7 +171,7 @@ def test_rulecache_still_flags_directory_rule_negation(tmp_path):
     assert conflicts[0].dropped_pattern == "!build/keep/"
 
 
-def test_rulecache_flags_descendant_negation_under_children_pattern(tmp_path):
+def test_rulecache_flags_descendant_negation_under_children_pattern(tmp_path: Path) -> None:
     """`build/*` + `!build/keep/foo.txt`: foo.txt is a strict descendant of
     build/keep, which gets marked by build/*. The file negation can't reach
     foo.txt due to Dropbox's inheritance. Conflict expected.
@@ -177,7 +186,7 @@ def test_rulecache_flags_descendant_negation_under_children_pattern(tmp_path):
     assert conflicts[0].dropped_pattern == "!build/keep/foo.txt"
 
 
-def test_rulecache_flags_double_star_alone_under_children_pattern(tmp_path):
+def test_rulecache_flags_double_star_alone_under_children_pattern(tmp_path: Path) -> None:
     """`build/*` + `!build/keep/**` (without an earlier `!build/keep/` to
     save it): build/keep gets marked by build/*, so descendants can't be
     re-included. Conflict expected. Contrast with the three-rule version
@@ -193,7 +202,7 @@ def test_rulecache_flags_double_star_alone_under_children_pattern(tmp_path):
     assert conflicts[0].dropped_pattern == "!build/keep/**"
 
 
-def test_rulecache_no_cross_file_conflict_for_children_only_pattern(tmp_path):
+def test_rulecache_no_cross_file_conflict_for_children_only_pattern(tmp_path: Path) -> None:
     """Cross-file analogue of the children-only pattern: parent
     `.dropboxignore` with `build/*`, child `.dropboxignore` inside
     `build/` with `!keep/`. Mirrors the within-file fix — no conflict.
@@ -210,7 +219,7 @@ def test_rulecache_no_cross_file_conflict_for_children_only_pattern(tmp_path):
     assert cache.conflicts() == []
 
 
-def test_rulecache_cross_file_conflict_for_directory_rule(tmp_path):
+def test_rulecache_cross_file_conflict_for_directory_rule(tmp_path: Path) -> None:
     """Cross-file regression guard: parent `.dropboxignore` with `build/`,
     child `.dropboxignore` inside `build/` with `!keep/`. The directory-rule
     form still flags as a true cross-file conflict — Dropbox inheritance
@@ -230,7 +239,7 @@ def test_rulecache_cross_file_conflict_for_directory_rule(tmp_path):
     assert conflicts[0].masking_pattern == "build/"
 
 
-def test_rulecache_sandwich_revives_conflict(tmp_path):
+def test_rulecache_sandwich_revives_conflict(tmp_path: Path) -> None:
     """Sandwich: include → negation → include → negation-target. The middle
     negation un-masks the ancestor, but a later include re-masks it, so
     the last-match-wins scan should report a conflict for the final
@@ -253,7 +262,7 @@ def test_rulecache_sandwich_revives_conflict(tmp_path):
     assert "!build/keep/foo.txt" in dropped
 
 
-def test_rulecache_clears_conflicts_on_reload_without_conflict(tmp_path):
+def test_rulecache_clears_conflicts_on_reload_without_conflict(tmp_path: Path) -> None:
     root = tmp_path
     ignore_file = root / ".dropboxignore"
     ignore_file.write_text("build/\n!build/keep/\n", encoding="utf-8")
@@ -268,7 +277,7 @@ def test_rulecache_clears_conflicts_on_reload_without_conflict(tmp_path):
     assert cache.conflicts() == []
 
 
-def test_rulecache_conflicts_removed_when_file_removed(tmp_path):
+def test_rulecache_conflicts_removed_when_file_removed(tmp_path: Path) -> None:
     root = tmp_path
     ignore_file = root / ".dropboxignore"
     ignore_file.write_text("build/\n!build/keep/\n", encoding="utf-8")
@@ -280,7 +289,7 @@ def test_rulecache_conflicts_removed_when_file_removed(tmp_path):
     assert cache.conflicts() == []
 
 
-def test_rulecache_conflicts_do_not_leak_across_roots(tmp_path):
+def test_rulecache_conflicts_do_not_leak_across_roots(tmp_path: Path) -> None:
     """A conflict in root A must not appear in root B's conflicts list.
     The is_relative_to(root) filter in _build_sequence is what prevents
     this leakage; this test guards that filter."""
@@ -300,7 +309,7 @@ def test_rulecache_conflicts_do_not_leak_across_roots(tmp_path):
     assert conflicts[0].dropped_source.is_relative_to(root_a)
 
 
-def test_rulecache_detects_cross_file_conflict(tmp_path):
+def test_rulecache_detects_cross_file_conflict(tmp_path: Path) -> None:
     """Root .dropboxignore ignores build/; a nested .dropboxignore inside
     build/ tries to re-include keep/. The conflict spans two files —
     _build_sequence must order the root file before the nested one so
@@ -322,7 +331,7 @@ def test_rulecache_detects_cross_file_conflict(tmp_path):
     assert c.masking_pattern == "build/"
 
 
-def test_match_treats_dropped_negation_as_absent(tmp_path):
+def test_match_treats_dropped_negation_as_absent(tmp_path: Path) -> None:
     """With `build/` + `!build/keep/`, the negation is dropped, so
     build/keep/ is matched via the include (gitignore semantics with the
     negation absent)."""
@@ -338,7 +347,7 @@ def test_match_treats_dropped_negation_as_absent(tmp_path):
     assert cache.match(root / "build" / "keep") is True
 
 
-def test_match_honors_non_conflicted_negation(tmp_path):
+def test_match_honors_non_conflicted_negation(tmp_path: Path) -> None:
     """*.log + !important.log: the negation is NOT dropped (no ignored
     ancestor), so important.log is excluded and others are included."""
     root = tmp_path
@@ -353,7 +362,9 @@ def test_match_honors_non_conflicted_negation(tmp_path):
     assert cache.match(root / "debug.log") is True
 
 
-def test_recompute_logs_warning_per_conflict(tmp_path, caplog):
+def test_recompute_logs_warning_per_conflict(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     import logging
 
     root = tmp_path
@@ -375,7 +386,7 @@ def test_recompute_logs_warning_per_conflict(tmp_path, caplog):
     assert "Dropping the negation" in msg
 
 
-def test_explain_includes_dropped_negation_with_flag(tmp_path):
+def test_explain_includes_dropped_negation_with_flag(tmp_path: Path) -> None:
     root = tmp_path
     (root / ".dropboxignore").write_text("build/\n!build/keep/\n", encoding="utf-8")
     (root / "build").mkdir()
@@ -396,7 +407,7 @@ def test_explain_includes_dropped_negation_with_flag(tmp_path):
     assert by_pattern["!build/keep/"].line == 2
 
 
-def test_explain_is_dropped_false_for_non_conflicted_negation(tmp_path):
+def test_explain_is_dropped_false_for_non_conflicted_negation(tmp_path: Path) -> None:
     """*.log + !important.log has no conflict — the negation should appear
     in explain() with is_dropped=False."""
     root = tmp_path

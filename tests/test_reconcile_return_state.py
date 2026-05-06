@@ -3,13 +3,22 @@ can prune subtrees without a second ADS read."""
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from dbxignore import reconcile
 from dbxignore.rules import RuleCache
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
-def test_reconcile_path_returns_true_after_newly_marking(tmp_path, fake_markers, write_file):
+    import pytest
+
+    from tests.conftest import FakeMarkers, WriteFile
+
+
+def test_reconcile_path_returns_true_after_newly_marking(
+    tmp_path: Path, fake_markers: FakeMarkers, write_file: WriteFile
+) -> None:
     write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
     cache = RuleCache()
@@ -21,7 +30,9 @@ def test_reconcile_path_returns_true_after_newly_marking(tmp_path, fake_markers,
     assert result is True
 
 
-def test_reconcile_path_returns_false_after_clearing(tmp_path, fake_markers, write_file):
+def test_reconcile_path_returns_false_after_clearing(
+    tmp_path: Path, fake_markers: FakeMarkers, write_file: WriteFile
+) -> None:
     (tmp_path / "build").mkdir()
     fake_markers.set_ignored(tmp_path / "build")
     write_file(tmp_path / ".dropboxignore", "")  # no rules
@@ -35,8 +46,8 @@ def test_reconcile_path_returns_false_after_clearing(tmp_path, fake_markers, wri
 
 
 def test_reconcile_path_returns_current_state_when_no_mutation_needed(
-    tmp_path, fake_markers, write_file
-):
+    tmp_path: Path, fake_markers: FakeMarkers, write_file: WriteFile
+) -> None:
     write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
     fake_markers.set_ignored(tmp_path / "build")
@@ -49,7 +60,9 @@ def test_reconcile_path_returns_current_state_when_no_mutation_needed(
     assert reconcile._reconcile_path(tmp_path / "src", cache, report) is False
 
 
-def test_reconcile_path_returns_none_on_read_permission_error(tmp_path, monkeypatch, write_file):
+def test_reconcile_path_returns_none_on_read_permission_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write_file: WriteFile
+) -> None:
     write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
 
@@ -75,7 +88,9 @@ def test_reconcile_path_returns_none_on_read_permission_error(tmp_path, monkeypa
     assert len(report.errors) == 1
 
 
-def test_reconcile_path_returns_none_on_vanished_path(tmp_path, monkeypatch, write_file):
+def test_reconcile_path_returns_none_on_vanished_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write_file: WriteFile
+) -> None:
     write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
 
@@ -100,7 +115,9 @@ def test_reconcile_path_returns_none_on_vanished_path(tmp_path, monkeypatch, wri
     assert result is None
 
 
-def test_reconcile_path_returns_unchanged_state_when_write_fails(tmp_path, monkeypatch, write_file):
+def test_reconcile_path_returns_unchanged_state_when_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write_file: WriteFile
+) -> None:
     """If the ADS write raises, the marker's actual state is unchanged —
     the returned value must reflect that, not the intended state."""
     write_file(tmp_path / ".dropboxignore", "build/\n")
@@ -132,7 +149,9 @@ def test_reconcile_path_returns_unchanged_state_when_write_fails(tmp_path, monke
     assert len(report.errors) == 1
 
 
-def test_reconcile_subtree_does_not_reread_ads_after_reconcile(tmp_path, monkeypatch, write_file):
+def test_reconcile_subtree_does_not_reread_ads_after_reconcile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write_file: WriteFile
+) -> None:
     """Regression guard: reconcile_subtree must call markers.is_ignored at most
     once per visited path. The final ignored state threads out of
     _reconcile_path; a second read purely to decide pruning is the bug."""

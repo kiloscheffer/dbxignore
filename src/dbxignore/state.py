@@ -15,6 +15,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +109,7 @@ def is_daemon_alive(pid: int | None) -> bool:
     if pid is None:
         return False
     try:
-        import psutil
+        import psutil  # type: ignore[import-untyped, unused-ignore]
     except ImportError:
         try:
             os.kill(pid, 0)
@@ -168,7 +169,7 @@ def _read_at(path: Path) -> State | None:
         return None
 
 
-def _encode(state: State) -> dict:
+def _encode(state: State) -> dict[str, Any]:
     return {
         "schema": SCHEMA_VERSION,
         "daemon_pid": state.daemon_pid,
@@ -189,7 +190,7 @@ def _encode(state: State) -> dict:
     }
 
 
-def _decode(raw: dict) -> State:
+def _decode(raw: dict[str, Any]) -> State:
     return State(
         daemon_pid=raw.get("daemon_pid"),
         daemon_started=_parse_dt(raw.get("daemon_started")),
@@ -199,7 +200,7 @@ def _decode(raw: dict) -> State:
         last_sweep_cleared=raw.get("last_sweep_cleared", 0),
         last_sweep_errors=raw.get("last_sweep_errors", 0),
         last_error=LastError(
-            time=_parse_dt(raw["last_error"]["time"]),
+            time=datetime.fromisoformat(raw["last_error"]["time"]),
             path=Path(raw["last_error"]["path"]),
             message=raw["last_error"]["message"],
         )

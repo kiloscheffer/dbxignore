@@ -3,16 +3,29 @@
 from __future__ import annotations
 
 import datetime as dt
+from typing import TYPE_CHECKING
 
 from dbxignore import daemon, state
 from dbxignore.rules import RuleCache
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
-def _utc_now():
+    import pytest
+
+    from tests.conftest import FakeMarkers, WriteFile
+
+
+def _utc_now() -> dt.datetime:
     return dt.datetime.now(dt.UTC)
 
 
-def test_sweep_applies_rules_across_multiple_roots(tmp_path, fake_markers, monkeypatch, write_file):
+def test_sweep_applies_rules_across_multiple_roots(
+    tmp_path: Path,
+    fake_markers: FakeMarkers,
+    monkeypatch: pytest.MonkeyPatch,
+    write_file: WriteFile,
+) -> None:
     """Multi-root sweep must reconcile every root independently. Regression
     guard for the phase-split (sequential load, parallel reconcile) — both
     roots' markers must land on exactly the paths their own rule file names."""
@@ -36,7 +49,12 @@ def test_sweep_applies_rules_across_multiple_roots(tmp_path, fake_markers, monke
     assert (root_b / "lib").resolve() not in fake_markers._ignored
 
 
-def test_sweep_writes_aggregated_report_to_state(tmp_path, fake_markers, monkeypatch, write_file):
+def test_sweep_writes_aggregated_report_to_state(
+    tmp_path: Path,
+    fake_markers: FakeMarkers,
+    monkeypatch: pytest.MonkeyPatch,
+    write_file: WriteFile,
+) -> None:
     """Aggregation: marked/cleared counts in the persisted state should
     sum across roots (not drop one root's report on the floor)."""
     root_a = tmp_path / "root_a"
@@ -60,7 +78,9 @@ def test_sweep_writes_aggregated_report_to_state(tmp_path, fake_markers, monkeyp
     assert s.last_sweep_errors == 0
 
 
-def test_sweep_populates_last_error_when_reconcile_fails(tmp_path, monkeypatch, write_file):
+def test_sweep_populates_last_error_when_reconcile_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write_file: WriteFile
+) -> None:
     """Sweep errors must populate state.last_error so `status` can surface them."""
     from dbxignore import reconcile
 
@@ -68,13 +88,13 @@ def test_sweep_populates_last_error_when_reconcile_fails(tmp_path, monkeypatch, 
     (tmp_path / "build").mkdir()
 
     class FailingADS:
-        def is_ignored(self, path):
+        def is_ignored(self, path: Path) -> bool:
             return False
 
-        def set_ignored(self, path):
+        def set_ignored(self, path: Path) -> None:
             raise PermissionError("locked by Dropbox")
 
-        def clear_ignored(self, path):
+        def clear_ignored(self, path: Path) -> None:
             pass
 
     monkeypatch.setattr(reconcile, "markers", FailingADS())
@@ -92,8 +112,11 @@ def test_sweep_populates_last_error_when_reconcile_fails(tmp_path, monkeypatch, 
 
 
 def test_sweep_leaves_last_error_none_on_clean_sweep(
-    tmp_path, fake_markers, monkeypatch, write_file
-):
+    tmp_path: Path,
+    fake_markers: FakeMarkers,
+    monkeypatch: pytest.MonkeyPatch,
+    write_file: WriteFile,
+) -> None:
     """Per-sweep semantics: a clean sweep writes last_error=None."""
     write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
@@ -109,7 +132,12 @@ def test_sweep_leaves_last_error_none_on_clean_sweep(
     assert s.last_error is None
 
 
-def test_sweep_single_root_still_works(tmp_path, fake_markers, monkeypatch, write_file):
+def test_sweep_single_root_still_works(
+    tmp_path: Path,
+    fake_markers: FakeMarkers,
+    monkeypatch: pytest.MonkeyPatch,
+    write_file: WriteFile,
+) -> None:
     """Regression guard: the single-root path (the common case) bypasses the
     ThreadPoolExecutor and stays simple."""
     write_file(tmp_path / ".dropboxignore", "build/\n")

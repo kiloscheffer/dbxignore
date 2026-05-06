@@ -6,11 +6,17 @@ lines as if it were a .dropboxignore at a specified mount directory.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from dbxignore.rules import RuleCache
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
-def test_load_external_match_succeeds(tmp_path):
+    import pytest
+
+
+def test_load_external_match_succeeds(tmp_path: Path) -> None:
     """Rules from a non-.dropboxignore source still drive match() correctly."""
     source = tmp_path / "my.gitignore"
     source.write_text("build/\n", encoding="utf-8")
@@ -23,7 +29,7 @@ def test_load_external_match_succeeds(tmp_path):
     assert cache.match((mount_at / "build").resolve()) is True
 
 
-def test_load_external_rules_apply_under_mount_not_source(tmp_path):
+def test_load_external_rules_apply_under_mount_not_source(tmp_path: Path) -> None:
     """Rules apply to paths under mount_at, not under source.parent —
     pins that load_external mounts the synthesized rules at mount_at
     rather than wherever the source happens to live."""
@@ -47,7 +53,9 @@ def test_load_external_rules_apply_under_mount_not_source(tmp_path):
     assert cache.match(log_in_source_dir.resolve()) is False
 
 
-def test_load_external_unreadable_source_logs_warning_no_raise(tmp_path, caplog):
+def test_load_external_unreadable_source_logs_warning_no_raise(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """Missing/unreadable source surfaces as a logged warning per
     _load_file's existing contract — load_external itself does not raise."""
     source = tmp_path / "does-not-exist"  # never created

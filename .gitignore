@@ -11,5 +11,6 @@ __pycache__/
 build/
 CLAUDE.local.md
 dist/
+mypy.ini
 src/dbxignore/_version.py
 venv/

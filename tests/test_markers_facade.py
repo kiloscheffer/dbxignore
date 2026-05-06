@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import pytest
 
 
-def test_markers_exports_three_callables():
+def test_markers_exports_three_callables() -> None:
     from dbxignore import markers
 
     assert callable(markers.is_ignored)
@@ -15,7 +16,7 @@ def test_markers_exports_three_callables():
     assert callable(markers.clear_ignored)
 
 
-def test_markers_unsupported_platform_raises(monkeypatch):
+def test_markers_unsupported_platform_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     # Force a re-import under a fake platform by removing the cached module
     # and patching sys.platform before the import runs.
     monkeypatch.setattr(sys, "platform", "sunos5")
@@ -31,4 +32,4 @@ def test_markers_unsupported_platform_raises(monkeypatch):
     from dbxignore import markers
 
     with pytest.raises(NotImplementedError, match="sunos5"):
-        markers.is_ignored("/whatever")
+        markers.is_ignored(Path("/whatever"))

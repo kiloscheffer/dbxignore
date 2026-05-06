@@ -5,15 +5,21 @@ safety net — rglob finds new files — but already-cached files stay put."""
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING
 
 from dbxignore.rules import RuleCache
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
-def _cached(cache: RuleCache, ignore_file_path):
+    from tests.conftest import WriteFile
+
+
+def _cached(cache: RuleCache, ignore_file_path: Path) -> object:
     return cache._rules[ignore_file_path.resolve()]
 
 
-def test_load_root_skips_unchanged_file(tmp_path, write_file):
+def test_load_root_skips_unchanged_file(tmp_path: Path, write_file: WriteFile) -> None:
     ignore = write_file(tmp_path / ".dropboxignore", "build/\n")
 
     cache = RuleCache()
@@ -27,7 +33,7 @@ def test_load_root_skips_unchanged_file(tmp_path, write_file):
     assert first is second
 
 
-def test_load_root_reloads_when_size_changes(tmp_path, write_file):
+def test_load_root_reloads_when_size_changes(tmp_path: Path, write_file: WriteFile) -> None:
     ignore = write_file(tmp_path / ".dropboxignore", "build/\n")
 
     cache = RuleCache()
@@ -45,7 +51,9 @@ def test_load_root_reloads_when_size_changes(tmp_path, write_file):
     assert cache.match(tmp_path / "dist") is True
 
 
-def test_load_root_reloads_when_mtime_changes_but_size_matches(tmp_path, write_file):
+def test_load_root_reloads_when_mtime_changes_but_size_matches(
+    tmp_path: Path, write_file: WriteFile
+) -> None:
     """Same byte count, different content — size check alone wouldn't
     catch this. mtime_ns must be part of the stat tuple."""
     ignore = write_file(tmp_path / ".dropboxignore", "build/\n")  # 7 bytes
@@ -70,7 +78,7 @@ def test_load_root_reloads_when_mtime_changes_but_size_matches(tmp_path, write_f
     assert cache.match(tmp_path / "build") is False
 
 
-def test_load_root_prunes_entries_for_deleted_files(tmp_path, write_file):
+def test_load_root_prunes_entries_for_deleted_files(tmp_path: Path, write_file: WriteFile) -> None:
     """If a .dropboxignore is deleted while the daemon is down (or the
     watchdog missed the delete), the next sweep's rglob won't find it.
     load_root must drop the stale cache entry so its rules don't keep
@@ -86,7 +94,7 @@ def test_load_root_prunes_entries_for_deleted_files(tmp_path, write_file):
     assert ignore.resolve() not in cache._rules
 
 
-def test_load_root_prune_leaves_other_roots_intact(tmp_path, write_file):
+def test_load_root_prune_leaves_other_roots_intact(tmp_path: Path, write_file: WriteFile) -> None:
     """Pruning under one root must not touch cached entries under others."""
     root_a = tmp_path / "a"
     root_b = tmp_path / "b"
@@ -104,7 +112,7 @@ def test_load_root_prune_leaves_other_roots_intact(tmp_path, write_file):
     assert ignore_b.resolve() in cache._rules
 
 
-def test_load_root_picks_up_newly_created_file(tmp_path, write_file):
+def test_load_root_picks_up_newly_created_file(tmp_path: Path, write_file: WriteFile) -> None:
     """Regression guard: the stat-check optimization must not break the
     rglob sweep's job of discovering files the cache doesn't know about."""
     write_file(tmp_path / ".dropboxignore", "build/\n")

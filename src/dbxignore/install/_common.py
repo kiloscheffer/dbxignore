@@ -56,9 +56,9 @@ def detect_invocation() -> tuple[Path, str]:
         if sibling.exists():
             return sibling, ""
         return exe, "daemon"
-    exe = shutil.which("dbxignored")
-    if exe:
-        return Path(exe), ""
+    exe_str = shutil.which("dbxignored")
+    if exe_str:
+        return Path(exe_str), ""
     python = shutil.which("python3") or sys.executable
     if not python:
         raise RuntimeError(

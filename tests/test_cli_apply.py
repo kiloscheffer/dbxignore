@@ -1,9 +1,15 @@
+from pathlib import Path
+
+import pytest
 from click.testing import CliRunner
 
 from dbxignore import cli
+from tests.conftest import FakeMarkers
 
 
-def test_apply_marks_matching_paths(tmp_path, fake_markers, monkeypatch):
+def test_apply_marks_matching_paths(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
     (tmp_path / "build").mkdir()
     (tmp_path / "src").mkdir()
@@ -20,7 +26,9 @@ def test_apply_marks_matching_paths(tmp_path, fake_markers, monkeypatch):
     assert "marked=1" in result.output or "1 marked" in result.output
 
 
-def test_apply_with_path_argument_scopes_reconcile(tmp_path, fake_markers, monkeypatch):
+def test_apply_with_path_argument_scopes_reconcile(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
     (tmp_path / "a").mkdir()
     (tmp_path / "a" / "build").mkdir()
@@ -37,7 +45,9 @@ def test_apply_with_path_argument_scopes_reconcile(tmp_path, fake_markers, monke
     assert (tmp_path / "b" / "build").resolve() not in fake_markers._ignored
 
 
-def test_apply_from_gitignore_mounts_at_dirname(tmp_path, fake_markers, monkeypatch):
+def test_apply_from_gitignore_mounts_at_dirname(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     sub = tmp_path / "sub"
     sub.mkdir()
     other = tmp_path / "other"
@@ -58,7 +68,9 @@ def test_apply_from_gitignore_mounts_at_dirname(tmp_path, fake_markers, monkeypa
     assert (other / "build").resolve() not in fake_markers._ignored
 
 
-def test_apply_from_gitignore_ignores_existing_dropboxignore(tmp_path, fake_markers, monkeypatch):
+def test_apply_from_gitignore_ignores_existing_dropboxignore(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     (tmp_path / ".dropboxignore").write_text("other/\n", encoding="utf-8")
     (tmp_path / "other").mkdir()
     (tmp_path / "build").mkdir()
@@ -77,7 +89,9 @@ def test_apply_from_gitignore_ignores_existing_dropboxignore(tmp_path, fake_mark
     assert (tmp_path / "other").resolve() not in fake_markers._ignored
 
 
-def test_apply_from_gitignore_out_of_root_errors(tmp_path, monkeypatch):
+def test_apply_from_gitignore_out_of_root_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
     gitignore = outside / ".gitignore"
@@ -94,7 +108,9 @@ def test_apply_from_gitignore_out_of_root_errors(tmp_path, monkeypatch):
     assert "not under any Dropbox root" in result.output
 
 
-def test_apply_from_gitignore_mutex_with_positional_path(tmp_path, monkeypatch):
+def test_apply_from_gitignore_mutex_with_positional_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
     gitignore = tmp_path / ".gitignore"
     gitignore.write_text("\n", encoding="utf-8")
@@ -109,7 +125,9 @@ def test_apply_from_gitignore_mutex_with_positional_path(tmp_path, monkeypatch):
     assert "mutually exclusive" in result.output
 
 
-def test_apply_from_gitignore_directory_arg_errors(tmp_path, monkeypatch):
+def test_apply_from_gitignore_directory_arg_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
 
     runner = CliRunner()
@@ -122,7 +140,9 @@ def test_apply_from_gitignore_directory_arg_errors(tmp_path, monkeypatch):
 # ---- apply --dry-run (followup item 64) -------------------------------------
 
 
-def test_apply_dry_run_does_not_mutate_markers(tmp_path, fake_markers, monkeypatch):
+def test_apply_dry_run_does_not_mutate_markers(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """--dry-run reads rules and stat results but never calls set/clear_ignored."""
     (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
     (tmp_path / "build").mkdir()
@@ -138,7 +158,9 @@ def test_apply_dry_run_does_not_mutate_markers(tmp_path, fake_markers, monkeypat
     assert (tmp_path / "src").resolve() not in fake_markers._ignored
 
 
-def test_apply_dry_run_prints_would_mark_lines(tmp_path, fake_markers, monkeypatch):
+def test_apply_dry_run_prints_would_mark_lines(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """--dry-run output lists every path that would have been marked."""
     (tmp_path / ".dropboxignore").write_text("build/\n*.tmp\n", encoding="utf-8")
     (tmp_path / "build").mkdir()
@@ -154,7 +176,9 @@ def test_apply_dry_run_prints_would_mark_lines(tmp_path, fake_markers, monkeypat
     assert "scratch.tmp" in result.output
 
 
-def test_apply_dry_run_prints_would_clear_lines(tmp_path, fake_markers, monkeypatch):
+def test_apply_dry_run_prints_would_clear_lines(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """When a path is marked but no longer matches any rule, --dry-run reports
     it as a would-clear (mirroring the real apply behavior)."""
     # Pre-mark a path that the rules will say should NOT be ignored.
@@ -174,7 +198,9 @@ def test_apply_dry_run_prints_would_clear_lines(tmp_path, fake_markers, monkeypa
     assert src_dir.resolve() in fake_markers._ignored
 
 
-def test_apply_dry_run_summary_uses_would_prefix(tmp_path, fake_markers, monkeypatch):
+def test_apply_dry_run_summary_uses_would_prefix(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Summary line distinguishes dry-run from a real apply (would_mark vs marked)."""
     (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
     (tmp_path / "build").mkdir()
@@ -192,7 +218,9 @@ def test_apply_dry_run_summary_uses_would_prefix(tmp_path, fake_markers, monkeyp
     assert "apply: marked=" not in result.output
 
 
-def test_apply_dry_run_with_from_gitignore_does_not_mutate(tmp_path, fake_markers, monkeypatch):
+def test_apply_dry_run_with_from_gitignore_does_not_mutate(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """--from-gitignore + --dry-run combine: same one-shot rule-load path,
     same no-mutation guarantee."""
     monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
@@ -209,7 +237,9 @@ def test_apply_dry_run_with_from_gitignore_does_not_mutate(tmp_path, fake_marker
     assert (tmp_path / "build").resolve() not in fake_markers._ignored
 
 
-def test_apply_dry_run_real_apply_still_works_after(tmp_path, fake_markers, monkeypatch):
+def test_apply_dry_run_real_apply_still_works_after(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A dry-run preview followed by a real apply mutates as expected — the
     dry-run path doesn't leave any stateful residue that would skew the real
     run's behavior."""
@@ -230,7 +260,9 @@ def test_apply_dry_run_real_apply_still_works_after(tmp_path, fake_markers, monk
 # ---- apply confirmation prompt + --yes (companion to clear's safety) --------
 
 
-def test_apply_confirmation_prompt_aborts_on_no(tmp_path, fake_markers, monkeypatch):
+def test_apply_confirmation_prompt_aborts_on_no(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Without --yes, the prompt fires; saying 'n' aborts without marking."""
     (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
     (tmp_path / "build").mkdir()
@@ -245,7 +277,9 @@ def test_apply_confirmation_prompt_aborts_on_no(tmp_path, fake_markers, monkeypa
     assert (tmp_path / "build").resolve() not in fake_markers._ignored
 
 
-def test_apply_confirmation_prompt_proceeds_on_yes(tmp_path, fake_markers, monkeypatch):
+def test_apply_confirmation_prompt_proceeds_on_yes(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Without --yes, saying 'y' to the prompt marks the matching paths."""
     (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
     (tmp_path / "build").mkdir()
@@ -259,7 +293,9 @@ def test_apply_confirmation_prompt_proceeds_on_yes(tmp_path, fake_markers, monke
     assert (tmp_path / "build").resolve() in fake_markers._ignored
 
 
-def test_apply_yes_skips_confirmation_prompt(tmp_path, fake_markers, monkeypatch):
+def test_apply_yes_skips_confirmation_prompt(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """--yes runs without prompting (no input needed); markers get set; the
     confirmation copy doesn't appear."""
     (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
@@ -275,7 +311,9 @@ def test_apply_yes_skips_confirmation_prompt(tmp_path, fake_markers, monkeypatch
     assert "Continue?" not in result.output
 
 
-def test_apply_no_changes_skips_prompt(tmp_path, fake_markers, monkeypatch):
+def test_apply_no_changes_skips_prompt(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """When the dry-run pre-walk finds nothing to mark or clear, exit cleanly
     without prompting. Caller provides no input — if a prompt fires, the
     runner aborts and the test fails on a non-zero exit code."""
@@ -292,7 +330,9 @@ def test_apply_no_changes_skips_prompt(tmp_path, fake_markers, monkeypatch):
     assert "Nothing to apply" in result.output
 
 
-def test_apply_clear_only_direction_also_prompts(tmp_path, fake_markers, monkeypatch):
+def test_apply_clear_only_direction_also_prompts(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A previously-marked path no longer matched by rules: apply clears it,
     so the prompt must still fire — clearing causes Dropbox to upload the
     local copy back to cloud, which is the symmetric footgun."""
@@ -311,7 +351,9 @@ def test_apply_clear_only_direction_also_prompts(tmp_path, fake_markers, monkeyp
     assert src_dir.resolve() in fake_markers._ignored
 
 
-def test_apply_from_gitignore_yes_skips_prompt(tmp_path, fake_markers, monkeypatch):
+def test_apply_from_gitignore_yes_skips_prompt(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """--yes works on the --from-gitignore path too."""
     (tmp_path / "build").mkdir()
     gitignore = tmp_path / ".gitignore"
@@ -326,7 +368,9 @@ def test_apply_from_gitignore_yes_skips_prompt(tmp_path, fake_markers, monkeypat
     assert (tmp_path / "build").resolve() in fake_markers._ignored
 
 
-def test_apply_from_gitignore_prompt_aborts_on_no(tmp_path, fake_markers, monkeypatch):
+def test_apply_from_gitignore_prompt_aborts_on_no(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The prompt also fires on the --from-gitignore path; 'n' aborts."""
     (tmp_path / "build").mkdir()
     gitignore = tmp_path / ".gitignore"
@@ -341,7 +385,9 @@ def test_apply_from_gitignore_prompt_aborts_on_no(tmp_path, fake_markers, monkey
     assert (tmp_path / "build").resolve() not in fake_markers._ignored
 
 
-def test_apply_prompt_mentions_cloud_delete_for_mark_only(tmp_path, fake_markers, monkeypatch):
+def test_apply_prompt_mentions_cloud_delete_for_mark_only(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Prompt copy must explicitly call out the cloud-delete consequence for the
     mark-only direction — that's the footgun the prompt exists to surface."""
     (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")

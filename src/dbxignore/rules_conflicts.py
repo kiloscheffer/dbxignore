@@ -17,9 +17,36 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from pathlib import Path
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+class _PatternLike(Protocol):
+    """Subset of the pathspec pattern surface that the detector inspects."""
+
+    include: bool | None
+
+    def match_file(self, path: str) -> bool | None: ...
+
+
+class _SequenceEntryLike(Protocol):
+    """Structural type for the entries `_detect_conflicts` consumes.
+
+    `RuleCache._build_sequence` produces `_SequenceEntry` instances; the
+    detector only reads the five fields below, so a Protocol keeps the
+    contract explicit without coupling this module to the dataclass.
+    """
+
+    source: Path
+    line: int
+    raw: str
+    ancestor_dir: Path
+    pattern: _PatternLike
 
 
 def literal_prefix(pattern: str) -> str | None:
@@ -146,7 +173,9 @@ def _ancestors_of(
     return results
 
 
-def _find_masking_include(earlier_entries: list, ancestors: list[Path]) -> object | None:
+def _find_masking_include(
+    earlier_entries: Sequence[_SequenceEntryLike], ancestors: list[Path]
+) -> _SequenceEntryLike | None:
     """Return an earlier include that effectively marks any ancestor.
 
     For each ancestor, find the *last* earlier rule (include or negation)
@@ -182,7 +211,7 @@ def _find_masking_include(earlier_entries: list, ancestors: list[Path]) -> objec
     return None
 
 
-def _detect_conflicts(sequence: list, *, root: Path) -> list[Conflict]:
+def _detect_conflicts(sequence: Sequence[_SequenceEntryLike], *, root: Path) -> list[Conflict]:
     """Static rule-conflict detection.
 
     Input ``sequence`` is a list of entries in evaluation order. Each entry

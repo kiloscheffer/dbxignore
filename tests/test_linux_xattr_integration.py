@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def _xattr_supported(path) -> bool:
+def _xattr_supported(path: Path) -> bool:
     """Probe whether the filesystem under `path` accepts user.* xattrs."""
     probe = path / ".xattr_probe"
     probe.touch()

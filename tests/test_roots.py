@@ -10,16 +10,20 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 def _stage_info(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fixture_name: str | None) -> None:
     """Stage a fake Dropbox info.json at the platform's documented location."""
+    # Skip on unsupported platforms first so mypy's flow narrowing sees the
+    # win32/linux variables as always bound below (pytest.skip is NoReturn,
+    # but mypy's strict mode under host=darwin doesn't always pick that up
+    # when it's the tail of an if/elif/else).
+    if sys.platform != "win32" and not sys.platform.startswith("linux"):
+        pytest.skip(f"unsupported platform {sys.platform}")
     if sys.platform == "win32":
         base = tmp_path / "AppData"
         dropbox_dir = base / "Dropbox"
         env_var = "APPDATA"
-    elif sys.platform.startswith("linux"):
+    else:
         base = tmp_path / "home"
         dropbox_dir = base / ".dropbox"
         env_var = "HOME"
-    else:
-        pytest.skip(f"unsupported platform {sys.platform}")
 
     dropbox_dir.mkdir(parents=True)
     if fixture_name is not None:

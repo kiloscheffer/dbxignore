@@ -664,6 +664,8 @@ Per the project's flake-handling convention (item #14's note: "fix only after re
 
 **Urgency:** low. Single CI flake doesn't block any release. But if it recurs a third time, the fix needs to happen in the same cycle as the recurrence — accumulating "rerun the failed leg" actions is a hidden ops cost that compounds across maintainers. Track the next recurrence and use it as the trigger.
 
+**Fourth observation 2026-05-07** in PR #124's Windows-only integration leg. Same shape: `_poll_until(lambda: markers.is_ignored(tmp_path / "build" / "keep"), timeout_s=5.0)` returned False before the daemon reacted. PR #124's commits (`fix(rules):` cache-key drop + symlink-loop catch, `fix(cli):` apply path-exists, `fix(daemon):` env-var validation only — not dispatch, `fix(roots):` DBXIGNORE_ROOT type guards) don't touch the daemon dispatch / Windows ADS / conflict detection paths, so the recurrence is purely Windows-runner load. macOS and Ubuntu legs both passed. Reran via `gh run rerun --failed`. The pattern (~weekly recurrence under load on the same negation-semantics assertion) reinforces the 2026-05-04 diagnosis hypothesis: test-order interaction with an earlier test pushes the full-suite Windows leg into a state where this test runs slower than its 5.0s budget.
+
 Touches: `tests/test_daemon_smoke.py` (the failing test); maybe `src/dbxignore/daemon.py` if the diagnosis surfaces a real bug.
 
 ## 35. macOS launchd plist + Windows Task Scheduler XML invoke wrong binary on frozen installs
@@ -1638,13 +1640,107 @@ Candidate 1 is the most direct fit for the failure mode: the bug surfaces becaus
 
 Touches: `src/dbxignore/debounce.py` (`Debouncer._pending` type, `submit` signature, `_run` emit signature); `src/dbxignore/daemon.py` (`_classify` return shape, possibly `_WatchdogHandler.on_any_event` if it inspects the key — currently it doesn't); `tests/test_daemon_dispatch.py` (the four key-equality tests would switch from string comparisons to tuple comparisons).
 
+## 78. Daemon singleton check is not atomic between read and first state write
+
+**Surfaced 2026-05-06 in an external code review.**
+
+`daemon.run()` reads `state.json` (line ~260), checks `_is_other_live_daemon(prior.daemon_pid)`, and only writes its own state after the first sweep finishes. Two concurrent daemon launches in that window can both pass the check and start watchers + sweeps. Service managers (Task Scheduler, systemd user unit, launchd LaunchAgent) prevent double-start in the typical install, so the at-risk path is manual `dbxignored` invocation while the installed daemon is also running — uncommon but possible during dev or migration.
+
+**Fix candidates:**
+
+- **OS lock file via `fcntl.flock` / `msvcrt.locking`.** Acquire a non-blocking exclusive lock on a path under `state.user_state_dir()` immediately after `_configured_logging()` enters and before root discovery. Hold for the daemon's lifetime; release on `stop_event`. Real bug-class fix — atomic across processes.
+- **Atomic exclusive-create on the lock path.** `open(lockfile, "x")` fails if it exists. Cheaper than fcntl but doesn't release on crashed-daemon SIGKILL — would need an mtime + PID-liveness check on stale locks (effectively re-introducing the race).
+- **Status quo.** Document the limitation and rely on service managers.
+
+Candidate 1 is the right shape. The lock file path can live next to `state.json`. Test: spawn two `run()` instances against the same state dir, assert one returns early, the other holds the lock.
+
+**Urgency:** medium. Real but mitigated by service managers in the typical install. Worth doing the next time daemon singleton-check code is touched.
+
+Touches: `src/dbxignore/daemon.py` (`run()` startup), `src/dbxignore/state.py` (lock-path helper alongside `default_path()`), `tests/test_daemon_singleton.py` (race assertion).
+
+## 79. PID stale-detection treats any Python process as a dbxignore daemon
+
+**Surfaced 2026-05-06 in an external code review.**
+
+`state.is_daemon_alive(pid)` matches process names containing `"python"` or `"dbxignored"`. If the recorded PID gets recycled by an unrelated Python process (another user-space tool, a shell-side `python -c`), the check returns True — daemon startup refuses with "another daemon is running", and `dbxignore clear` refuses with the same guard. The user sees a phantom-daemon scenario.
+
+The current `python` substring guard is documented in `CLAUDE.md`'s `state.is_daemon_alive` section as a deliberate trade: better to be cautious than to allow a recycled PID claimed by an unrelated process to register as alive in the OPPOSITE direction (the original v0.1 bug). The reviewer's "ideally persist process create time in state" is the proper fix.
+
+**Fix candidates:**
+
+- **Persist `daemon_started_pid_create_time` in state.** Capture `psutil.Process(os.getpid()).create_time()` at daemon startup, store alongside `daemon_pid`. Liveness check: PID exists AND its current `create_time()` matches the stored value. Defeats PID reuse cleanly; one extra `psutil` field on `State`.
+- **Inspect `proc.cmdline()` / `proc.exe()` for `dbxignore daemon` / `python -m dbxignore daemon` / `dbxignored`.** Tighter than substring on `name`, but still approximate — a user running `python -m dbxignore daemon` from a venv would match. Doesn't solve PID reuse for OUR own command form.
+- **Both.** Persist create-time as the authoritative match; keep the cmdline inspection as a fallback if create-time is unavailable.
+
+Candidate 1 is the bug-class fix.
+
+**Urgency:** low. Practical impact: rare. The current cautious-bias means the false positive blocks a daemon-or-clear operation rather than corrupting state.
+
+Touches: `src/dbxignore/state.py` (`State` dataclass, `_encode`/`_decode`, `is_daemon_alive`), `src/dbxignore/daemon.py` (capture create-time on `run()` startup), `tests/test_state.py` + `tests/test_daemon_singleton.py` (recycled-PID-with-different-create-time returns False).
+
+## 80. `_build_entries` drops indented `#` patterns despite pathspec accepting them
+
+**Surfaced 2026-05-06 in an external code review.**
+
+`rules._build_entries` filters out lines via `s := raw.strip(); not s.startswith("#")` — which classifies `"   #foo"` (whitespace before `#`) as a comment and drops it. But pathspec's gitignore semantics treat such lines as active patterns. The CLAUDE.md gotcha bullet for this case claims "the count-mismatch fallback handles it" — but the fallback at the bottom of `_build_entries` re-iterates `active_line_indices`, which already excludes the indented-`#` line, so the pattern is silently dropped in the fallback path too.
+
+User-facing impact: a `.dropboxignore` line like `   #literal_filename` is silently inert — pathspec parsed it as a literal pattern, but the cache filter dropped it. Rare in practice since most users don't write indented `#` lines deliberately, but possible if a YAML/JSON-style indented rule list gets pasted.
+
+**Fix candidates:**
+
+- **Mirror gitignore comment semantics exactly.** A line is a comment iff it begins with `#` (no leading whitespace). Adjust the filter to `not raw.startswith("#")` (or after just-leading-whitespace trim, depending on what gitignore actually does — verify with pathspec's source). The count-mismatch fallback's premise (use active_line_indices) needs the same correction.
+- **Drop the count-mismatch heuristic entirely** and always use per-line reparse. Simpler but slower for the common case where the bulk parse and per-line parse agree.
+
+Candidate 1 is the lower-impact fix.
+
+**Urgency:** low. Edge case in practice; the misleading CLAUDE.md note is the more harmful artifact (it convinced a recent reviewer to skip checking this case). Worth fixing when the rules layer is next touched, alongside a CLAUDE.md correction.
+
+Touches: `src/dbxignore/rules.py` (`_build_entries`), `tests/test_rules_basic.py` or new file (fixture: `.dropboxignore` with a `   #foo` line that should match a literal `   #foo` path), `CLAUDE.md` (Gotcha bullet correction).
+
+## 81. Write-side marker OSError narrow arm too brittle for transient EIO
+
+**Surfaced 2026-05-06 in an external code review.**
+
+`reconcile._reconcile_path` catches a broad `OSError` on the read side (item #21 — covers `ENOTSUP`/`EOPNOTSUPP` from xattr backends and unexpected I/O like `EIO` on flaky network drives) but keeps a narrow `errno.ENOTSUP|EOPNOTSUPP` arm on the write side. This is documented as an asymmetric-by-design choice in CLAUDE.md's Architecture section: write failures are exceptional and should bubble up.
+
+The reviewer's argument: on real-world filesystems (network drives, USB sticks, full disks, corrupted xattr storage), a transient `EIO` or quota error on `set_ignored` will kill the entire dispatch or sweep — not just the one path. A persistent network blip means the daemon keeps crashing until the network settles. The read-side already counts these into `Report.errors` and continues; the write-side could do the same.
+
+**Fix candidates:**
+
+- **Symmetric error-arm widening.** Catch broad `OSError` on the write side, log + count into `Report.errors`, return `currently_ignored` (the existing pattern from item #41). The write arm would still propagate non-OSError exceptions (real bugs).
+- **Status quo + better error messaging.** Keep the narrow arm but improve the user-facing log when an unexpected write OSError reaches the daemon's top-level handler — currently surfaces as a stack trace in `daemon.log`.
+
+Candidate 1 changes the documented asymmetric-by-design invariant in CLAUDE.md, so it's a real architectural decision rather than a mechanical fix. Worth a brief discussion of which class of error is more harmful: a sweep that silently swallows a real backend bug (the current concern motivating the narrow arm), vs. a daemon that dies on transient FS unreliability (the reviewer's concern).
+
+**Urgency:** medium. No user reports yet, but the failure mode (full network-drive Dropbox sweep killed by a single transient EIO) is real and would be hard to debug without log spelunking.
+
+Touches: `src/dbxignore/reconcile.py` (`_reconcile_path` write arm), `CLAUDE.md` (Architecture section asymmetric-error-arms paragraph), `tests/test_reconcile_enotsup.py` (parameterize over a wider error set; assert continued sweep + Report.errors entry).
+
+## 82. systemd unit ExecStart does not escape executable path with whitespace
+
+**Surfaced 2026-05-06 in an external code review.**
+
+`install/linux_systemd.py` writes `ExecStart={exe_path.as_posix()} {arguments}` with raw f-string interpolation. systemd parses ExecStart by splitting on whitespace; an executable path containing a space (e.g. `/home/user/My Tools/dbxignored`) would be split into multiple tokens, breaking the unit. Same issue for special characters that systemd treats as escapes (`\`, `"`, `'`, `$`).
+
+systemd's official escape rule: enclose paths with whitespace in double quotes, escape internal `"` and `\` with backslashes. Companion to the existing BACKLOG #44 (Windows Task XML escaping) and the `windows_task.py` getuser interpolation surfaced in the same review.
+
+**Fix candidates:**
+
+- **Quote + escape.** `ExecStart="{exe_path.as_posix().replace('\\', '\\\\').replace('"', '\\"')}" {arguments}`. Ugly but correct.
+- **Validate at install time.** If the exe_path contains characters systemd can't represent in a single-token ExecStart, raise `RuntimeError` with an actionable message ("relocate dbxignored or run from a path without spaces").
+- **Both.** Quote in the common case; refuse on the rare unrepresentable case.
+
+**Urgency:** low. CI runners and standard distro installs land dbxignored in PATH-friendly directories. A user installing into `~/My Tools/` is unusual.
+
+Touches: `src/dbxignore/install/linux_systemd.py` (ExecStart construction), `tests/test_linux_systemd.py` (path with whitespace produces a unit file systemd would parse correctly — round-trip via the systemd parser if we add a test dep, otherwise structural assertion on the rendered unit text).
+
 ---
 
 ## Status
 
 ### Open
 
-Thirty items. Twenty-seven are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18); item #73 had multiple fired triggers in one session (the local PR-review hook over-fired on Bash commands that didn't match its declared `if` filter — friction not blocking). Item #34's third recurrence fired 2026-05-04 during PR #95 pre-flight; widening 5.0s → 7.0s → 10.0s all failed under full-suite load (different polls exhausted on each run), so the suggested band-aid fix shape was abandoned and #34 stays open pending root-cause diagnosis (the test passes in 0.27s in isolation but >7s in the full suite, so the cause lives in test-order interaction with an earlier test).
+Thirty-five items. Thirty-two are passive (no concrete trigger requires action); item #52 has one fired trigger (a 2026-05-03 VPS tester hit the opaque ENOSPC traceback on a default-limit kernel) but isn't blocking; item #34 is a recurrence of an already-resolved flake (item #18); item #73 had multiple fired triggers in one session (the local PR-review hook over-fired on Bash commands that didn't match its declared `if` filter — friction not blocking). Item #34's third recurrence fired 2026-05-04 during PR #95 pre-flight; widening 5.0s → 7.0s → 10.0s all failed under full-suite load (different polls exhausted on each run), so the suggested band-aid fix shape was abandoned and #34 stays open pending root-cause diagnosis (the test passes in 0.27s in isolation but >7s in the full suite, so the cause lives in test-order interaction with an earlier test).
 
 - **#14** — Flaky `test_run_refuses_when_another_pid_is_alive`. Single observation 2026-04-24 during PR #22 pre-flight (passed on rerun and in isolation). Awaits 2nd observation; per project flake-handling policy, fix only after recurrence.
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
@@ -1652,12 +1748,12 @@ Thirty items. Twenty-seven are passive (no concrete trigger requires action); it
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
 - **#29** — Codesigning + notarization for macOS binaries. Smooths Gatekeeper UX but requires $99/yr Apple Developer membership. Awaits concrete pain signal.
 - **#30** — Windows-aware single binary via `AttachConsole(ATTACH_PARENT_PROCESS)`. Collapses `dbxignore.exe` + `dbxignored.exe` to one. Three-context UX tradeoff (terminal / Task Scheduler / double-click) is load-bearing today; ctypes path is the implementation route. Awaits binary-size or build-time pain signal.
-- **#34** — `test_daemon_reacts_to_dropboxignore_and_directory_creation` flaked again 2026-05-01 in PR #74's post-rebase Windows leg, post-PR #40 timeout fix (item #18). Reran the failed leg, second run passed in 27s. Per project policy, single post-resolution recurrence is logged but not actioned; third recurrence triggers either further timeout widening or actual root-cause diagnosis.
+- **#34** — `test_daemon_reacts_to_dropboxignore_and_directory_creation` flaked again 2026-05-01 in PR #74's post-rebase Windows leg, post-PR #40 timeout fix (item #18). Reran the failed leg, second run passed in 27s. Per project policy, single post-resolution recurrence is logged but not actioned; third recurrence triggers either further timeout widening or actual root-cause diagnosis. Fourth observation 2026-05-07 in PR #124 — full body of #34 updated with the recurrence-vs-PR-changes diagnosis (PR #124 doesn't touch the daemon dispatch path).
 - **#38** — info.json parsing duplicated between `roots.py` and `_backends/macos_xattr.py`. Both modules read `~/.dropbox/info.json` and extract per-account `path` fields with subtly different shapes. Real refactor candidate (~30 lines deduplicated) but the semantic differences (DBXIGNORE_ROOT override, account-type strictness) are intentional. Bundle with the next info.json-touching change.
 - **#39** — `_pluginkit_extension_state()` returns stringly-typed state (`"allowed"`/`"disabled"`/`"not_registered"`/`"unknown"`). Cheap fix is a `Literal[...]` return annotation so type-checkers catch caller-side typos. Single callsite limits blast radius; bundle with a future macos-backend-touching change.
 - **#40** — Dual `paths` for-loops in `_detected_attr_name()` could share a `_first_match` helper. Reviewers disagreed: one proposed extraction, another argued the dual structure correctly documents priority semantics. Filed for the design-tension record; current shape is defensible. Awaits a third predicate (rule-of-three trigger).
 - **#42** — `_timeouts_from_env` crashes the daemon if a debounce env var is non-integer (no try/except, no fallback). In-module precedent (`DBXIGNORE_LOG_LEVEL` validation) makes the inconsistency stand out. User-error-triggered; bundle with next daemon-logging touch.
-- **#44** — `build_task_xml` interpolates `getpass.getuser()` and `exe_path` into XML without `xml.sax.saxutils.escape`. Hits users with `&` in install path; manifests as confusing `schtasks` error. Bundle with next install-layer touch.
+- **#44** — `build_task_xml` interpolates `getpass.getuser()` and `exe_path` into XML without `xml.sax.saxutils.escape`. Hits users with `&` in install path; manifests as confusing `schtasks` error. Bundle with next install-layer touch. Re-surfaced 2026-05-06 in an external code review (companion item #82 added for the systemd ExecStart sibling issue).
 - **#50** — `windows_task.detect_invocation` partially overlaps `_common.detect_invocation` but diverges in the non-frozen branch (Windows uses `pythonw.exe` for windowless Task Scheduler launch and skips `shutil.which("dbxignored")` PATH lookup). Companion to item #26. Bundle with next install-layer touch.
 - **#51** — `install/__init__.py` platform dispatch duplicated across `install_service`/`uninstall_service`. Filed for the design-tension record (precedent: #40); current 6-block shape is defensible vs a factored-out helper that would introduce stringly-typed action coupling.
 - **#52** — Watchdog `OSError(ENOSPC)` at observer startup surfaces as an opaque journalctl traceback when `fs.inotify.max_user_watches` is exhausted. One fired trigger (2026-05-03 VPS test on a personal Dropbox tree). Cheap fix (~10 LOC trap + clean exit + sysctl-command WARNING) plus README §"Linux daemon prerequisites" addition. Companion to #53/#54.
@@ -1676,6 +1772,11 @@ Thirty items. Twenty-seven are passive (no concrete trigger requires action); it
 - **#75** — `phase_extended_cli()` body byte-identical between `manual-test-{ubuntu-vps,macos}.sh` (~120 LOC duplicated). Could extract to `scripts/_phase_extended_cli.sh` and `source` from both. Trade-off is duplication-vs-platform-conditional balance; only two scripts share (Windows is PowerShell). Surfaced 2026-05-05 in `/simplify` review of PRs #114 + #115.
 - **#76** — Conflict detector skips negations whose pattern starts with a glob (`**/foo/bar/`, `foo*/bar/`); `RuleCache.match()` then reports such paths as not-ignored even though Dropbox inheritance makes them ignored on disk. Marker behavior is correct (reconcile evaluates per-file `match()`); the bug surface is `status` / `explain` diagnostics. Three fix candidates filed in the body (conservative drop / targeted detection / warn-only). Surfaced 2026-05-05 in code review of the daemon classification path.
 - **#77** — Debouncer key disambiguation in `_classify` relies on string prefixing (`moved-into:` added in PR #120) rather than a structured tuple shape. The remaining first-vs-second-shape collision (move-out + created/modified on the same `.dropboxignore` within 100ms) still ships. Three fix candidates: structured tuple key (preferred), per-role queues, status-quo-plus-audit-comment. Surfaced 2026-05-05 in Codex review of PR #120.
+- **#78** — `daemon.run()` reads `state.json` for the singleton check, then writes its own state only after the first sweep — non-atomic between read and first write. Two concurrent launches in that window can both proceed. Service managers mitigate; the at-risk path is manual `dbxignored` invocation. Fix shape: OS lock file via `fcntl.flock` / `msvcrt.locking` held for daemon lifetime. Surfaced 2026-05-06 in an external code review.
+- **#79** — `state.is_daemon_alive` matches `python` / `dbxignored` substrings on process name; a recycled PID claimed by an unrelated Python process registers as alive, blocking daemon-or-clear operations. The cautious-bias is documented in CLAUDE.md as deliberate (preferred over the OPPOSITE direction's recycled-PID-claimed-by-non-Python-process false negative). Proper fix: persist process create-time alongside `daemon_pid` in `state.json`. Surfaced 2026-05-06 in an external code review.
+- **#80** — `rules._build_entries` drops indented-`#` lines (`"   #foo"`) as comments, but pathspec accepts them as active patterns. The CLAUDE.md gotcha bullet claims the count-mismatch fallback handles this — verified misleading: the fallback re-iterates `active_line_indices` which already excludes the indented-`#` line. Rare in practice; user impact is silently inert rules. Fix: align comment-detection with gitignore semantics (only strip leading `\t`, not arbitrary whitespace, before checking for `#`); correct the CLAUDE.md note. Surfaced 2026-05-06 in an external code review.
+- **#81** — `reconcile._reconcile_path`'s write arm catches only `errno.ENOTSUP|EOPNOTSUPP`; broader `OSError` propagates and can kill a daemon dispatch or sweep. The asymmetric arms are documented as deliberate in CLAUDE.md's Architecture section, but a transient `EIO` on a network-drive Dropbox tree would crash the sweep where the read arm logs+continues. Fix candidates: widen the write arm to the same broad `OSError` shape (revising the CLAUDE.md asymmetry rationale), or improve top-level error logging. Surfaced 2026-05-06 in an external code review.
+- **#82** — `install/linux_systemd.py` writes `ExecStart={exe_path.as_posix()} {arguments}` with raw f-string interpolation. An executable path with whitespace breaks the unit (systemd splits on whitespace). Companion to the existing #44 (Windows Task XML escaping). Fix: emit a quoted+escaped ExecStart, or validate-and-refuse unrepresentable paths. Surfaced 2026-05-06 in an external code review.
 
 ### Resolved (reverse chronological)
 

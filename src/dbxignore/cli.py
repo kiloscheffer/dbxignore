@@ -386,6 +386,9 @@ def apply(
         targets: list[tuple[Path, Path]] = [(r, r) for r in discovered]
     else:
         resolved = path.resolve()
+        if not resolved.exists():
+            click.echo(f"Path {path} does not exist.", err=True)
+            sys.exit(2)
         matched_root = find_containing(resolved, discovered)
         if matched_root is None:
             click.echo(f"Path {path} is not under any Dropbox root.", err=True)

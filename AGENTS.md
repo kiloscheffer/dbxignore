@@ -15,7 +15,7 @@
 
 ## Coding Style & Naming Conventions
 
-Follow Ruff settings in `pyproject.toml`: Python 3.11 target, 100-character lines, and lint families `E`, `F`, `I`, `B`, `UP`, and `SIM`. Use 4-space indentation, type annotations for new public helpers, and snake_case for modules, functions, variables, and pytest fixtures. Keep platform-specific logic behind the existing backend and install modules.
+Follow Ruff settings in `pyproject.toml`: Python 3.11 target, 100-character lines, lint families per `[tool.ruff.lint] select` (do not restate them here — pyproject.toml is the source of truth). Use 4-space indentation, type annotations for new public helpers, and snake_case for modules, functions, variables, and pytest fixtures. Keep platform-specific logic behind the existing backend and install modules.
 
 ## Testing Guidelines
 

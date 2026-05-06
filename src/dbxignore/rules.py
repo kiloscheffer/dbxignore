@@ -258,19 +258,26 @@ class RuleCache:
         at an arbitrary directory; pass ``None`` for the discovery code path
         and the source location is the cache key.
         """
+        # Resolve the cache key up front so failure arms can drop the
+        # stale entry. Without that, an already-cached file that later
+        # becomes unreadable or unparseable would keep its prior rules
+        # active in `self._rules` — the daemon's reconcile would continue
+        # marking paths the user already changed their mind about.
+        cache_key = (as_path or ignore_file).resolve()
         try:
             lines = ignore_file.read_text(encoding="utf-8").splitlines()
             if st is None:
                 st = ignore_file.stat()
         except OSError as exc:
             logger.warning("Could not read %s: %s", ignore_file, exc)
+            self._rules.pop(cache_key, None)
             return
         try:
             spec = _build_spec(lines)
         except (ValueError, TypeError, re.error) as exc:
             logger.warning("Invalid .dropboxignore at %s: %s", ignore_file, exc)
+            self._rules.pop(cache_key, None)
             return
-        cache_key = (as_path or ignore_file).resolve()
         self._rules[cache_key] = _LoadedRules(
             lines=lines,
             entries=_build_entries(lines, spec),

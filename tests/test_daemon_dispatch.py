@@ -28,7 +28,7 @@ def test_classify_rules_file_created(tmp_path: Path) -> None:
     ev = _stub_event("created", str(src))
     classification = daemon._classify(ev, roots=[root])
     assert classification is not None
-    kind, key, classified_root, classified_src = classification
+    kind, key, classified_root, classified_src, _ = classification
     assert kind == EventKind.RULES
     assert key == str(src.resolve()).lower()
     assert classified_root == root
@@ -42,7 +42,7 @@ def test_classify_directory_created(tmp_path: Path) -> None:
     ev = _stub_event("created", str(src), is_directory=True)
     classification = daemon._classify(ev, roots=[root])
     assert classification is not None
-    kind, _key, classified_root, classified_src = classification
+    kind, _key, classified_root, classified_src, _ = classification
     assert kind == EventKind.DIR_CREATE
     assert classified_root == root
     assert classified_src == src.resolve()
@@ -288,7 +288,7 @@ def test_classify_moved_dest_is_rule_file_classifies_as_rules(tmp_path: Path) ->
     classification = daemon._classify(ev, roots=[root])
 
     assert classification is not None
-    kind, _key, classified_root, _src = classification
+    kind, _key, classified_root, _src, _ = classification
     assert kind == EventKind.RULES
     assert classified_root == root
 
@@ -312,8 +312,8 @@ def test_classify_moved_into_rules_keys_on_dest_for_debounce_coalesce(tmp_path: 
     classification_b = daemon._classify(save_b, roots=[root])
     assert classification_a is not None
     assert classification_b is not None
-    _, key_a, _, _ = classification_a
-    _, key_b, _, _ = classification_b
+    _, key_a, _, _, _ = classification_a
+    _, key_b, _, _, _ = classification_b
 
     assert key_a == key_b
     assert str(dest).lower() in key_a
@@ -335,7 +335,7 @@ def test_classify_moved_with_empty_src_to_rule_dest_classifies_as_rules(tmp_path
     classification = daemon._classify(ev, roots=[root])
 
     assert classification is not None
-    kind, _key, classified_root, classified_src = classification
+    kind, _key, classified_root, classified_src, _ = classification
     assert kind == EventKind.RULES
     assert classified_root == root
     assert classified_src == dest.resolve()
@@ -362,10 +362,46 @@ def test_classify_moved_with_external_src_to_rule_dest_classifies_as_rules(tmp_p
     classification = daemon._classify(ev, roots=[watched])
 
     assert classification is not None
-    kind, _key, classified_root, classified_src = classification
+    kind, _key, classified_root, classified_src, _ = classification
     assert kind == EventKind.RULES
     assert classified_root == watched
     assert classified_src == dest.resolve()
+
+
+def test_dispatch_moved_rules_to_non_rules_cross_parent_reconciles_dest_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rule -> non-rule across different parents (e.g. user renames
+    `/A/.dropboxignore` to `/B/foo.bak`): src.parent must be reconciled
+    (rule cache lost a file there), AND dest.parent must be reconciled
+    too — the file lands in /B where rules from /B's tree may now apply
+    to it. Without the dest.parent reconcile, the moved file goes
+    unmarked until the next event or hourly sweep."""
+    root = tmp_path.resolve()
+    cache = MagicMock()
+    reconcile_calls: list[tuple[Path, Path]] = []
+    monkeypatch.setattr(
+        daemon, "reconcile_subtree", lambda r, sub, c: reconcile_calls.append((r, sub))
+    )
+
+    src_dir = root / "A"
+    src_dir.mkdir()
+    dest_dir = root / "B"
+    dest_dir.mkdir()
+    src = src_dir / ".dropboxignore"
+    dest = dest_dir / "foo.bak"
+    # Only the destination exists on disk after a move.
+    dest.write_text("", encoding="utf-8")
+
+    ev = _stub_event("moved", str(src), dest_path=str(dest))
+    daemon._dispatch(ev, cache, roots=[root])
+
+    cache.remove_file.assert_called_once_with(src)
+    cache.reload_file.assert_not_called()
+    assert sorted(reconcile_calls, key=lambda rc: str(rc[1])) == sorted(
+        [(root, src.parent), (root, dest.parent)],
+        key=lambda rc: str(rc[1]),
+    )
 
 
 def test_dispatch_moved_with_external_src_reloads_dest(
@@ -397,6 +433,10 @@ def test_dispatch_moved_with_external_src_reloads_dest(
     daemon._dispatch(ev, cache, roots=[watched])
 
     cache.reload_file.assert_called_once_with(dest.resolve())
+    # No phantom remove_file: src was outside any watched root, so there
+    # was never a cached entry to remove. Calling it would fire
+    # `_recompute_conflicts` an extra time on every cross-watch event.
+    cache.remove_file.assert_not_called()
     assert reconcile_calls == [(watched, dest.parent.resolve())]
 
 
@@ -425,8 +465,8 @@ def test_classify_moved_out_and_moved_into_same_path_have_distinct_keys(tmp_path
     classification_in = daemon._classify(move_in, roots=[root])
     assert classification_out is not None
     assert classification_in is not None
-    _, key_out, _, _ = classification_out
-    _, key_in, _, _ = classification_in
+    _, key_out, _, _, _ = classification_out
+    _, key_in, _, _, _ = classification_in
 
     assert key_out != key_in
 

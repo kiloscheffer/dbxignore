@@ -116,7 +116,9 @@ dev = [
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },
+    { name = "pytest-timeout" },
     { name = "ruff" },
+    { name = "xattr", marker = "sys_platform != 'win32'" },
 ]
 
 [package.metadata]
@@ -124,10 +126,10 @@ requires-dist = [
     { name = "click", specifier = ">=8.2" },
     { name = "pathspec", specifier = ">=0.12" },
     { name = "psutil", specifier = ">=5.9" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.3" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.3" },
     { name = "rich-click", specifier = ">=1.8" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.11" },
     { name = "watchdog", specifier = ">=4.0" },
     { name = "xattr", marker = "sys_platform == 'darwin'", specifier = ">=1.0" },
     { name = "xattr", marker = "sys_platform != 'win32' and extra == 'dev'", specifier = ">=1.0" },
@@ -139,7 +141,9 @@ dev = [
     { name = "mypy", specifier = ">=1.20.2" },
     { name = "pre-commit", specifier = ">=4.6.0" },
     { name = "pytest", specifier = ">=9.0.3" },
+    { name = "pytest-timeout", specifier = ">=2.3" },
     { name = "ruff", specifier = ">=0.15.11" },
+    { name = "xattr", marker = "sys_platform != 'win32'", specifier = ">=1.0" },
 ]
 
 [[package]]

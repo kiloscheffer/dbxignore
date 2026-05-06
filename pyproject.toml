@@ -86,5 +86,12 @@ dev = [
     "mypy>=1.20.2",
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
+    "pytest-timeout>=2.3",
     "ruff>=0.15.11",
+    # Mirror the platform-conditional `xattr` pin from
+    # `[project.optional-dependencies] dev` so a fresh `uv sync` (without
+    # `--all-extras`) lands the package on Linux/macOS where the macOS
+    # unit tests import it. Windows skips per the same reason as the
+    # extras block (no MSVC build tooling on the runner).
+    "xattr>=1.0; sys_platform != 'win32'",
 ]

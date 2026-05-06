@@ -170,6 +170,33 @@ def test_load_root_drops_cached_entry_when_file_becomes_invalid(
     )
 
 
+def test_load_file_does_not_crash_on_resolve_failure(
+    tmp_path: Path, write_file: WriteFile, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`Path.resolve()` raises on symlink loops — `OSError(ELOOP)` on POSIX,
+    `RuntimeError` on Windows / older POSIX. The cache-key resolve at the
+    top of `_load_file` must catch both so a `.dropboxignore` that later
+    turns into a symlink loop doesn't crash the sweep before the read /
+    parse error arms can run.
+
+    Symlink loops are awkward to create cross-platform; mock the resolve
+    to raise instead. Same shape under the hood."""
+    write_file(tmp_path / ".dropboxignore", "build/\n")
+    real_resolve = Path.resolve
+
+    def _raising_resolve(self: Path, *args: object, **kwargs: object) -> Path:
+        if self.name == ".dropboxignore":
+            raise RuntimeError("Symlink loop")
+        return real_resolve(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "resolve", _raising_resolve)
+
+    cache = RuleCache()
+    # Must not raise. `load_root` calls `.resolve()` directly too, so we
+    # exercise `_load_file` via `_load_if_changed` from a separate seam.
+    cache._load_file(tmp_path / ".dropboxignore")
+
+
 def test_load_root_drops_cached_entry_when_file_becomes_unreadable(
     tmp_path: Path, write_file: WriteFile, monkeypatch: pytest.MonkeyPatch
 ) -> None:

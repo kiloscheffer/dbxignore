@@ -8,7 +8,7 @@ Cross-platform Python utility: keeps Dropbox ignore markers (NTFS alternate data
 - `uv run pytest` — full suite; Windows adds a few ADS-integration tests via `@pytest.mark.windows_only`. If you hit `error: uv trampoline failed to canonicalize script path` or a silent `ModuleNotFoundError`, use `uv run python -m pytest` instead (see Gotchas).
 - `uv run pytest -m "not windows_only"` — portable subset (what Ubuntu CI runs)
 - `uv run pytest -W error::DeprecationWarning` — local strict mode (not enforced in CI)
-- `uv run ruff check` — lint; rules E, F, I, B, UP, SIM; line length 100
+- `uv run ruff check` — lint; rule families per `pyproject.toml` `[tool.ruff.lint] select` (don't restate the list here — pyproject is the source of truth); line length 100
 - `dbxignore <apply|status|list|explain|daemon|install|uninstall>` — CLI console script (`cli:main`). `install` / `uninstall` register / remove the daemon with the platform's user-scoped service manager (Task Scheduler on Windows, systemd user unit on Linux, launchd LaunchAgent on macOS). `uninstall --purge` also clears every ignore marker.
 - `dbxignored` — daemon entry point (`cli:daemon_main`, a standalone `@click.command` with its own `--verbose`/`--version`), launched by the platform's installed service (Scheduled Task / systemd unit / LaunchAgent)
 - `python -m dbxignore <subcommand>` — equivalent to the console script, via `src/dbxignore/__main__.py`. Useful when the wheel isn't installed (e.g. `uv run python -m dbxignore status`).

@@ -21,9 +21,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8",
+    "pytest>=9.0.3",
     "pytest-timeout>=2.3",
-    "ruff>=0.6",
+    "ruff>=0.15.11",
     # Pinned to non-Windows platforms: `xattr` has a C extension and ships no
     # Windows wheel, so an unconditional dep makes `uv sync --all-extras` fail
     # on the Windows CI runner with a missing-MSVC build error. The macOS unit

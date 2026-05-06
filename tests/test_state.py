@@ -3,7 +3,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-import psutil  # type: ignore[import-untyped]
+import psutil  # type: ignore[import-untyped, unused-ignore]
 import pytest
 
 from dbxignore import state

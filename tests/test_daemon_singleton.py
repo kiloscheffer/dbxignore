@@ -4,7 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import psutil  # type: ignore[import-untyped]
+import psutil  # type: ignore[import-untyped, unused-ignore]
 import pytest
 
 from dbxignore import daemon, state

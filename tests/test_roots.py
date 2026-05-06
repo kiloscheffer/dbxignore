@@ -19,8 +19,6 @@ def _stage_info(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fixture_name: s
         dropbox_dir = base / ".dropbox"
         env_var = "HOME"
     else:
-        import pytest
-
         pytest.skip(f"unsupported platform {sys.platform}")
 
     dropbox_dir.mkdir(parents=True)

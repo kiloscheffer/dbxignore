@@ -109,7 +109,7 @@ def is_daemon_alive(pid: int | None) -> bool:
     if pid is None:
         return False
     try:
-        import psutil  # type: ignore[import-untyped]
+        import psutil  # type: ignore[import-untyped, unused-ignore]
     except ImportError:
         try:
             os.kill(pid, 0)

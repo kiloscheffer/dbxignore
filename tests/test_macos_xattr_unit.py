@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 if sys.platform == "win32":
     pytest.skip("xattr package not installable on Windows", allow_module_level=True)
 
-import xattr  # type: ignore[import-not-found]  # noqa: E402  # after skip guard
+import xattr  # type: ignore[import-not-found, import-untyped, unused-ignore]  # noqa: E402  # after skip guard
 
 from dbxignore._backends import macos_xattr as mod  # noqa: E402  # after skip guard
 
@@ -114,7 +114,7 @@ def legacy_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 def test_set_ignored_calls_setxattr_with_correct_args(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy_mode
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy_mode: None
 ) -> None:
     """set_ignored calls xattr.setxattr with the detected attr name and _MARKER_VALUE."""
     p = tmp_path / "file.txt"
@@ -150,7 +150,7 @@ def test_set_ignored_rejects_relative_path() -> None:
 
 
 def test_clear_ignored_calls_removexattr_with_correct_args(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy_mode
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy_mode: None
 ) -> None:
     """clear_ignored calls xattr.removexattr with the detected attr name and symlink=True."""
     p = tmp_path / "file.txt"
@@ -267,7 +267,7 @@ def _stage_dropbox_info(home: Path, *paths: str) -> None:
 
 
 def test_detected_attr_name_fileprovider_when_path_under_cloudstorage_and_extension_allowed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
 ) -> None:
     """The default File Provider case: info.json path under
     ~/Library/CloudStorage/ AND pluginkit shows extension allowed
@@ -285,7 +285,7 @@ def test_detected_attr_name_fileprovider_when_path_under_cloudstorage_and_extens
 
 
 def test_detected_attr_name_legacy_when_path_outside_cloudstorage_and_extension_not_registered(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
 ) -> None:
     """Pure legacy install: info.json path is `~/Dropbox`, pluginkit returns
     no matching extension (Dropbox.app version doesn't ship the FP extension,
@@ -300,7 +300,7 @@ def test_detected_attr_name_legacy_when_path_outside_cloudstorage_and_extension_
 
 
 def test_detected_attr_name_legacy_when_extension_installed_but_user_in_legacy_mode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
 ) -> None:
     """The bug v0.4.0a4 missed: user has Dropbox.app with FP extension
     registered (pluginkit allowed) BUT this account is still on legacy mode
@@ -320,7 +320,7 @@ def test_detected_attr_name_legacy_when_extension_installed_but_user_in_legacy_m
 
 
 def test_detected_attr_name_legacy_when_extension_disabled_overrides_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
 ) -> None:
     """Disabled extension wins over path. Even if info.json's path is under
     CloudStorage (perhaps Dropbox hadn't updated info.json yet after the
@@ -339,7 +339,7 @@ def test_detected_attr_name_legacy_when_extension_disabled_overrides_path(
 
 
 def test_detected_attr_name_fileprovider_external_drive(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
 ) -> None:
     """External-drive File Provider: info.json path is `/Volumes/<Drive>/...`
     (mounted external drive) and pluginkit shows the extension allowed.
@@ -361,7 +361,7 @@ def test_detected_attr_name_fileprovider_external_drive(
 
 
 def test_detected_attr_name_legacy_when_path_elsewhere_and_not_volumes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
 ) -> None:
     """Path is neither under CloudStorage nor under /Volumes — even with
     extension allowed, this is the "legacy with extension installed" case
@@ -380,7 +380,7 @@ def test_detected_attr_name_legacy_when_path_elsewhere_and_not_volumes(
 
 
 def test_detected_attr_name_fileprovider_when_business_account_uses_cloudstorage(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
 ) -> None:
     """Multi-account: any account with a path under CloudStorage triggers
     File Provider mode. info.json has both `personal` (legacy ~/Dropbox)
@@ -403,7 +403,7 @@ def test_detected_attr_name_fileprovider_when_business_account_uses_cloudstorage
 
 
 def test_detected_attr_name_legacy_when_no_info_json_and_no_extension(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
 ) -> None:
     """Dropbox not installed at all: no info.json, pluginkit empty → legacy
     (defensive default; the daemon won't actually be running anyway because
@@ -415,7 +415,7 @@ def test_detected_attr_name_legacy_when_no_info_json_and_no_extension(
 
 
 def test_detected_attr_names_writes_both_when_pluginkit_unknown_and_no_info_json(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
 ) -> None:
     """pluginkit errored (test host without the binary, e.g. Linux CI) AND
     info.json is missing → uncertain. Dual-attribute defensive write
@@ -432,7 +432,7 @@ def test_detected_attr_names_writes_both_when_pluginkit_unknown_and_no_info_json
 
 
 def test_detected_attr_name_fileprovider_when_pluginkit_unknown_but_path_under_cloudstorage(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
 ) -> None:
     """pluginkit unavailable BUT info.json path is under CloudStorage → File
     Provider. Path is the user-level fact and we trust it without pluginkit
@@ -450,7 +450,7 @@ def test_detected_attr_name_fileprovider_when_pluginkit_unknown_but_path_under_c
 
 
 def test_detected_attr_name_legacy_when_home_unset(
-    monkeypatch: pytest.MonkeyPatch, reset_attr_cache
+    monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
 ) -> None:
     """No HOME → no info.json, no path-prefix check possible. With pluginkit
     empty too, defensive legacy default.
@@ -461,7 +461,7 @@ def test_detected_attr_name_legacy_when_home_unset(
 
 
 def test_detected_attr_names_writes_both_when_pluginkit_times_out(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
 ) -> None:
     """TimeoutExpired (pluginkit hung) returns "unknown" extension state.
     No info.json + unknown state → dual-attribute defensive write.
@@ -478,7 +478,7 @@ def test_detected_attr_names_writes_both_when_pluginkit_times_out(
 
 
 def test_detected_attr_name_caches_first_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
 ) -> None:
     """First call invokes both `subprocess.run` (pluginkit) and the
     info.json read; subsequent calls hit the cache.
@@ -494,7 +494,7 @@ def test_detected_attr_name_caches_first_result(
 
     pluginkit_calls = 0
 
-    def fake_run(args, **kwargs):
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         nonlocal pluginkit_calls
         pluginkit_calls += 1
         return subprocess.CompletedProcess(
@@ -551,7 +551,7 @@ def both_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 def test_is_ignored_uses_fileprovider_attr_in_fileprovider_mode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fileprovider_mode
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fileprovider_mode: None
 ) -> None:
     """In File Provider mode, is_ignored reads `com.apple.fileprovider.ignore#P`."""
     p = tmp_path / "file.txt"
@@ -565,7 +565,7 @@ def test_is_ignored_uses_fileprovider_attr_in_fileprovider_mode(
 
 
 def test_set_ignored_writes_fileprovider_attr_in_fileprovider_mode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fileprovider_mode
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fileprovider_mode: None
 ) -> None:
     """In File Provider mode, set_ignored writes `com.apple.fileprovider.ignore#P`."""
     p = tmp_path / "file.txt"
@@ -581,7 +581,7 @@ def test_set_ignored_writes_fileprovider_attr_in_fileprovider_mode(
 
 
 def test_clear_ignored_removes_fileprovider_attr_in_fileprovider_mode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fileprovider_mode
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fileprovider_mode: None
 ) -> None:
     """In File Provider mode, clear_ignored removes `com.apple.fileprovider.ignore#P`."""
     p = tmp_path / "file.txt"
@@ -601,7 +601,7 @@ def test_clear_ignored_removes_fileprovider_attr_in_fileprovider_mode(
 
 
 def test_set_ignored_writes_both_attrs_in_both_mode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, both_mode
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, both_mode: None
 ) -> None:
     """In both-mode, set_ignored issues two setxattr calls — one per attr."""
     p = tmp_path / "file.txt"
@@ -617,7 +617,7 @@ def test_set_ignored_writes_both_attrs_in_both_mode(
 
 
 def test_is_ignored_returns_true_if_first_attr_set_in_both_mode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, both_mode
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, both_mode: None
 ) -> None:
     """If the legacy attr is set, is_ignored short-circuits without reading
     the second — short-circuit semantics matter when the user is on legacy
@@ -633,7 +633,7 @@ def test_is_ignored_returns_true_if_first_attr_set_in_both_mode(
 
 
 def test_is_ignored_returns_true_if_second_attr_set_in_both_mode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, both_mode
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, both_mode: None
 ) -> None:
     """First attr ENOATTR, second attr present → True. Exercises the
     fall-through path that's the whole point of writing both."""
@@ -649,7 +649,7 @@ def test_is_ignored_returns_true_if_second_attr_set_in_both_mode(
 
 
 def test_is_ignored_returns_false_if_both_attrs_absent_in_both_mode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, both_mode
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, both_mode: None
 ) -> None:
     """Both attrs ENOATTR → False (path simply not marked under either name)."""
     p = tmp_path / "file.txt"
@@ -663,7 +663,7 @@ def test_is_ignored_returns_false_if_both_attrs_absent_in_both_mode(
 
 
 def test_clear_ignored_removes_both_attrs_in_both_mode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, both_mode
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, both_mode: None
 ) -> None:
     """clear_ignored issues two removexattr calls — one per attr — and
     treats per-attr ENOATTR as a no-op (so a half-marked path that only
@@ -684,7 +684,7 @@ def test_clear_ignored_removes_both_attrs_in_both_mode(
 
 
 def test_detection_summary_starts_with_mode_token_in_legacy_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
 ) -> None:
     """The summary returned by detection_summary() leads with the mode
     keyword (`legacy:`/`file_provider:`/`both:`) so daemon-log-grep and
@@ -700,7 +700,7 @@ def test_detection_summary_starts_with_mode_token_in_legacy_default(
 
 
 def test_detection_summary_starts_with_both_when_pluginkit_unknown(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
 ) -> None:
     """The both-mode summary starts with `both:` so users can tell at a
     glance that detection landed in the dual-attribute defensive arm."""

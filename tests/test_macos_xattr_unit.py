@@ -19,7 +19,7 @@ from unittest.mock import MagicMock
 import pytest
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
 if sys.platform == "win32":
     pytest.skip("xattr package not installable on Windows", allow_module_level=True)
@@ -207,7 +207,7 @@ def test_clear_ignored_rejects_relative_path() -> None:
 
 
 @pytest.fixture
-def reset_attr_cache(monkeypatch):
+def reset_attr_cache(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Reset `_decision_cache` to None for each test so detection re-runs.
 
     Without this, the first test to call `_detect()` would populate the
@@ -219,7 +219,9 @@ def reset_attr_cache(monkeypatch):
     monkeypatch.setattr(mod, "_decision_cache", None)
 
 
-def _fake_pluginkit(stdout: str = "", side_effect: Exception | None = None) -> None:
+def _fake_pluginkit(
+    stdout: str = "", side_effect: Exception | None = None
+) -> Callable[..., subprocess.CompletedProcess[str]]:
     """Build a `subprocess.run` replacement that simulates `pluginkit` output.
 
     Returns a function suitable for `monkeypatch.setattr("subprocess.run", ...)`.
@@ -228,7 +230,7 @@ def _fake_pluginkit(stdout: str = "", side_effect: Exception | None = None) -> N
     hosts, TimeoutExpired on a hung pluginkit).
     """
 
-    def fake(args, **kwargs):
+    def fake(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         if side_effect is not None:
             raise side_effect
         return subprocess.CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
@@ -516,7 +518,7 @@ def test_detected_attr_name_caches_first_result(
 
 
 @pytest.fixture
-def fileprovider_mode(monkeypatch):
+def fileprovider_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Force `_detected_attr_names()` to return [ATTR_FILEPROVIDER] for one test.
 
     Sets the cache directly so the tests don't depend on filesystem state —
@@ -532,7 +534,7 @@ def fileprovider_mode(monkeypatch):
 
 
 @pytest.fixture
-def both_mode(monkeypatch):
+def both_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Force `_detected_attr_names()` to return both attrs for one test.
 
     Models the genuinely-uncertain case (followup item 58): pluginkit

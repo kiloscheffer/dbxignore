@@ -46,7 +46,7 @@ def _plist_path() -> Path:
 
 def _domain() -> str:
     """User's GUI session domain — required for LaunchAgents that need user env."""
-    return f"gui/{os.getuid()}"  # type: ignore[attr-defined]
+    return f"gui/{os.getuid()}"  # type: ignore[attr-defined, unused-ignore]
 
 
 def _service_target(label: str = LABEL) -> str:

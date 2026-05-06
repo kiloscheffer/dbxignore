@@ -5,14 +5,12 @@ from __future__ import annotations
 import contextlib
 import errno
 import logging
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 import pytest
 
-from dbxignore import daemon, roots, state
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from dbxignore import daemon, state
 
 
 class _FakeObserver:
@@ -67,7 +65,7 @@ def _install_fakes(
     monkeypatch.setattr(daemon, "Observer", lambda: fake_observer)
     monkeypatch.setattr(daemon, "Debouncer", lambda **kw: fake_debouncer)
     monkeypatch.setattr(daemon, "_configured_logging", contextlib.nullcontext)
-    monkeypatch.setattr(roots, "discover", lambda: [tmp_path])
+    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])
     monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")
     return fake_observer, fake_debouncer
 

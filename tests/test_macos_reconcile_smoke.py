@@ -15,10 +15,15 @@ pytestmark = pytest.mark.macos_only
 if sys.platform != "darwin":
     pytest.skip("requires macOS xattrs", allow_module_level=True)
 
+from typing import TYPE_CHECKING  # noqa: E402  # after skip guard
+
 from dbxignore import markers, reconcile, rules  # noqa: E402, I001  # after skip guard
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
-def test_apply_marks_directory_matching_rule(tmp_path):
+
+def test_apply_marks_directory_matching_rule(tmp_path: Path) -> None:
     root = tmp_path
     (root / ".dropboxignore").write_text("build/\n")
     (root / "build").mkdir()
@@ -33,7 +38,7 @@ def test_apply_marks_directory_matching_rule(tmp_path):
     assert report.errors == []
 
 
-def test_apply_clears_marker_when_rule_removed(tmp_path):
+def test_apply_clears_marker_when_rule_removed(tmp_path: Path) -> None:
     root = tmp_path
     rule_file = root / ".dropboxignore"
     rule_file.write_text("build/\n")

@@ -14,7 +14,9 @@ from pathlib import Path
 import pytest
 
 
-def test_unit_file_content_has_exec_start_and_wanted_by(tmp_path, monkeypatch):
+def test_unit_file_content_has_exec_start_and_wanted_by(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(
         "dbxignore.install.linux_systemd.detect_invocation",
@@ -29,7 +31,7 @@ def test_unit_file_content_has_exec_start_and_wanted_by(tmp_path, monkeypatch):
     assert "WantedBy=default.target" in content
 
 
-def test_unit_file_content_appends_arguments(tmp_path):
+def test_unit_file_content_appends_arguments(tmp_path: Path) -> None:
     from dbxignore.install import linux_systemd
 
     content = linux_systemd.build_unit_content(
@@ -39,7 +41,7 @@ def test_unit_file_content_appends_arguments(tmp_path):
     assert "ExecStart=/home/u/.local/bin/python -m dbxignore daemon" in content
 
 
-def test_unit_content_has_no_environment_line_by_default():
+def test_unit_content_has_no_environment_line_by_default() -> None:
     from dbxignore.install import linux_systemd
 
     content = linux_systemd.build_unit_content(
@@ -48,7 +50,7 @@ def test_unit_content_has_no_environment_line_by_default():
     assert "Environment=" not in content
 
 
-def test_unit_content_emits_environment_before_exec_start():
+def test_unit_content_emits_environment_before_exec_start() -> None:
     """Environment= must appear inside [Service] and before ExecStart= so the
     daemon sees the variable when it launches."""
     from dbxignore.install import linux_systemd
@@ -65,7 +67,7 @@ def test_unit_content_emits_environment_before_exec_start():
     assert env_idx < exec_idx
 
 
-def test_unit_content_quotes_environment_value_with_spaces():
+def test_unit_content_quotes_environment_value_with_spaces() -> None:
     """Paths with spaces (e.g. ``/home/u/My Dropbox``) must survive intact —
     the outer-quoted Environment= form wraps the whole KEY=VALUE so the
     value can contain whitespace without systemd tokenizing on it."""
@@ -78,7 +80,7 @@ def test_unit_content_quotes_environment_value_with_spaces():
     assert 'Environment="DBXIGNORE_ROOT=/home/u/My Dropbox"' in content
 
 
-def test_unit_content_escapes_backslash_and_quote_in_environment_value():
+def test_unit_content_escapes_backslash_and_quote_in_environment_value() -> None:
     """Backslash and double-quote must be escaped so systemd's parser
     doesn't misread them as escape sequences or an early end-of-string."""
     from dbxignore.install import linux_systemd
@@ -90,7 +92,7 @@ def test_unit_content_escapes_backslash_and_quote_in_environment_value():
     assert r'Environment="DBXIGNORE_ROOT=/path with \"quote\" and \\slash"' in content
 
 
-def test_unit_content_accepts_none_environment():
+def test_unit_content_accepts_none_environment() -> None:
     """environment=None is equivalent to omitting the argument entirely."""
     from dbxignore.install import linux_systemd
 
@@ -101,7 +103,9 @@ def test_unit_content_accepts_none_environment():
     assert "Environment=" not in content
 
 
-def test_install_propagates_dbxignore_root_env(tmp_path, monkeypatch):
+def test_install_propagates_dbxignore_root_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """When DBXIGNORE_ROOT is set in the install process's env, the
     generated unit must carry it forward — that's the fix for item 9."""
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -126,7 +130,9 @@ def test_install_propagates_dbxignore_root_env(tmp_path, monkeypatch):
     assert 'Environment="DBXIGNORE_ROOT=/home/kilo/dbx-smoke"' in unit_path.read_text()
 
 
-def test_install_omits_environment_when_dbxignore_root_unset(tmp_path, monkeypatch):
+def test_install_omits_environment_when_dbxignore_root_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """No env var → no Environment= line. Stock-Dropbox users shouldn't see
     boilerplate they don't need."""
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -151,7 +157,9 @@ def test_install_omits_environment_when_dbxignore_root_unset(tmp_path, monkeypat
     assert "Environment=" not in unit_path.read_text()
 
 
-def test_install_ignores_empty_dbxignore_root(tmp_path, monkeypatch):
+def test_install_ignores_empty_dbxignore_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Empty string means 'shell sourced a template with an unset placeholder' —
     treat as unset rather than forwarding a meaningless blank value that would
     cause ``roots.discover()`` to fall through to ``info.json`` anyway."""
@@ -177,7 +185,9 @@ def test_install_ignores_empty_dbxignore_root(tmp_path, monkeypatch):
     assert "Environment=" not in unit_path.read_text()
 
 
-def test_install_writes_unit_and_invokes_systemctl(tmp_path, monkeypatch):
+def test_install_writes_unit_and_invokes_systemctl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(
         "dbxignore.install.linux_systemd.detect_invocation",
@@ -186,7 +196,9 @@ def test_install_writes_unit_and_invokes_systemctl(tmp_path, monkeypatch):
 
     calls: list[list[str]] = []
 
-    def fake_run(cmd, check, capture_output=False, text=False):
+    def fake_run(
+        cmd: list[str], check: bool, capture_output: bool = False, text: bool = False
+    ) -> subprocess.CompletedProcess[str]:
         calls.append(list(cmd))
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
@@ -206,7 +218,9 @@ def test_install_writes_unit_and_invokes_systemctl(tmp_path, monkeypatch):
     ]
 
 
-def test_uninstall_disables_removes_unit_and_reloads(tmp_path, monkeypatch):
+def test_uninstall_disables_removes_unit_and_reloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     unit_path = tmp_path / ".config" / "systemd" / "user" / "dbxignore.service"
     unit_path.parent.mkdir(parents=True)
@@ -214,7 +228,9 @@ def test_uninstall_disables_removes_unit_and_reloads(tmp_path, monkeypatch):
 
     calls: list[list[str]] = []
 
-    def fake_run(cmd, check=False, capture_output=False, text=False):
+    def fake_run(
+        cmd: list[str], check: bool = False, capture_output: bool = False, text: bool = False
+    ) -> subprocess.CompletedProcess[str]:
         calls.append(list(cmd))
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
@@ -231,10 +247,12 @@ def test_uninstall_disables_removes_unit_and_reloads(tmp_path, monkeypatch):
     ]
 
 
-def test_install_raises_when_executable_not_found(tmp_path, monkeypatch):
+def test_install_raises_when_executable_not_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    def _raise_not_found():
+    def _raise_not_found() -> None:
         raise RuntimeError("dbxignored not on PATH; run `uv tool install .`")
 
     monkeypatch.setattr(
@@ -248,7 +266,9 @@ def test_install_raises_when_executable_not_found(tmp_path, monkeypatch):
         linux_systemd.install_unit()
 
 
-def test_install_wraps_calledprocesserror_from_systemctl(tmp_path, monkeypatch):
+def test_install_wraps_calledprocesserror_from_systemctl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A failing systemctl must raise RuntimeError, not CalledProcessError.
 
     cli.install / cli.uninstall catch RuntimeError; a CalledProcessError
@@ -260,7 +280,9 @@ def test_install_wraps_calledprocesserror_from_systemctl(tmp_path, monkeypatch):
         lambda: (Path("/usr/local/bin/dbxignored"), ""),
     )
 
-    def fake_run_fails(cmd, check, capture_output=False, text=False):
+    def fake_run_fails(
+        cmd: list[str], check: bool, capture_output: bool = False, text: bool = False
+    ) -> subprocess.CompletedProcess[str]:
         raise subprocess.CalledProcessError(1, cmd, output="", stderr="no user session")
 
     monkeypatch.setattr(subprocess, "run", fake_run_fails)
@@ -271,7 +293,9 @@ def test_install_wraps_calledprocesserror_from_systemctl(tmp_path, monkeypatch):
         linux_systemd.install_unit()
 
 
-def test_remove_dropin_directory_removes_existing(tmp_path, monkeypatch):
+def test_remove_dropin_directory_removes_existing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Drop-in dir with a user-authored override file gets removed
     wholesale on --purge cleanup."""
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -290,7 +314,9 @@ def test_remove_dropin_directory_removes_existing(tmp_path, monkeypatch):
     assert not dropin_dir.exists()
 
 
-def test_remove_dropin_directory_absent_returns_none(tmp_path, monkeypatch):
+def test_remove_dropin_directory_absent_returns_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Drop-in dir not present → return None, no error."""
     monkeypatch.setenv("HOME", str(tmp_path))
 
@@ -299,7 +325,7 @@ def test_remove_dropin_directory_absent_returns_none(tmp_path, monkeypatch):
     assert linux_systemd.remove_dropin_directory() is None
 
 
-def test_remove_dropin_directory_no_home_returns_none(monkeypatch):
+def test_remove_dropin_directory_no_home_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
     """HOME unset → return None (can't locate the dir; silent skip)."""
     monkeypatch.delenv("HOME", raising=False)
 

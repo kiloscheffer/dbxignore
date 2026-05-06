@@ -46,7 +46,7 @@ def _plist_path() -> Path:
 
 def _domain() -> str:
     """User's GUI session domain — required for LaunchAgents that need user env."""
-    return f"gui/{os.getuid()}"
+    return f"gui/{os.getuid()}"  # type: ignore[attr-defined]
 
 
 def _service_target(label: str = LABEL) -> str:
@@ -91,7 +91,7 @@ def build_plist_content(
     own RotatingFileHandler initializes. In normal operation this file
     stays near-empty.
     """
-    plist: dict = {
+    plist: dict[str, object] = {
         "Label": label,
         "ProgramArguments": program_arguments,
         "RunAtLoad": True,

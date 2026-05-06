@@ -110,7 +110,7 @@ def test_detect_conflict_flags_negation_under_ignored_ancestor(tmp_path: Path) -
         _entry(str(root / ".dropboxignore"), 1, "build/", str(root)),
         _entry(str(root / ".dropboxignore"), 3, "!build/keep/", str(root)),
     ]
-    conflicts = _detect_conflicts(sequence, root=root)
+    conflicts = _detect_conflicts(sequence, root=root)  # type: ignore[arg-type]
 
     assert len(conflicts) == 1
     c = conflicts[0]
@@ -127,7 +127,7 @@ def test_detect_no_conflict_for_file_pattern_negation(tmp_path: Path) -> None:
         _entry(str(root / ".dropboxignore"), 1, "*.log", str(root)),
         _entry(str(root / ".dropboxignore"), 2, "!important.log", str(root)),
     ]
-    conflicts = _detect_conflicts(sequence, root=root)
+    conflicts = _detect_conflicts(sequence, root=root)  # type: ignore[arg-type]
     assert conflicts == []
 
 
@@ -137,7 +137,7 @@ def test_detect_no_conflict_for_unrelated_paths(tmp_path: Path) -> None:
         _entry(str(root / ".dropboxignore"), 1, "build/", str(root)),
         _entry(str(root / ".dropboxignore"), 2, "!unrelated/path/", str(root)),
     ]
-    assert _detect_conflicts(sequence, root=root) == []
+    assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
 
 
 def test_detect_no_conflict_when_negation_precedes_include(tmp_path: Path) -> None:
@@ -148,7 +148,7 @@ def test_detect_no_conflict_when_negation_precedes_include(tmp_path: Path) -> No
         _entry(str(root / ".dropboxignore"), 1, "!build/keep/", str(root)),
         _entry(str(root / ".dropboxignore"), 2, "build/", str(root)),
     ]
-    assert _detect_conflicts(sequence, root=root) == []
+    assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
 
 
 def test_detect_cross_file_conflict(tmp_path: Path) -> None:
@@ -162,7 +162,7 @@ def test_detect_cross_file_conflict(tmp_path: Path) -> None:
         _entry(str(root_file), 1, "build/", str(root)),
         _entry(str(nested_file), 1, "!keep/", str(root / "build")),
     ]
-    conflicts = _detect_conflicts(sequence, root=root)
+    conflicts = _detect_conflicts(sequence, root=root)  # type: ignore[arg-type]
 
     assert len(conflicts) == 1
     c = conflicts[0]
@@ -178,7 +178,7 @@ def test_detect_skips_glob_prefix_negation(tmp_path: Path) -> None:
         _entry(str(root / ".dropboxignore"), 1, "**/foo/", str(root)),
         _entry(str(root / ".dropboxignore"), 2, "!**/foo/bar/", str(root)),
     ]
-    assert _detect_conflicts(sequence, root=root) == []
+    assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
 
 
 def test_detect_multiple_independent_conflicts(tmp_path: Path) -> None:
@@ -189,7 +189,7 @@ def test_detect_multiple_independent_conflicts(tmp_path: Path) -> None:
         _entry(str(root / ".dropboxignore"), 4, "!build/keep/", str(root)),
         _entry(str(root / ".dropboxignore"), 5, "!node_modules/patched/", str(root)),
     ]
-    conflicts = _detect_conflicts(sequence, root=root)
+    conflicts = _detect_conflicts(sequence, root=root)  # type: ignore[arg-type]
     patterns = {c.dropped_pattern for c in conflicts}
     assert patterns == {"!build/keep/", "!node_modules/patched/"}
 
@@ -204,7 +204,7 @@ def test_detect_later_include_does_not_affect_earlier_negation(tmp_path: Path) -
         _entry(str(root / ".dropboxignore"), 2, "!build/keep/", str(root)),
         _entry(str(root / ".dropboxignore"), 3, "src/", str(root)),
     ]
-    conflicts = _detect_conflicts(sequence, root=root)
+    conflicts = _detect_conflicts(sequence, root=root)  # type: ignore[arg-type]
 
     assert len(conflicts) == 1
     assert conflicts[0].dropped_pattern == "!build/keep/"

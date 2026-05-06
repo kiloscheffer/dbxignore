@@ -6,9 +6,10 @@ from pathlib import Path
 import pytest
 
 from dbxignore.install import windows_task as install
+from tests.conftest import FakeMarkers
 
 
-def test_build_xml_contains_logon_trigger_and_action():
+def test_build_xml_contains_logon_trigger_and_action() -> None:
     xml = install.build_task_xml(exe_path=Path(r"C:\bin\dbxignored.exe"))
     assert "<LogonTrigger>" in xml
     assert f"<UserId>{getpass.getuser()}</UserId>" in xml
@@ -16,14 +17,16 @@ def test_build_xml_contains_logon_trigger_and_action():
     assert "<RestartOnFailure>" in xml
 
 
-def test_build_xml_uses_pythonw_when_source_install(tmp_path):
+def test_build_xml_uses_pythonw_when_source_install(tmp_path: Path) -> None:
     pythonw = tmp_path / "pythonw.exe"
     xml = install.build_task_xml(exe_path=pythonw, arguments="-m dbxignore daemon")
     assert "pythonw.exe" in xml
     assert "-m dbxignore daemon" in xml
 
 
-def test_detect_invocation_returns_frozen_mode_when_already_dbxignored(monkeypatch, tmp_path):
+def test_detect_invocation_returns_frozen_mode_when_already_dbxignored(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """User invoked `dbxignored.exe install` directly: sys.executable IS the daemon shim."""
     daemon_exe = tmp_path / "dbxignored.exe"
     daemon_exe.write_text("")
@@ -34,7 +37,9 @@ def test_detect_invocation_returns_frozen_mode_when_already_dbxignored(monkeypat
     assert args == ""
 
 
-def test_detect_invocation_finds_dbxignored_sibling_from_dbxignore(monkeypatch, tmp_path):
+def test_detect_invocation_finds_dbxignored_sibling_from_dbxignore(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """User invoked `dbxignore.exe install` (frozen): resolve to `dbxignored.exe` sibling.
 
     Common case — both PyInstaller binaries ship as a paired set, the user runs
@@ -54,8 +59,8 @@ def test_detect_invocation_finds_dbxignored_sibling_from_dbxignore(monkeypatch, 
 
 
 def test_detect_invocation_falls_back_to_daemon_subcommand_when_sibling_missing(
-    monkeypatch, tmp_path
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """No `dbxignored.exe` sibling: invoke ourselves with the `daemon` subcommand.
 
     Defensive case — PyInstaller specs always emit both binaries, so this
@@ -70,7 +75,7 @@ def test_detect_invocation_falls_back_to_daemon_subcommand_when_sibling_missing(
     assert args == "daemon"
 
 
-def test_detect_invocation_returns_source_mode(monkeypatch):
+def test_detect_invocation_returns_source_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delattr(sys, "frozen", raising=False)
     monkeypatch.setattr(sys, "executable", r"C:\uv\tools\dbxignore\Scripts\python.exe")
     exe, args = install.detect_invocation()
@@ -78,7 +83,7 @@ def test_detect_invocation_returns_source_mode(monkeypatch):
     assert args == "-m dbxignore daemon"
 
 
-def test_uninstall_task_raises_on_schtasks_failure(monkeypatch):
+def test_uninstall_task_raises_on_schtasks_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """schtasks /Delete's non-zero exit must surface as a RuntimeError so the
     CLI stops claiming "Uninstalled scheduled task" when the task still
     exists (e.g. missing elevation, task already gone, locale quirks)."""
@@ -88,19 +93,21 @@ def test_uninstall_task_raises_on_schtasks_failure(monkeypatch):
         stdout="",
         stderr="ERROR: Access is denied.\r\n",
     )
-    monkeypatch.setattr(install.subprocess, "run", lambda *a, **kw: fake_result)
+    monkeypatch.setattr(install.subprocess, "run", lambda *a, **kw: fake_result)  # type: ignore[attr-defined]
 
     with pytest.raises(RuntimeError, match="Access is denied"):
         install.uninstall_task()
 
 
-def test_uninstall_task_succeeds_silently_on_zero_exit(monkeypatch):
+def test_uninstall_task_succeeds_silently_on_zero_exit(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
-    monkeypatch.setattr(install.subprocess, "run", lambda *a, **kw: fake_result)
+    monkeypatch.setattr(install.subprocess, "run", lambda *a, **kw: fake_result)  # type: ignore[attr-defined]
     install.uninstall_task()  # must not raise
 
 
-def test_install_task_runs_schtasks_create_then_run(monkeypatch, tmp_path):
+def test_install_task_runs_schtasks_create_then_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """install_task should both register the task (Create) and start it now (Run)
     so the daemon comes up without waiting for next logon. Mirrors what
     `systemctl --user enable --now` does on Linux and what
@@ -108,11 +115,11 @@ def test_install_task_runs_schtasks_create_then_run(monkeypatch, tmp_path):
     monkeypatch.setattr(install, "detect_invocation", lambda: (Path(r"C:\bin\dbxignored.exe"), ""))
     calls = []
 
-    def fake_run(cmd, **kwargs):
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append(cmd)
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(install.subprocess, "run", fake_run)
+    monkeypatch.setattr(install.subprocess, "run", fake_run)  # type: ignore[attr-defined]
 
     install.install_task()
 
@@ -122,7 +129,9 @@ def test_install_task_runs_schtasks_create_then_run(monkeypatch, tmp_path):
     assert calls[1] == ["schtasks", "/Run", "/TN", install.TASK_NAME]
 
 
-def test_install_task_warns_but_does_not_raise_when_run_fails(monkeypatch, caplog):
+def test_install_task_warns_but_does_not_raise_when_run_fails(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """A schtasks /Run failure must NOT surface as an install error — the
     Create succeeded, the task is registered, and it'll start at next logon
     regardless. Suppressing the failure here avoids a confusing partial-
@@ -132,7 +141,7 @@ def test_install_task_warns_but_does_not_raise_when_run_fails(monkeypatch, caplo
 
     monkeypatch.setattr(install, "detect_invocation", lambda: (Path(r"C:\bin\dbxignored.exe"), ""))
 
-    def fake_run(cmd, **kwargs):
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         if cmd[0:2] == ["schtasks", "/Create"]:
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
         # /Run fails (e.g. task scheduler service unavailable mid-install).
@@ -143,7 +152,7 @@ def test_install_task_warns_but_does_not_raise_when_run_fails(monkeypatch, caplo
             stderr="ERROR: The Task Scheduler service is not available.\r\n",
         )
 
-    monkeypatch.setattr(install.subprocess, "run", fake_run)
+    monkeypatch.setattr(install.subprocess, "run", fake_run)  # type: ignore[attr-defined]
 
     with caplog.at_level(logging.WARNING, logger="dbxignore.install.windows_task"):
         install.install_task()  # must not raise
@@ -155,7 +164,7 @@ def test_install_task_warns_but_does_not_raise_when_run_fails(monkeypatch, caplo
     ), [rec.message for rec in caplog.records]
 
 
-def test_cli_uninstall_reports_schtasks_failure(monkeypatch):
+def test_cli_uninstall_reports_schtasks_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """cli.uninstall must echo the failure to stderr and exit non-zero when
     uninstall_service raises — not print "Uninstalled" anyway."""
     from click.testing import CliRunner
@@ -163,7 +172,7 @@ def test_cli_uninstall_reports_schtasks_failure(monkeypatch):
     import dbxignore.install as install_pkg
     from dbxignore import cli
 
-    def raising_uninstall():
+    def raising_uninstall() -> None:
         raise RuntimeError("schtasks /Delete returned 1: ERROR: Access is denied.")
 
     monkeypatch.setattr(install_pkg, "uninstall_service", raising_uninstall)
@@ -177,7 +186,7 @@ def test_cli_uninstall_reports_schtasks_failure(monkeypatch):
     assert "Uninstalled dbxignore daemon service" not in result.output
 
 
-def test_cli_install_reports_backend_failure(monkeypatch):
+def test_cli_install_reports_backend_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """cli.install must echo the failure to stderr and exit non-zero when
     install_service raises — not surface a raw traceback and not print
     "Installed" anyway. Mirrors the uninstall contract."""
@@ -186,7 +195,7 @@ def test_cli_install_reports_backend_failure(monkeypatch):
     import dbxignore.install as install_pkg
     from dbxignore import cli
 
-    def raising_install():
+    def raising_install() -> None:
         raise RuntimeError("schtasks /Create returned 1: ERROR: Access is denied.")
 
     monkeypatch.setattr(install_pkg, "install_service", raising_install)
@@ -203,7 +212,9 @@ def test_cli_install_reports_backend_failure(monkeypatch):
     assert "Installed dbxignore daemon service" not in result.output
 
 
-def test_purge_removes_state_json(tmp_path, monkeypatch, fake_markers):
+def test_purge_removes_state_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
+) -> None:
     """--purge deletes state.default_path()."""
     import click.testing
 
@@ -223,7 +234,9 @@ def test_purge_removes_state_json(tmp_path, monkeypatch, fake_markers):
     assert not state_json.exists()
 
 
-def test_purge_removes_daemon_log_and_rotations(tmp_path, monkeypatch, fake_markers):
+def test_purge_removes_daemon_log_and_rotations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
+) -> None:
     """--purge deletes daemon.log plus rotated daemon.log.1..4."""
     import click.testing
 
@@ -244,7 +257,9 @@ def test_purge_removes_daemon_log_and_rotations(tmp_path, monkeypatch, fake_mark
         assert not (state_dir / name).exists(), f"{name} survived --purge"
 
 
-def test_purge_rmdirs_empty_state_dir(tmp_path, monkeypatch, fake_markers):
+def test_purge_rmdirs_empty_state_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
+) -> None:
     """After files are deleted, if the state dir is empty, rmdir removes it."""
     import click.testing
 
@@ -262,7 +277,9 @@ def test_purge_rmdirs_empty_state_dir(tmp_path, monkeypatch, fake_markers):
     assert not state_dir.exists()
 
 
-def test_purge_preserves_state_dir_with_foreign_content(tmp_path, monkeypatch, fake_markers):
+def test_purge_preserves_state_dir_with_foreign_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
+) -> None:
     """If the user has dropped something else in the state dir, rmdir fails
     silently and we preserve their content."""
     import click.testing
@@ -289,7 +306,9 @@ def test_purge_preserves_state_dir_with_foreign_content(tmp_path, monkeypatch, f
     assert (state_dir / "user-authored-note.txt").exists()
 
 
-def test_purge_handles_missing_state_dir(tmp_path, monkeypatch, fake_markers):
+def test_purge_handles_missing_state_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
+) -> None:
     """--purge on a fresh install (no state dir yet) succeeds cleanly."""
     import click.testing
 
@@ -306,7 +325,9 @@ def test_purge_handles_missing_state_dir(tmp_path, monkeypatch, fake_markers):
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux-only")
-def test_purge_removes_systemd_dropin_dir(tmp_path, monkeypatch, fake_markers):
+def test_purge_removes_systemd_dropin_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
+) -> None:
     """On Linux, --purge also removes ~/.config/systemd/user/<unit>.d/."""
     import click.testing
 
@@ -332,8 +353,8 @@ def test_purge_removes_systemd_dropin_dir(tmp_path, monkeypatch, fake_markers):
 
 
 def test_purge_preserves_files_not_matching_daemon_log_rotation(
-    tmp_path, monkeypatch, fake_markers
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
+) -> None:
     """RotatingFileHandler only creates daemon.log and daemon.log.<N>.
     Files like `daemon.log_backup` or `daemon.logger` are not our artifacts —
     even if they start with `daemon.log`. --purge must not touch them."""
@@ -365,7 +386,9 @@ def test_purge_preserves_files_not_matching_daemon_log_rotation(
     assert state_dir.exists()
 
 
-def test_purge_cleans_separate_log_dir_on_darwin(tmp_path, monkeypatch):
+def test_purge_cleans_separate_log_dir_on_darwin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """When state.user_log_dir != state.user_state_dir, purge cleans both."""
     state_dir = tmp_path / "state"
     log_dir = tmp_path / "logs"

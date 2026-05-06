@@ -11,10 +11,9 @@ import signal
 import sys
 import threading
 import time
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -26,6 +25,9 @@ from dbxignore.markers import detection_summary
 from dbxignore.reconcile import reconcile_subtree
 from dbxignore.roots import find_containing
 from dbxignore.rules import IGNORE_FILENAME, RuleCache
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -299,7 +301,7 @@ class _WatchdogHandler(FileSystemEventHandler):
         self._roots = roots
         self._cache = cache
 
-    def on_any_event(self, event):
+    def on_any_event(self, event: Any) -> None:
         try:
             classification = _classify(event, self._roots)
             if classification is None:
@@ -334,7 +336,7 @@ def run(stop_event: threading.Event | None = None) -> None:
             logger.error("daemon already running (pid=%d); refusing to start", prior.daemon_pid)
             return
 
-        def _signal_handler(signum, _frame):
+        def _signal_handler(signum: int, _frame: object) -> None:
             logger.info("received signal %s, shutting down", signum)
             stop_event.set()
 

@@ -1,4 +1,5 @@
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -10,7 +11,7 @@ if sys.platform != "win32":
 from dbxignore import markers  # noqa: E402  # must come after sys.platform skip guard
 
 
-def test_roundtrip_on_file(tmp_path):
+def test_roundtrip_on_file(tmp_path: Path) -> None:
     p = tmp_path / "file.txt"
     p.touch()
     assert markers.is_ignored(p) is False
@@ -20,7 +21,7 @@ def test_roundtrip_on_file(tmp_path):
     assert markers.is_ignored(p) is False
 
 
-def test_roundtrip_on_directory(tmp_path):
+def test_roundtrip_on_directory(tmp_path: Path) -> None:
     d = tmp_path / "subdir"
     d.mkdir()
     assert markers.is_ignored(d) is False
@@ -30,7 +31,7 @@ def test_roundtrip_on_directory(tmp_path):
     assert markers.is_ignored(d) is False
 
 
-def test_long_path_over_260_chars(tmp_path):
+def test_long_path_over_260_chars(tmp_path: Path) -> None:
     # Build a nested path well past MAX_PATH.
     current = tmp_path
     for i in range(25):
@@ -42,7 +43,7 @@ def test_long_path_over_260_chars(tmp_path):
     markers.clear_ignored(current)
 
 
-def test_clear_is_idempotent_on_unmarked_path(tmp_path):
+def test_clear_is_idempotent_on_unmarked_path(tmp_path: Path) -> None:
     p = tmp_path / "unmarked.txt"
     p.touch()
     markers.clear_ignored(p)

@@ -43,7 +43,7 @@ import os
 import subprocess
 from pathlib import Path
 
-import xattr
+import xattr  # type: ignore[import-not-found]
 
 from . import require_absolute as _require_absolute
 

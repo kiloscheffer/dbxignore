@@ -10,8 +10,8 @@ _DEFAULT_TIMEOUTS = {
 }
 
 
-def test_single_event_is_emitted_after_quiet_period():
-    received: list[tuple] = []
+def test_single_event_is_emitted_after_quiet_period() -> None:
+    received: list[tuple[EventKind, str, object]] = []
     d = Debouncer(
         on_emit=received.append,
         timeouts_ms={EventKind.DIR_CREATE: 10, EventKind.OTHER: 50, EventKind.RULES: 20},
@@ -25,8 +25,8 @@ def test_single_event_is_emitted_after_quiet_period():
         d.stop()
 
 
-def test_coalesces_repeated_events_for_same_key():
-    received: list[tuple] = []
+def test_coalesces_repeated_events_for_same_key() -> None:
+    received: list[tuple[EventKind, str, object]] = []
     d = Debouncer(
         on_emit=received.append,
         timeouts_ms={EventKind.DIR_CREATE: 10, EventKind.OTHER: 100, EventKind.RULES: 20},
@@ -48,8 +48,8 @@ def test_coalesces_repeated_events_for_same_key():
         d.stop()
 
 
-def test_different_keys_emit_independently():
-    received: list[tuple] = []
+def test_different_keys_emit_independently() -> None:
+    received: list[tuple[EventKind, str, object]] = []
     d = Debouncer(
         on_emit=received.append,
         timeouts_ms={EventKind.DIR_CREATE: 10, EventKind.OTHER: 50, EventKind.RULES: 20},
@@ -65,8 +65,8 @@ def test_different_keys_emit_independently():
         d.stop()
 
 
-def test_dir_create_emits_immediately():
-    received: list[tuple] = []
+def test_dir_create_emits_immediately() -> None:
+    received: list[tuple[EventKind, str, object]] = []
     d = Debouncer(
         on_emit=received.append,
         timeouts_ms={EventKind.DIR_CREATE: 0, EventKind.OTHER: 500, EventKind.RULES: 100},
@@ -80,7 +80,7 @@ def test_dir_create_emits_immediately():
         d.stop()
 
 
-def test_stop_wakes_idle_worker_quickly():
+def test_stop_wakes_idle_worker_quickly() -> None:
     """With nothing submitted, the worker waits indefinitely on its condition.
     stop() must notify so the worker exits promptly; a missed notify would
     leave the worker blocked on cond.wait() and stop() would hang forever
@@ -98,14 +98,14 @@ def test_stop_wakes_idle_worker_quickly():
     assert elapsed < 0.2, f"stop() took {elapsed:.3f}s; worker was not woken"
 
 
-def test_stop_waits_for_in_flight_emit():
+def test_stop_waits_for_in_flight_emit() -> None:
     """If an emit is in flight when stop() is called, stop() must block until
     the emit completes — otherwise the daemon exits while reconcile_subtree
     is mid-write and ADS markers / state.json land half-written."""
     release = threading.Event()
     emit_finished = threading.Event()
 
-    def slow_emit(_item):
+    def slow_emit(_item: tuple[EventKind, str, object]) -> None:
         release.wait(timeout=2.0)
         emit_finished.set()
 
@@ -132,16 +132,16 @@ def test_stop_waits_for_in_flight_emit():
         release.set()
 
 
-def test_submit_from_within_emit_callback_is_processed():
+def test_submit_from_within_emit_callback_is_processed() -> None:
     """Re-entrant submit (from inside on_emit) must not deadlock and must
     produce the follow-up event. Regression guard for the submit-while-
     emitting race the cond refactor has to preserve."""
-    received: list[tuple] = []
+    received: list[tuple[EventKind, str, object]] = []
     done = threading.Event()
 
     d: Debouncer  # forward ref; captured by closure below
 
-    def on_emit(item):
+    def on_emit(item: tuple[EventKind, str, object]) -> None:
         received.append(item)
         if item[1] == "first":
             d.submit(EventKind.OTHER, "second", "p2")
@@ -158,11 +158,11 @@ def test_submit_from_within_emit_callback_is_processed():
         d.stop()
 
 
-def test_late_submit_after_emit_still_fires():
+def test_late_submit_after_emit_still_fires() -> None:
     """After emitting all pending items, the worker may wait indefinitely.
     A fresh submit must wake it; the new event must emit within its
     timeout window, not be stuck in the queue."""
-    received: list[tuple] = []
+    received: list[tuple[EventKind, str, object]] = []
     d = Debouncer(on_emit=received.append, timeouts_ms=_DEFAULT_TIMEOUTS)
     d.start()
     try:

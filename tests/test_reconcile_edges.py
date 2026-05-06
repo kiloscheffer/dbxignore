@@ -1,10 +1,15 @@
+from pathlib import Path
+
 import pytest
 
 from dbxignore import reconcile
 from dbxignore.rules import RuleCache
+from tests.conftest import FakeMarkers, WriteFile
 
 
-def test_skips_descendants_of_already_ignored_directory(tmp_path, fake_markers, write_file):
+def test_skips_descendants_of_already_ignored_directory(
+    tmp_path: Path, fake_markers: FakeMarkers, write_file: WriteFile
+) -> None:
     write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
     (tmp_path / "build" / "deep").mkdir()
@@ -24,11 +29,11 @@ def test_skips_descendants_of_already_ignored_directory(tmp_path, fake_markers, 
 
 
 def test_permission_error_is_logged_and_counted_not_raised(
-    tmp_path,
-    monkeypatch,
-    caplog,
-    write_file,
-):
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    write_file: WriteFile,
+) -> None:
     import logging
 
     write_file(tmp_path / ".dropboxignore", "build/\n")
@@ -36,18 +41,18 @@ def test_permission_error_is_logged_and_counted_not_raised(
     (tmp_path / "other").mkdir()
 
     class FailingADS:
-        def __init__(self):
-            self._ignored = set()
+        def __init__(self) -> None:
+            self._ignored: set[Path] = set()
 
-        def is_ignored(self, path):
+        def is_ignored(self, path: Path) -> bool:
             return False
 
-        def set_ignored(self, path):
+        def set_ignored(self, path: Path) -> None:
             if path.name == "build":
                 raise PermissionError("locked")
             self._ignored.add(path.resolve())
 
-        def clear_ignored(self, path):
+        def clear_ignored(self, path: Path) -> None:
             self._ignored.discard(path.resolve())
 
     failing = FailingADS()
@@ -66,18 +71,20 @@ def test_permission_error_is_logged_and_counted_not_raised(
     assert any(r.levelname == "WARNING" and "locked" in r.message for r in caplog.records)
 
 
-def test_file_not_found_during_walk_is_silently_skipped(tmp_path, monkeypatch, write_file):
+def test_file_not_found_during_walk_is_silently_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write_file: WriteFile
+) -> None:
     write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
 
     class DisappearingADS:
-        def is_ignored(self, path):
+        def is_ignored(self, path: Path) -> bool:
             raise FileNotFoundError("gone")
 
-        def set_ignored(self, path):
+        def set_ignored(self, path: Path) -> None:
             pass
 
-        def clear_ignored(self, path):
+        def clear_ignored(self, path: Path) -> None:
             pass
 
     monkeypatch.setattr(reconcile, "markers", DisappearingADS())
@@ -91,7 +98,9 @@ def test_file_not_found_during_walk_is_silently_skipped(tmp_path, monkeypatch, w
     assert report.errors == []
 
 
-def test_sweep_clears_markers_when_dropboxignore_was_deleted_offline(tmp_path, fake_markers):
+def test_sweep_clears_markers_when_dropboxignore_was_deleted_offline(
+    tmp_path: Path, fake_markers: FakeMarkers
+) -> None:
     """Offline-recovery integration: if a .dropboxignore was deleted while
     the daemon was down, the next startup sweep must clear every ADS marker
     it used to justify. No rules in cache + marker on disk = clear."""
@@ -113,7 +122,12 @@ def test_sweep_clears_markers_when_dropboxignore_was_deleted_offline(tmp_path, f
     assert report.cleared == 2
 
 
-def test_overridden_dropboxignore_logs_warning(tmp_path, fake_markers, caplog, write_file):
+def test_overridden_dropboxignore_logs_warning(
+    tmp_path: Path,
+    fake_markers: FakeMarkers,
+    caplog: pytest.LogCaptureFixture,
+    write_file: WriteFile,
+) -> None:
     """Spec: `.dropboxignore is never itself ignored` — violations are logged
     at WARNING on every reconcile and continue to be overridden."""
     import logging
@@ -135,7 +149,7 @@ def test_overridden_dropboxignore_logs_warning(tmp_path, fake_markers, caplog, w
     ), caplog.records
 
 
-def test_rejects_subdir_outside_root(tmp_path, fake_markers):
+def test_rejects_subdir_outside_root(tmp_path: Path, fake_markers: FakeMarkers) -> None:
     other = tmp_path / "other"
     other.mkdir()
     root = tmp_path / "root"

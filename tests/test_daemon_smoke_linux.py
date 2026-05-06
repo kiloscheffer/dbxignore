@@ -13,8 +13,12 @@ import os
 import sys
 import threading
 import time
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 pytestmark = pytest.mark.linux_only
 
@@ -38,7 +42,7 @@ def _xattr_supported(path) -> bool:
 
 
 @pytest.fixture(autouse=True)
-def _require_xattr_fs(tmp_path):
+def _require_xattr_fs(tmp_path: Path) -> None:
     if not _xattr_supported(tmp_path):
         pytest.skip(f"tmp_path {tmp_path} rejects user.* xattrs")
 
@@ -69,7 +73,9 @@ def _wait_for_daemon_watching(log_path, timeout_s: float = 3.0) -> bool:
     )
 
 
-def test_daemon_reacts_to_dropboxignore_add_and_remove(tmp_path, monkeypatch):
+def test_daemon_reacts_to_dropboxignore_add_and_remove(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Adding a rule marks a matching path; removing the rule clears it.
 
     Deliberately avoids the Windows smoke's negation case (``!build/keep/``)
@@ -115,7 +121,7 @@ def test_daemon_reacts_to_dropboxignore_add_and_remove(tmp_path, monkeypatch):
         t.join(timeout=5.0)
 
 
-def test_daemon_drops_conflicted_negation(tmp_path, monkeypatch):
+def test_daemon_drops_conflicted_negation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Adding `!build/keep/` after `build/` triggers the conflict-detection
     layer: the negation is dropped from the active rule set at rule-load
     time. `build/keep/` stays marked (either directly or via inheritance),

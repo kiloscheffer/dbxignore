@@ -8,11 +8,17 @@ This test pins the invariant down without faking threads."""
 from __future__ import annotations
 
 import threading
+from typing import TYPE_CHECKING
 
 from dbxignore.rules import RuleCache
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
-def test_load_root_concurrent_with_reload_and_remove(tmp_path, write_file):
+    from tests.conftest import WriteFile
+
+
+def test_load_root_concurrent_with_reload_and_remove(tmp_path: Path, write_file: WriteFile) -> None:
     for i in range(30):
         write_file(tmp_path / f"pkg{i}" / ".dropboxignore", f"build{i}/\n")
 

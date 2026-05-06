@@ -144,6 +144,52 @@ def test_discover_env_override_missing_path_warns_and_returns_empty(
     ), [rec.message for rec in caplog.records]
 
 
+def test_discover_env_override_file_path_warns_and_returns_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """DBXIGNORE_ROOT pointing at a file (not a directory) is rejected with
+    a WARNING. A file as a "root" would silently produce no-op applies and
+    fail the daemon's recursive observer schedule."""
+    import logging
+
+    file_path = tmp_path / "not-a-dir.txt"
+    file_path.write_text("", encoding="utf-8")
+    monkeypatch.setenv("DBXIGNORE_ROOT", str(file_path))
+    _clear_platform_env(monkeypatch)
+
+    with caplog.at_level(logging.WARNING, logger="dbxignore.roots"):
+        result = roots.discover()
+
+    assert result == []
+    assert any(
+        "DBXIGNORE_ROOT" in rec.message and "not a directory" in rec.message
+        for rec in caplog.records
+    ), [rec.message for rec in caplog.records]
+
+
+def test_discover_env_override_relative_path_warns_and_returns_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """DBXIGNORE_ROOT must be an absolute path. A relative path's meaning
+    drifts with the daemon's CWD — Task Scheduler, systemd, and launchd
+    all set their own working directory at launch."""
+    import logging
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "subdir").mkdir()
+    monkeypatch.setenv("DBXIGNORE_ROOT", "subdir")
+    _clear_platform_env(monkeypatch)
+
+    with caplog.at_level(logging.WARNING, logger="dbxignore.roots"):
+        result = roots.discover()
+
+    assert result == []
+    assert any(
+        "DBXIGNORE_ROOT" in rec.message and "absolute" in rec.message
+        for rec in caplog.records
+    ), [rec.message for rec in caplog.records]
+
+
 def test_discover_non_utf8_bytes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     if sys.platform == "win32":
         base = tmp_path / "AppData"

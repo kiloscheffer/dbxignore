@@ -62,9 +62,26 @@ def discover() -> list[Path]:
     override = os.environ.get("DBXIGNORE_ROOT")
     if override:
         override_path = Path(override)
+        # The override needs to be an absolute existing directory:
+        # - relative paths drift with CWD, and Task Scheduler / systemd /
+        #   launchd each pick their own daemon CWD at launch.
+        # - a file path becomes a "root" silently producing no-op applies
+        #   and breaks the watchdog observer's recursive schedule.
+        if not override_path.is_absolute():
+            logger.warning(
+                "DBXIGNORE_ROOT=%s is not an absolute path; ignoring override",
+                override_path,
+            )
+            return []
         if not override_path.exists():
             logger.warning(
                 "DBXIGNORE_ROOT=%s does not exist; ignoring override",
+                override_path,
+            )
+            return []
+        if not override_path.is_dir():
+            logger.warning(
+                "DBXIGNORE_ROOT=%s is not a directory; ignoring override",
                 override_path,
             )
             return []

@@ -74,12 +74,21 @@ def _moved_dest_under_root(event: Any, roots: list[Path]) -> tuple[Path, Path] |
     return dest_root, dest_path.resolve()
 
 
-def _classify(event: Any, roots: list[Path]) -> tuple[EventKind, str, Path, Path] | None:
-    """Classify a watchdog event and return ``(kind, key, root, resolved_src)``.
+def _classify(
+    event: Any, roots: list[Path]
+) -> tuple[EventKind, str, Path, Path, tuple[Path, Path] | None] | None:
+    """Classify a watchdog event and return
+    ``(kind, key, root, resolved_src, dest_pair)``.
 
     ``roots`` MUST already be resolved (see ``_discover_roots`` in cli.py
-    and ``run()`` below). The returned ``resolved_src`` is hoisted out of
-    ``_dispatch`` so downstream consumers don't repeat the syscall.
+    and ``run()`` below). ``resolved_src`` is hoisted out of ``_dispatch``
+    so downstream consumers don't repeat the syscall.
+
+    ``dest_pair`` is ``(dest_root, resolved_dest)`` for moved events whose
+    dest is a `.dropboxignore` under a watched root, else ``None``. Threaded
+    through so ``_dispatch`` doesn't re-run ``find_containing`` +
+    ``Path.resolve()`` on the dest path that ``_moved_dest_under_root``
+    already computed (the same cost optimization as item #43 for src).
     """
     dest_rule = _moved_dest_under_root(event, roots)
     located = _resolve_under_roots(event.src_path, roots)
@@ -97,11 +106,12 @@ def _classify(event: Any, roots: list[Path]) -> tuple[EventKind, str, Path, Path
                 f"moved-into:{str(dest).lower()}",
                 dest_root,
                 dest,
+                dest_rule,
             )
         return None
     root, src = located
     if src.name == IGNORE_FILENAME:
-        return EventKind.RULES, str(src).lower(), root, src
+        return EventKind.RULES, str(src).lower(), root, src, dest_rule
     # Moved event with src inside a root but not a rule file, dest is a rule
     # file (atomic-save: `.dropboxignore.tmp` -> `.dropboxignore`). Without
     # this branch the event lands in OTHER and the new rules don't load
@@ -120,11 +130,11 @@ def _classify(event: Any, roots: list[Path]) -> tuple[EventKind, str, Path, Path
         # on the same debouncer token, and last-wins coalesce drops
         # one event's dest-side handling.
         _, dest = dest_rule
-        return EventKind.RULES, f"moved-into:{str(dest).lower()}", root, src
+        return EventKind.RULES, f"moved-into:{str(dest).lower()}", root, src, dest_rule
     if event.event_type == "created" and event.is_directory:
-        return EventKind.DIR_CREATE, str(src).lower(), root, src
+        return EventKind.DIR_CREATE, str(src).lower(), root, src, None
     if event.event_type in ("created", "moved"):
-        return EventKind.OTHER, str(src).lower(), root, src
+        return EventKind.OTHER, str(src).lower(), root, src, None
     return None
 
 
@@ -132,7 +142,7 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
     classification = _classify(event, roots)
     if classification is None:
         return
-    kind, _key, root, src = classification
+    kind, _key, root, src, dest_pair = classification
 
     if kind is EventKind.RULES:
         if event.event_type == "deleted":
@@ -153,15 +163,38 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
             # `.dropboxignore`): the same-parent dedupe collapses to a single
             # reconcile call, which must run after the dest reload — otherwise
             # the new rules don't apply until the next event or hourly sweep.
-            src_is_rules = src.name == IGNORE_FILENAME
-            dest_located = _resolve_under_roots(event.dest_path, roots)
+            #
+            # Cross-watch synthesis: when `event.src_path` was outside all
+            # watched roots, `_classify` set `src` equal to the resolved
+            # dest path so dispatch's `src.parent` reconcile targets the
+            # correct directory. Detect that case via `src == dest_pair[1]`
+            # and skip `cache.remove_file(src)` — there was never a real
+            # cached entry on the src side to remove, and the redundant
+            # call would fire `_recompute_conflicts` an extra time.
+            src_is_rules = src.name == IGNORE_FILENAME and (
+                dest_pair is None or src != dest_pair[1]
+            )
             if src_is_rules:
                 cache.remove_file(src)
-            if dest_located is not None and dest_located[1].name == IGNORE_FILENAME:
-                cache.reload_file(dest_located[1])
+            if dest_pair is not None:
+                cache.reload_file(dest_pair[1])
             reconcile_subtree(root, src.parent, cache)
-            if dest_located is not None:
-                dest_root, dest = dest_located
+            # dest.parent reconcile: prefer the precomputed dest_pair (no
+            # extra resolve syscall — the common atomic-save and rule->rule
+            # cases). Fall back to a fresh resolve when src was a rule file
+            # but dest is non-rule (rare rule->non-rule cross-parent case,
+            # e.g. user renames `/A/.dropboxignore` to `/B/foo.bak`); the
+            # moved file lands in /B and may match rules from B's tree, so
+            # /B's reconcile must still fire.
+            dest_for_reconcile: tuple[Path, Path] | None
+            if dest_pair is not None:
+                dest_for_reconcile = dest_pair
+            elif src_is_rules:
+                dest_for_reconcile = _resolve_under_roots(event.dest_path, roots)
+            else:
+                dest_for_reconcile = None
+            if dest_for_reconcile is not None:
+                dest_root, dest = dest_for_reconcile
                 if (dest_root, dest.parent) != (root, src.parent):
                     reconcile_subtree(dest_root, dest.parent, cache)
         else:
@@ -306,7 +339,7 @@ class _WatchdogHandler(FileSystemEventHandler):
             classification = _classify(event, self._roots)
             if classification is None:
                 return
-            kind, key, root, src = classification
+            kind, key, root, src, _dest_pair = classification
             # Fast-path: a DIR_CREATE for a path already matching a cached
             # rule reconciles synchronously, skipping the debouncer queue.
             # Every millisecond of debounce widens the race window where

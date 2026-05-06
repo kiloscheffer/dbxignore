@@ -230,10 +230,44 @@ _TIMEOUT_ENV_VARS = {
 
 
 def _timeouts_from_env() -> dict[EventKind, int]:
-    return {
-        kind: int(os.environ.get(_TIMEOUT_ENV_VARS[kind], str(default)))
-        for kind, default in DEFAULT_TIMEOUTS_MS.items()
-    }
+    """Return per-kind debounce timeouts honoring the ``DBXIGNORE_DEBOUNCE_*_MS``
+    env-var overrides, with defensive parsing.
+
+    A typo (`DBXIGNORE_DEBOUNCE_OTHER_MS=fast`) or a negative value would
+    crash daemon startup if we used a bare `int(...)` — the daemon then
+    stays unreachable until the user notices and corrects the env var.
+    Validate per kind: log a WARNING naming the bad value, fall back to
+    the default. Same shape as the `DBXIGNORE_LOG_LEVEL` validation.
+    """
+    timeouts: dict[EventKind, int] = {}
+    for kind, default in DEFAULT_TIMEOUTS_MS.items():
+        env_var = _TIMEOUT_ENV_VARS[kind]
+        raw = os.environ.get(env_var)
+        if raw is None:
+            timeouts[kind] = default
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            logger.warning(
+                "%s=%r is not an integer; falling back to default %d ms.",
+                env_var,
+                raw,
+                default,
+            )
+            timeouts[kind] = default
+            continue
+        if value < 0:
+            logger.warning(
+                "%s=%d is negative; falling back to default %d ms.",
+                env_var,
+                value,
+                default,
+            )
+            timeouts[kind] = default
+            continue
+        timeouts[kind] = value
+    return timeouts
 
 
 def _log_dir() -> Path:

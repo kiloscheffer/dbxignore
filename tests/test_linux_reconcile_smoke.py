@@ -19,7 +19,7 @@ if not sys.platform.startswith("linux"):
     pytest.skip("Linux-only smoke test", allow_module_level=True)
 
 
-def _xattr_supported(path) -> bool:
+def _xattr_supported(path: Path) -> bool:
     probe = path / ".xattr_probe"
     probe.touch()
     try:

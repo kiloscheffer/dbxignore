@@ -30,7 +30,7 @@ def test_daemon_reacts_to_dropboxignore_and_directory_creation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Redirect roots.discover() to our fake dropbox root.
-    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])  # type: ignore[attr-defined]
+    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])  # type: ignore[attr-defined, unused-ignore]
     # Ensure the singleton check reads a fresh state path under tmp_path.
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
 

@@ -5,12 +5,14 @@ from __future__ import annotations
 import contextlib
 import errno
 import logging
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from dbxignore import daemon, state
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class _FakeObserver:

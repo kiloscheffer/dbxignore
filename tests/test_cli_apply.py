@@ -45,6 +45,22 @@ def test_apply_with_path_argument_scopes_reconcile(
     assert (tmp_path / "b" / "build").resolve() not in fake_markers._ignored
 
 
+def test_apply_path_does_not_exist_errors(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A typo'd path under a Dropbox root must surface as an error, not
+    silently produce `marked=0 cleared=0 errors=0` looking like success."""
+    (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    missing = tmp_path / "does_not_exist"
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["apply", str(missing), "--dry-run"])
+
+    assert result.exit_code == 2, result.output
+    assert "does not exist" in result.output
+
+
 def test_apply_from_gitignore_mounts_at_dirname(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:

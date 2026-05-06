@@ -551,3 +551,42 @@ def test_dispatch_moved_rules_to_non_rules_does_not_reload_backup(
     cache.remove_file.assert_called_once_with(src)
     cache.reload_file.assert_not_called()
     assert reconcile_calls == [(root, proj)]
+
+
+def test_timeouts_from_env_falls_back_on_invalid_value(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A typo'd env value (`DBXIGNORE_DEBOUNCE_OTHER_MS=fast`) must not
+    crash daemon startup. Parse defensively, log a WARNING naming the
+    bad value, and fall back to the default. Mirrors the existing
+    `DBXIGNORE_LOG_LEVEL` validation pattern."""
+    import logging
+
+    monkeypatch.setenv("DBXIGNORE_DEBOUNCE_OTHER_MS", "fast")
+    monkeypatch.setenv("DBXIGNORE_DEBOUNCE_RULES_MS", "150")
+
+    with caplog.at_level(logging.WARNING, logger="dbxignore.daemon"):
+        timeouts = daemon._timeouts_from_env()
+
+    assert timeouts[EventKind.OTHER] == daemon.DEFAULT_TIMEOUTS_MS[EventKind.OTHER]
+    assert timeouts[EventKind.RULES] == 150
+    assert any(
+        "DBXIGNORE_DEBOUNCE_OTHER_MS" in r.message and "fast" in r.message
+        for r in caplog.records
+    ), [r.message for r in caplog.records]
+
+
+def test_timeouts_from_env_rejects_negative_values(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Negative debounce timeouts make no sense and would underflow the
+    monotonic-deadline arithmetic in the Debouncer; warn and fall back."""
+    import logging
+
+    monkeypatch.setenv("DBXIGNORE_DEBOUNCE_RULES_MS", "-50")
+
+    with caplog.at_level(logging.WARNING, logger="dbxignore.daemon"):
+        timeouts = daemon._timeouts_from_env()
+
+    assert timeouts[EventKind.RULES] == daemon.DEFAULT_TIMEOUTS_MS[EventKind.RULES]
+    assert any("-50" in r.message for r in caplog.records)

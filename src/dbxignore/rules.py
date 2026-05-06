@@ -128,7 +128,19 @@ class RuleCache:
                 self._roots.append(root)
             seen: set[Path] = set()
             for ignore_file in root.rglob(IGNORE_FILENAME):
-                seen.add(ignore_file.resolve())
+                # Same resolve-failure shape as `_load_file`: a `.dropboxignore`
+                # discovered by rglob whose path now contains a symlink loop
+                # would crash the sweep here before `_load_if_changed` runs.
+                # Skip the stale-purge tracking for unresolvable paths;
+                # `_load_if_changed`'s own resolve failure handler logs the
+                # underlying issue.
+                try:
+                    seen.add(ignore_file.resolve())
+                except (OSError, RuntimeError) as exc:
+                    logger.warning(
+                        "Could not resolve %s during sweep: %s", ignore_file, exc
+                    )
+                    continue
                 self._load_if_changed(ignore_file)
             # Drop cached entries for .dropboxignore files under this root that
             # rglob didn't find — they've been deleted since the last load and
@@ -258,19 +270,53 @@ class RuleCache:
         at an arbitrary directory; pass ``None`` for the discovery code path
         and the source location is the cache key.
         """
+        # Resolve the cache key up front so failure arms can drop the
+        # stale entry. Without that, an already-cached file that later
+        # becomes unreadable or unparseable would keep its prior rules
+        # active in `self._rules` — the daemon's reconcile would continue
+        # marking paths the user already changed their mind about.
+        #
+        # Catch resolve failures (symlink loops raise `OSError(ELOOP)` on
+        # POSIX and `RuntimeError` on Windows / older POSIX) — without
+        # this, a `.dropboxignore` that later turns into a symlink loop
+        # would crash the sweep before any of the read/parse error arms
+        # could run.
+        try:
+            cache_key = (as_path or ignore_file).resolve()
+        except (OSError, RuntimeError) as exc:
+            logger.warning(
+                "Could not resolve %s: %s", as_path or ignore_file, exc
+            )
+            return
         try:
             lines = ignore_file.read_text(encoding="utf-8").splitlines()
             if st is None:
                 st = ignore_file.stat()
         except OSError as exc:
+            # Read errors are usually transient: editor lock, antivirus scan,
+            # backup process holding the file, brief EIO on a network drive.
+            # Keep the prior cached entry — the next sweep retries and the
+            # rules recover. Dropping on a transient error would clear the
+            # cache, the next reconcile would treat previously-ignored paths
+            # as un-rules-covered, and Dropbox would upload them to cloud
+            # before the read recovered. A permanent read failure with the
+            # file still on disk is unusual and the daemon's convergent
+            # design tolerates it; a deleted file is handled by `load_root`'s
+            # stale-purge instead.
             logger.warning("Could not read %s: %s", ignore_file, exc)
             return
         try:
             spec = _build_spec(lines)
         except (ValueError, TypeError, re.error) as exc:
+            # Parse errors mean the read succeeded but the file's content is
+            # genuinely broken — the user edited it into an invalid state.
+            # Drop the cached entry so stale rules stop applying; the daemon
+            # then treats the rule file as if it were empty until the next
+            # valid edit. Without this, the daemon would keep applying the
+            # last-known-good rules to a file the user already changed.
             logger.warning("Invalid .dropboxignore at %s: %s", ignore_file, exc)
+            self._rules.pop(cache_key, None)
             return
-        cache_key = (as_path or ignore_file).resolve()
         self._rules[cache_key] = _LoadedRules(
             lines=lines,
             entries=_build_entries(lines, spec),

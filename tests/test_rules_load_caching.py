@@ -5,13 +5,14 @@ safety net — rglob finds new files — but already-cached files stay put."""
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING
+
+import pytest
 
 from dbxignore.rules import RuleCache
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from tests.conftest import WriteFile
 
 
@@ -129,3 +130,106 @@ def test_load_root_picks_up_newly_created_file(tmp_path: Path, write_file: Write
     assert new_ignore.resolve() in cache._rules
     (tmp_path / "proj" / "tmp").mkdir()
     assert cache.match(tmp_path / "proj" / "tmp") is True
+
+
+def test_load_root_drops_cached_entry_when_file_becomes_invalid(
+    tmp_path: Path, write_file: WriteFile
+) -> None:
+    """A previously valid .dropboxignore that's later edited into an
+    unparseable state must NOT keep its old rules active. Without this,
+    the daemon would continue applying stale ignore markers to paths
+    the user already changed their mind about, propagating cloud-sync
+    deletions for paths the rules no longer cover."""
+    ignore = write_file(tmp_path / ".dropboxignore", "build/\n")
+    (tmp_path / "build").mkdir()
+
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+    assert cache.match(tmp_path / "build") is True
+
+    # Overwrite with valid bytes (so the read succeeds) but monkeypatch
+    # `_build_spec` to raise — pathspec is too liberal to reliably reject
+    # arbitrary text, so injecting the failure at the parser is the
+    # robust way to exercise the parse-error arm. Bump mtime so
+    # `_load_if_changed` notices and reparses.
+    ignore.write_text("changed\n", encoding="utf-8")
+    os.utime(ignore, (ignore.stat().st_atime, ignore.stat().st_mtime + 60))
+    # Force-trip the bulk-parse path via a simulated parse error.
+    from dbxignore import rules as rules_module
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+
+        def _raise(_lines: list[str]) -> object:
+            raise ValueError("test-induced parse failure")
+
+        monkeypatch.setattr(rules_module, "_build_spec", _raise)
+        cache.load_root(tmp_path)
+
+    assert cache.match(tmp_path / "build") is False, (
+        "stale rules should not survive a parse failure on the cached file"
+    )
+
+
+def test_load_file_does_not_crash_on_resolve_failure(
+    tmp_path: Path, write_file: WriteFile, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`Path.resolve()` raises on symlink loops — `OSError(ELOOP)` on POSIX,
+    `RuntimeError` on Windows / older POSIX. The cache-key resolve at the
+    top of `_load_file` must catch both so a `.dropboxignore` that later
+    turns into a symlink loop doesn't crash the sweep before the read /
+    parse error arms can run.
+
+    Symlink loops are awkward to create cross-platform; mock the resolve
+    to raise instead. Same shape under the hood."""
+    write_file(tmp_path / ".dropboxignore", "build/\n")
+    real_resolve = Path.resolve
+
+    def _raising_resolve(self: Path, *args: object, **kwargs: object) -> Path:
+        if self.name == ".dropboxignore":
+            raise RuntimeError("Symlink loop")
+        return real_resolve(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "resolve", _raising_resolve)
+
+    cache = RuleCache()
+    # Must not raise. `load_root` calls `.resolve()` directly too, so we
+    # exercise `_load_file` via `_load_if_changed` from a separate seam.
+    cache._load_file(tmp_path / ".dropboxignore")
+
+
+def test_load_root_preserves_cached_entry_on_transient_read_error(
+    tmp_path: Path, write_file: WriteFile, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient read error (editor lock, antivirus scan, brief EIO on a
+    network drive) must NOT drop the cached entry. Dropping would treat
+    every flap as confirmed corruption, the next reconcile would see the
+    rule file as empty, and Dropbox would upload previously-ignored paths
+    to cloud before the read recovered. Recovery should happen naturally
+    on the next sweep when the read succeeds again — convergent design.
+    Codex review on PR #124 caught the original drop-on-OSError as worse
+    than the staleness it was meant to fix."""
+    import errno
+
+    ignore = write_file(tmp_path / ".dropboxignore", "build/\n")
+    (tmp_path / "build").mkdir()
+
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+    assert cache.match(tmp_path / "build") is True
+
+    # Bump the file's mtime so `_load_if_changed` reparses, then patch
+    # `Path.read_text` to raise EIO on the rule file specifically.
+    os.utime(ignore, (ignore.stat().st_atime, ignore.stat().st_mtime + 60))
+    real_read_text = Path.read_text
+
+    def _read_text(self: Path, *args: object, **kwargs: object) -> str:
+        if self.resolve() == ignore.resolve():
+            raise OSError(errno.EIO, "Input/output error")
+        return real_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", _read_text)
+    cache.load_root(tmp_path)
+
+    assert cache.match(tmp_path / "build") is True, (
+        "transient read error should not drop the last-known-good rule cache"
+    )

@@ -293,12 +293,27 @@ class RuleCache:
             if st is None:
                 st = ignore_file.stat()
         except OSError as exc:
+            # Read errors are usually transient: editor lock, antivirus scan,
+            # backup process holding the file, brief EIO on a network drive.
+            # Keep the prior cached entry — the next sweep retries and the
+            # rules recover. Dropping on a transient error would clear the
+            # cache, the next reconcile would treat previously-ignored paths
+            # as un-rules-covered, and Dropbox would upload them to cloud
+            # before the read recovered. A permanent read failure with the
+            # file still on disk is unusual and the daemon's convergent
+            # design tolerates it; a deleted file is handled by `load_root`'s
+            # stale-purge instead.
             logger.warning("Could not read %s: %s", ignore_file, exc)
-            self._rules.pop(cache_key, None)
             return
         try:
             spec = _build_spec(lines)
         except (ValueError, TypeError, re.error) as exc:
+            # Parse errors mean the read succeeded but the file's content is
+            # genuinely broken — the user edited it into an invalid state.
+            # Drop the cached entry so stale rules stop applying; the daemon
+            # then treats the rule file as if it were empty until the next
+            # valid edit. Without this, the daemon would keep applying the
+            # last-known-good rules to a file the user already changed.
             logger.warning("Invalid .dropboxignore at %s: %s", ignore_file, exc)
             self._rules.pop(cache_key, None)
             return

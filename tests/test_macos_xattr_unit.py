@@ -13,9 +13,13 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 if sys.platform == "win32":
     pytest.skip("xattr package not installable on Windows", allow_module_level=True)
@@ -95,7 +99,7 @@ def test_is_ignored_rejects_relative_path() -> None:
 
 
 @pytest.fixture
-def legacy_mode(monkeypatch):
+def legacy_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Force `_detected_attr_names()` to return [ATTR_LEGACY] for one test.
 
     Pins the single-attr legacy-write behavior regardless of the host's

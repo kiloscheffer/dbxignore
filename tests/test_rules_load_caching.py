@@ -197,12 +197,17 @@ def test_load_file_does_not_crash_on_resolve_failure(
     cache._load_file(tmp_path / ".dropboxignore")
 
 
-def test_load_root_drops_cached_entry_when_file_becomes_unreadable(
+def test_load_root_preserves_cached_entry_on_transient_read_error(
     tmp_path: Path, write_file: WriteFile, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Same shape as the parse-failure test but for the read-side OSError
-    arm: a cached `.dropboxignore` whose later read fails must drop
-    its entry, not keep applying stale rules."""
+    """A transient read error (editor lock, antivirus scan, brief EIO on a
+    network drive) must NOT drop the cached entry. Dropping would treat
+    every flap as confirmed corruption, the next reconcile would see the
+    rule file as empty, and Dropbox would upload previously-ignored paths
+    to cloud before the read recovered. Recovery should happen naturally
+    on the next sweep when the read succeeds again — convergent design.
+    Codex review on PR #124 caught the original drop-on-OSError as worse
+    than the staleness it was meant to fix."""
     import errno
 
     ignore = write_file(tmp_path / ".dropboxignore", "build/\n")
@@ -225,6 +230,6 @@ def test_load_root_drops_cached_entry_when_file_becomes_unreadable(
     monkeypatch.setattr(Path, "read_text", _read_text)
     cache.load_root(tmp_path)
 
-    assert cache.match(tmp_path / "build") is False, (
-        "stale rules should not survive a read failure on the cached file"
+    assert cache.match(tmp_path / "build") is True, (
+        "transient read error should not drop the last-known-good rule cache"
     )

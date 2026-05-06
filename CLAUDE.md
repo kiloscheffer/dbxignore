@@ -124,3 +124,17 @@ Specs and plans are kept side-by-side under `docs/superpowers/{specs,plans}/`, n
 - A `**Validated <date> (v<X.Y.Z>).**` paragraph in a backlog item's body is distinct from the `Status: RESOLVED` line: RESOLVED = code merged; Validated = user-observable effect confirmed in the wild (e.g. beta-tester pass against a specific tag). Useful for items that ship across alpha cycles where merge and validation happen in different versions. Item #33 is the canonical example.
 - When filing-and-resolving a backlog item in the same PR, predict the PR # for the inline `Status: RESOLVED ... (PR #<N>).` marker via `gh pr list --state all --limit 1` plus `gh issue list --state all --limit 1` (next available is `max(numbers) + 1`). Project's low parallel-PR activity makes prediction reliable; verify after `gh pr create` and amend the marker if wrong (rare, but happens if multiple PRs/issues open simultaneously).
 - A tracker item's prescribed fix can be at the wrong layer — verify against current code/docs before executing. Twice-validated: item 21 framed the fix as `_backends/windows_ads.is_ignored` but the right layer was `reconcile._reconcile_path` (covers Linux ENOTSUP-on-read too); item 22 prescribed "rewrite the paragraph" but the README's top-level `## Upgrading from v0.2.x` section already had the correct content, so the fix was deletion. Read the surrounding code or docs before assuming the prescribed fix is right; record the framing correction in the inline RESOLVED marker so future readers see it.
+
+## How to run checks
+
+Use these commands before claiming a change is safe:
+
+```bash
+uv run mypy .
+uv run ruff check . --fix
+uv run ruff check .
+uv run ruff format .
+uv run python -m pytest
+```
+
+If a tool is not installed, say so and continue with the available checks.

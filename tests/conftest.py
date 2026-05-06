@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING, Protocol
 
 import pytest
 
 from dbxignore import cli, reconcile
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+class WriteFile(Protocol):
+    """Callable shape for the `write_file` fixture: `(path[, content])` -> Path."""
+
+    def __call__(self, path: Path, content: str = ...) -> Path: ...
 
 
 class FakeMarkers:
@@ -32,7 +41,7 @@ class FakeMarkers:
 
 
 @pytest.fixture
-def fake_markers(monkeypatch):
+def fake_markers(monkeypatch: pytest.MonkeyPatch) -> FakeMarkers:
     """Replace ``markers`` in both ``reconcile`` and ``cli`` with a shared FakeMarkers."""
     fake = FakeMarkers()
     monkeypatch.setattr(reconcile, "markers", fake)
@@ -41,7 +50,7 @@ def fake_markers(monkeypatch):
 
 
 @pytest.fixture
-def write_file():
+def write_file() -> WriteFile:
     """Write a file, creating parent dirs; returns a callable ``(path, content="")``."""
 
     def _write(path: Path, content: str = "") -> Path:

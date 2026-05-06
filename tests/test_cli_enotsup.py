@@ -3,13 +3,26 @@
 from __future__ import annotations
 
 import errno
+from typing import TYPE_CHECKING
 
 from click.testing import CliRunner
 
 from dbxignore import cli
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
-def test_list_survives_enotsup(tmp_path, fake_markers, monkeypatch, write_file):
+    import pytest
+
+    from tests.conftest import FakeMarkers, WriteFile
+
+
+def test_list_survives_enotsup(
+    tmp_path: Path,
+    fake_markers: FakeMarkers,
+    monkeypatch: pytest.MonkeyPatch,
+    write_file: WriteFile,
+) -> None:
     """A file whose is_ignored raises OSError(ENOTSUP) must be skipped, not crash the walk."""
     root = tmp_path
     good = write_file(root / "good.txt")
@@ -17,7 +30,7 @@ def test_list_survives_enotsup(tmp_path, fake_markers, monkeypatch, write_file):
 
     real_is_ignored = fake_markers.is_ignored
 
-    def selective_raise(path):
+    def selective_raise(path: Path) -> bool:
         if path.resolve() == bad.resolve():
             raise OSError(errno.ENOTSUP, "Operation not supported")
         return real_is_ignored(path)

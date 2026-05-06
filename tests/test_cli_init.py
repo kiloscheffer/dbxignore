@@ -5,13 +5,16 @@ content always written (Strategy 1), --force overwrite, --stdout preview,
 out-of-dir error, and the no-detection / detection annotation paths.
 """
 
+from pathlib import Path
+
+import pytest
 from click.testing import CliRunner
 
 from dbxignore import cli
 from dbxignore.rules import IGNORE_FILENAME
 
 
-def test_init_writes_full_template_to_dropboxignore(tmp_path):
+def test_init_writes_full_template_to_dropboxignore(tmp_path: Path) -> None:
     """Happy path: scaffold writes the full packaged template into <path>/.dropboxignore."""
     runner = CliRunner()
     result = runner.invoke(cli.main, ["init", str(tmp_path)])
@@ -32,7 +35,7 @@ def test_init_writes_full_template_to_dropboxignore(tmp_path):
     assert "target/" in content
 
 
-def test_init_header_lists_detected_dirs(tmp_path):
+def test_init_header_lists_detected_dirs(tmp_path: Path) -> None:
     """Detection header annotates which marker-bait dirs were found."""
     (tmp_path / "proj" / "node_modules").mkdir(parents=True)
     (tmp_path / "proj" / "__pycache__").mkdir()
@@ -47,7 +50,7 @@ def test_init_header_lists_detected_dirs(tmp_path):
     assert "__pycache__" in content.splitlines()[1]
 
 
-def test_init_header_says_no_detection_when_empty(tmp_path):
+def test_init_header_says_no_detection_when_empty(tmp_path: Path) -> None:
     """Empty / non-dev tree → header says 'no common dev artifacts detected'."""
     (tmp_path / "docs").mkdir()
     (tmp_path / "notes.txt").touch()
@@ -60,7 +63,7 @@ def test_init_header_says_no_detection_when_empty(tmp_path):
     assert "# No common dev artifacts detected" in content
 
 
-def test_init_detection_walks_to_depth_3_only(tmp_path):
+def test_init_detection_walks_to_depth_3_only(tmp_path: Path) -> None:
     """node_modules at depth 4 is NOT detected; depth 3 is."""
     # depth-3 hit
     (tmp_path / "a" / "b" / "node_modules").mkdir(parents=True)
@@ -77,7 +80,7 @@ def test_init_detection_walks_to_depth_3_only(tmp_path):
     assert "__pycache__" not in header_line
 
 
-def test_init_does_not_descend_into_matched_dir(tmp_path):
+def test_init_does_not_descend_into_matched_dir(tmp_path: Path) -> None:
     """Marker-bait dirs are matched but not walked into — a node_modules
     tree containing a million more node_modules entries is detected once,
     not many times. Verified via deduplication in the header line."""
@@ -95,7 +98,7 @@ def test_init_does_not_descend_into_matched_dir(tmp_path):
     assert "__pycache__" not in header_line
 
 
-def test_init_refuses_to_overwrite_without_force(tmp_path):
+def test_init_refuses_to_overwrite_without_force(tmp_path: Path) -> None:
     """Existing .dropboxignore → error exit 2, file untouched."""
     existing = tmp_path / IGNORE_FILENAME
     existing.write_text("custom content\n", encoding="utf-8")
@@ -110,7 +113,7 @@ def test_init_refuses_to_overwrite_without_force(tmp_path):
     assert existing.read_text(encoding="utf-8") == "custom content\n"
 
 
-def test_init_force_overwrites(tmp_path):
+def test_init_force_overwrites(tmp_path: Path) -> None:
     """--force replaces an existing .dropboxignore."""
     existing = tmp_path / IGNORE_FILENAME
     existing.write_text("custom content\n", encoding="utf-8")
@@ -124,7 +127,7 @@ def test_init_force_overwrites(tmp_path):
     assert "node_modules/" in new_content
 
 
-def test_init_stdout_does_not_write_file(tmp_path):
+def test_init_stdout_does_not_write_file(tmp_path: Path) -> None:
     """--stdout prints to stdout and leaves the filesystem untouched."""
     runner = CliRunner()
     result = runner.invoke(cli.main, ["init", str(tmp_path), "--stdout"])
@@ -134,7 +137,7 @@ def test_init_stdout_does_not_write_file(tmp_path):
     assert not (tmp_path / IGNORE_FILENAME).exists()
 
 
-def test_init_path_not_a_directory_errors(tmp_path):
+def test_init_path_not_a_directory_errors(tmp_path: Path) -> None:
     """A path that's not a directory → exit 2 (click's path-type guard)."""
     bad = tmp_path / "notadir.txt"
     bad.touch()
@@ -145,7 +148,7 @@ def test_init_path_not_a_directory_errors(tmp_path):
     assert result.exit_code == 2
 
 
-def test_init_default_path_is_cwd(tmp_path, monkeypatch):
+def test_init_default_path_is_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Omitting PATH defaults to cwd — verify by chdir-ing and running unscoped."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "build").mkdir()
@@ -159,7 +162,7 @@ def test_init_default_path_is_cwd(tmp_path, monkeypatch):
     assert "build" in content.splitlines()[1]  # detection header line
 
 
-def test_load_default_template_is_non_empty():
+def test_load_default_template_is_non_empty() -> None:
     """The packaged template ships and loads via importlib.resources."""
     template = cli._load_default_template()
     assert len(template) > 100
@@ -170,7 +173,7 @@ def test_load_default_template_is_non_empty():
     assert ".DS_Store" in template
 
 
-def test_format_init_output_combines_header_and_template():
+def test_format_init_output_combines_header_and_template() -> None:
     """Helper produces header + blank line + template body, in that order."""
     template = "node_modules/\n*.pyc\n"
     out = cli._format_init_output(template, detected=["node_modules"])

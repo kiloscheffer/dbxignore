@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 import threading
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import pathspec
-from pathspec.patterns.gitwildmatch import GitIgnoreSpecPattern
+from pathspec.patterns.gitwildmatch import GitIgnoreSpecPattern  # type: ignore[attr-defined]
 
 from dbxignore.roots import find_containing
-from dbxignore.rules_conflicts import Conflict, _detect_conflicts
+from dbxignore.rules_conflicts import Conflict as Conflict
+from dbxignore.rules_conflicts import _detect_conflicts
+
+if TYPE_CHECKING:
+    import os
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +32,14 @@ class _CaseInsensitiveGitIgnorePattern(GitIgnoreSpecPattern):
     """
 
     @classmethod
-    def pattern_to_regex(cls, pattern: str) -> tuple[str | None, bool | None]:
+    def pattern_to_regex(  # type: ignore[override]
+        cls, pattern: str
+    ) -> tuple[str | None, bool | None]:
+        # The parent (`pathspec.pattern.RegexPattern`) types `pattern` as
+        # `AnyStr` to allow both bytes and str patterns; the gitwildmatch
+        # subclass we extend only ever receives str at runtime, so we narrow
+        # the override to `str` for clarity and accept the type-checker
+        # complaint about variance (`# type: ignore[override]` above).
         regex, include = super().pattern_to_regex(pattern)
         if regex is not None:
             regex = f"(?i){regex}"
@@ -342,7 +352,11 @@ class RuleCache:
         new_conflicts: list[Conflict] = []
         for root in self._roots:
             sequence = self._build_sequence(root)
-            for c in _detect_conflicts(sequence, root=root):
+            # `_SequenceEntry` is structurally identical to the
+            # `_SequenceEntryLike` Protocol that `_detect_conflicts` declares,
+            # but mypy treats Protocols defined in another module as a
+            # distinct nominal type for invariance purposes.
+            for c in _detect_conflicts(sequence, root=root):  # type: ignore[arg-type]
                 new_conflicts.append(c)
                 # _build_sequence stores line=line_idx+1 (1-based); _dropped
                 # is keyed by 0-based line_idx because that's what

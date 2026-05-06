@@ -3,13 +3,13 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-import psutil
+import psutil  # type: ignore[import-untyped]
 import pytest
 
 from dbxignore import state
 
 
-def test_roundtrip(tmp_path):
+def test_roundtrip(tmp_path: Path) -> None:
     s = state.State(
         daemon_pid=1234,
         daemon_started=datetime(2026, 4, 20, 9, 0, tzinfo=UTC),
@@ -28,17 +28,17 @@ def test_roundtrip(tmp_path):
     assert loaded == s
 
 
-def test_read_missing_returns_none(tmp_path):
+def test_read_missing_returns_none(tmp_path: Path) -> None:
     assert state.read(tmp_path / "does_not_exist.json") is None
 
 
-def test_read_corrupt_returns_none(tmp_path):
+def test_read_corrupt_returns_none(tmp_path: Path) -> None:
     p = tmp_path / "state.json"
     p.write_text("not json", encoding="utf-8")
     assert state.read(p) is None
 
 
-def test_write_leaves_no_tmp_file(tmp_path):
+def test_write_leaves_no_tmp_file(tmp_path: Path) -> None:
     """Atomic write: state.json.tmp must be renamed away on success."""
     p = tmp_path / "state.json"
     state.write(state.State(daemon_pid=1), p)
@@ -46,16 +46,20 @@ def test_write_leaves_no_tmp_file(tmp_path):
     assert not (tmp_path / "state.json.tmp").exists()
 
 
-def test_write_overwrites_stale_tmp(tmp_path):
+def test_write_overwrites_stale_tmp(tmp_path: Path) -> None:
     """A leaked tmp from a prior crash must not break the next write."""
     p = tmp_path / "state.json"
     (tmp_path / "state.json.tmp").write_text("garbage from crash", encoding="utf-8")
     state.write(state.State(daemon_pid=2), p)
-    assert state.read(p).daemon_pid == 2
+    s = state.read(p)
+    assert s is not None
+    assert s.daemon_pid == 2
     assert not (tmp_path / "state.json.tmp").exists()
 
 
-def test_write_parse_back_rejects_invalid_json(monkeypatch, tmp_path):
+def test_write_parse_back_rejects_invalid_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """A future serializer regression that produces malformed JSON must not
     reach state.json — parse-back validation should raise and unlink the tmp,
     leaving any prior state.json untouched."""
@@ -71,7 +75,7 @@ def test_write_parse_back_rejects_invalid_json(monkeypatch, tmp_path):
     assert not (tmp_path / "state.json.tmp").exists()
 
 
-def test_read_shape_mismatch_missing_subkey_returns_none(tmp_path):
+def test_read_shape_mismatch_missing_subkey_returns_none(tmp_path: Path) -> None:
     """Valid JSON but last_error missing a required sub-key (KeyError arm)."""
     p = tmp_path / "state.json"
     p.write_text(
@@ -81,14 +85,14 @@ def test_read_shape_mismatch_missing_subkey_returns_none(tmp_path):
     assert state.read(p) is None
 
 
-def test_read_shape_mismatch_wrong_type_returns_none(tmp_path):
+def test_read_shape_mismatch_wrong_type_returns_none(tmp_path: Path) -> None:
     """Valid JSON but last_error is a string, not a dict (TypeError arm)."""
     p = tmp_path / "state.json"
     p.write_text('{"last_error": "oops"}', encoding="utf-8")
     assert state.read(p) is None
 
 
-def test_read_shape_mismatch_bad_datetime_returns_none(tmp_path):
+def test_read_shape_mismatch_bad_datetime_returns_none(tmp_path: Path) -> None:
     """Valid JSON but a stored datetime fails to parse (ValueError arm)."""
     p = tmp_path / "state.json"
     p.write_text('{"daemon_started": "not-a-datetime"}', encoding="utf-8")
@@ -98,12 +102,12 @@ def test_read_shape_mismatch_bad_datetime_returns_none(tmp_path):
 # ---- is_daemon_alive (followup item 59) -------------------------------------
 
 
-def test_is_daemon_alive_none_pid_returns_false():
+def test_is_daemon_alive_none_pid_returns_false() -> None:
     """No recorded pid → not alive (no state.json or pid never written)."""
     assert state.is_daemon_alive(None) is False
 
 
-def test_is_daemon_alive_dead_pid_returns_false(monkeypatch):
+def test_is_daemon_alive_dead_pid_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
     """psutil reports the PID doesn't exist → False, no Process construction."""
     monkeypatch.setattr(psutil, "pid_exists", lambda pid: False)
     # Sentinel that would raise if reached — pid_exists False must short-circuit.
@@ -115,17 +119,19 @@ def test_is_daemon_alive_dead_pid_returns_false(monkeypatch):
     assert state.is_daemon_alive(99999) is False
 
 
-def test_is_daemon_alive_recycled_pid_returns_false_for_unrelated_process(monkeypatch):
+def test_is_daemon_alive_recycled_pid_returns_false_for_unrelated_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """PID is alive but the process at that PID isn't a dbxignore daemon —
     the PID was reused by something else (firefox, svchost, etc.). The
     bare-existence check would say "alive"; the process-name guard catches
     the false positive (followup item 59)."""
 
     class _FakeProc:
-        def __init__(self, _pid):
+        def __init__(self, _pid: int) -> None:
             pass
 
-        def name(self):
+        def name(self) -> str:
             return "firefox.exe"
 
     monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
@@ -133,15 +139,15 @@ def test_is_daemon_alive_recycled_pid_returns_false_for_unrelated_process(monkey
     assert state.is_daemon_alive(12345) is False
 
 
-def test_is_daemon_alive_python_process_returns_true(monkeypatch):
+def test_is_daemon_alive_python_process_returns_true(monkeypatch: pytest.MonkeyPatch) -> None:
     """Source-run daemon: process is python (or python3, pythonw.exe, etc.).
     Match is case-insensitive and substring-based so all common variants pass."""
 
     class _FakeProc:
-        def __init__(self, _pid):
+        def __init__(self, _pid: int) -> None:
             pass
 
-        def name(self):
+        def name(self) -> str:
             return "Python3.11"
 
     monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
@@ -149,16 +155,16 @@ def test_is_daemon_alive_python_process_returns_true(monkeypatch):
     assert state.is_daemon_alive(12345) is True
 
 
-def test_is_daemon_alive_dbxignored_process_returns_true(monkeypatch):
+def test_is_daemon_alive_dbxignored_process_returns_true(monkeypatch: pytest.MonkeyPatch) -> None:
     """Frozen PyInstaller install: process is dbxignored.exe (or dbxignored
     on macOS/Linux). The 'd' suffix distinguishes the daemon binary from
     the dbxignore CLI binary."""
 
     class _FakeProc:
-        def __init__(self, _pid):
+        def __init__(self, _pid: int) -> None:
             pass
 
-        def name(self):
+        def name(self) -> str:
             return "dbxignored.exe"
 
     monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
@@ -166,15 +172,15 @@ def test_is_daemon_alive_dbxignored_process_returns_true(monkeypatch):
     assert state.is_daemon_alive(12345) is True
 
 
-def test_is_daemon_alive_psutil_error_returns_false(monkeypatch):
+def test_is_daemon_alive_psutil_error_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
     """psutil.Process(pid).name() raises (NoSuchProcess if the PID died
     between pid_exists and the name call) → False. Race-window safety net."""
 
     class _FakeProc:
-        def __init__(self, _pid):
+        def __init__(self, _pid: int) -> None:
             pass
 
-        def name(self):
+        def name(self) -> str:
             raise psutil.NoSuchProcess(12345)
 
     monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
@@ -183,19 +189,25 @@ def test_is_daemon_alive_psutil_error_returns_false(monkeypatch):
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows path layout")
-def test_default_path_windows_under_localappdata(monkeypatch, tmp_path):
+def test_default_path_windows_under_localappdata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     assert state.default_path() == tmp_path / "dbxignore" / "state.json"
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux path layout")
-def test_default_path_linux_uses_xdg_state_home(monkeypatch, tmp_path):
+def test_default_path_linux_uses_xdg_state_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     assert state.default_path() == tmp_path / "state" / "dbxignore" / "state.json"
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux path layout")
-def test_default_path_linux_falls_back_to_local_state(monkeypatch, tmp_path):
+def test_default_path_linux_falls_back_to_local_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.delenv("XDG_STATE_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     assert state.default_path() == tmp_path / ".local" / "state" / "dbxignore" / "state.json"

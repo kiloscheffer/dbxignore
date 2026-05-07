@@ -1500,6 +1500,8 @@ The contract being verified: a glob-prefix negation like `!**/foo/` should still
 
 **Urgency:** low. Polish — the contract holds today; this would lock it down against future refactors of `literal_prefix()` semantics.
 
+**Status: RESOLVED 2026-05-08 (PR #142).** Added `test_rulecache_no_conflict_for_glob_prefix_negation` in `tests/test_rules_reload_explain.py`. The test loads `**/foo/\n!**/foo/bar/\n` via real `RuleCache.load_root` and asserts `cache.conflicts() == []`, mirroring the synthetic-shim `test_detect_skips_glob_prefix_negation`. A future `literal_prefix()` refactor that started returning non-`None` for glob-prefix patterns would route this case into the strict-ancestor branch, flag it as conflict, and break this assertion — that's the regression-guard contract. The simpler one-pattern shape suffices because the early-exit at `rules_conflicts.py:237-238` is what gates entry into the post-PR-#108 branch; the body's "repeat with `build/*` + `!**/keep/` for symmetry" suggestion was redundant once the early-exit is the locked-down invariant.
+
 Touches: `tests/test_rules_reload_explain.py` (new test).
 
 ## 70. `dbxignore explain` lacks verdict-driven exit codes for shell scripting
@@ -1784,7 +1786,7 @@ Touches: `src/dbxignore/install/linux_systemd.py` (ExecStart construction), `tes
 
 ### Open
 
-Nineteen items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Eighteen items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
@@ -1800,12 +1802,15 @@ Nineteen items. All passive (no concrete trigger requires action) — bundle eac
 - **#54** — Watchdog observer's recursive watch schedules one inotify watch per directory under `~/Dropbox`, including marked-ignored subtrees. Architectural fix (per-directory watches with mark/unmark lifecycle) is ~200 LOC of race-condition-prone state-machine work; deferred until a beta tester hits the watch ceiling on a system with limits already raised.
 - **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall.
 - **#68** — `dbxignore status --summary` runs the full `_load_cache(discovered).conflicts()` walk every poll. Status-bar widgets polling at high cadence pay an rglob over `.dropboxignore` files per tick. Three fix candidates filed in the body (skip conflict walk in summary mode / cache count in state.json / mtime-gated rebuild). Surfaced by `/simplify` review of PR #99's hoist, no user report yet.
-- **#69** — No real-pathspec regression test for glob-prefix negations through the post-PR-#108 detector branch. `tests/test_rules_conflicts.py::test_detect_skips_glob_prefix_negation` covers the `literal_prefix() == None` early-exit via the shim, but doesn't pin that the new `is_directory_negation` / strict-ancestor branch is correctly bypassed for `!**/foo/`. Defensive lock-down against future `literal_prefix()` refactors. Surfaced by `pr-test-analyzer` review of PR #108.
 - **#74** — GitHub Actions pinned to mutable major-version tags (`@v4`, `@v1`, `@v2.6.0`, `@release/v1`) rather than 40-char SHAs across all workflow files. Speculative security hardening — switching to SHAs would be a project-wide convention shift requiring a Dependabot maintenance practice. Surfaced 2026-05-05 in `code-reviewer` review of PR #111. No observed incident or specific pressure.
 - **#75** — `phase_extended_cli()` body byte-identical between `manual-test-{ubuntu-vps,macos}.sh` (~120 LOC duplicated). Could extract to `scripts/_phase_extended_cli.sh` and `source` from both. Trade-off is duplication-vs-platform-conditional balance; only two scripts share (Windows is PowerShell). Surfaced 2026-05-05 in `/simplify` review of PRs #114 + #115.
 - **#76** — Conflict detector skips negations whose pattern starts with a glob (`**/foo/bar/`, `foo*/bar/`); `RuleCache.match()` then reports such paths as not-ignored even though Dropbox inheritance makes them ignored on disk. Marker behavior is correct (reconcile evaluates per-file `match()`); the bug surface is `status` / `explain` diagnostics. Three fix candidates filed in the body (conservative drop / targeted detection / warn-only). Surfaced 2026-05-05 in code review of the daemon classification path.
 - **#77** — Debouncer key disambiguation in `_classify` relies on string prefixing (`moved-into:` added in PR #120) rather than a structured tuple shape. The remaining first-vs-second-shape collision (move-out + created/modified on the same `.dropboxignore` within 100ms) still ships. Three fix candidates: structured tuple key (preferred), per-role queues, status-quo-plus-audit-comment. Surfaced 2026-05-05 in Codex review of PR #120.
 ### Resolved (reverse chronological)
+
+#### 2026-05-08
+
+- **#69** in PR #142 — added `test_rulecache_no_conflict_for_glob_prefix_negation` in `tests/test_rules_reload_explain.py`. Real-pathspec counterpart to the shim-based `test_detect_skips_glob_prefix_negation`: loads `**/foo/\n!**/foo/bar/\n` via `RuleCache.load_root` and asserts `cache.conflicts() == []`. Locks down the `literal_prefix() == None` early-exit at `rules_conflicts.py:237-238` against future refactors that would route glob-prefix negations into the strict-ancestor branch.
 
 #### 2026-05-07
 

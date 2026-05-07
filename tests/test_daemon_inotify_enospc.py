@@ -67,7 +67,7 @@ def _install_fakes(
     monkeypatch.setattr(daemon, "Observer", lambda: fake_observer)
     monkeypatch.setattr(daemon, "Debouncer", lambda **kw: fake_debouncer)
     monkeypatch.setattr(daemon, "_configured_logging", contextlib.nullcontext)
-    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])
+    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])  # type: ignore[attr-defined, unused-ignore]
     monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")
     return fake_observer, fake_debouncer
 
@@ -90,4 +90,40 @@ def test_run_traps_enospc_and_exits_75(
     assert "fs.inotify.max_user_watches=524288" in messages
     assert "ENOSPC" in messages
     # Outer finally must run despite SystemExit so the debouncer thread is stopped.
+    assert fake_debouncer.calls == ["start", "stop"]
+
+
+def test_run_traps_emfile_and_exits_75(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """EMFILE at observer.start() → ERROR log with instances sysctl + sys.exit(75)."""
+    err = OSError(errno.EMFILE, "Too many open files")
+    _, fake_debouncer = _install_fakes(monkeypatch, tmp_path, start_error=err)
+
+    caplog.set_level(logging.ERROR, logger="dbxignore.daemon")
+    with pytest.raises(SystemExit) as exc_info:
+        daemon.run()
+
+    assert exc_info.value.code == 75
+    messages = "\n".join(rec.message for rec in caplog.records)
+    assert "fs.inotify.max_user_instances=1024" in messages
+    assert "EMFILE" in messages
+    assert fake_debouncer.calls == ["start", "stop"]
+
+
+def test_run_propagates_unknown_oserror(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A non-trapped errno (e.g. EIO) propagates as OSError, not SystemExit."""
+    err = OSError(errno.EIO, "I/O error")
+    _, fake_debouncer = _install_fakes(monkeypatch, tmp_path, start_error=err)
+
+    with pytest.raises(OSError) as exc_info:
+        daemon.run()
+
+    assert exc_info.value.errno == errno.EIO
+    # Outer finally still runs despite the propagating OSError.
     assert fake_debouncer.calls == ["start", "stop"]

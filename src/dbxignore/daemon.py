@@ -401,24 +401,14 @@ def _is_other_live_daemon(pid: int | None) -> bool:
 
 
 def _start_observer_or_exit(observer: BaseObserver) -> None:
-    """Start ``observer``; trap kernel-watch-resource exhaustion and exit cleanly.
+    """Start ``observer``; trap inotify watch/instance exhaustion and exit 75.
 
-    inotify's per-user limits surface here on Linux when a Dropbox tree
-    exceeds ``fs.inotify.max_user_watches`` (raises ``OSError(ENOSPC)``)
-    or ``fs.inotify.max_user_instances`` (raises ``OSError(EMFILE)``).
-    Without this trap the daemon dies with an opaque traceback in journalctl.
+    Trapped errnos (ENOSPC, EMFILE) emit ERROR with a sysctl runbook then
+    ``sys.exit(75)`` (POSIX ``EX_TEMPFAIL``) so systemd marks the unit
+    ``failed``. Other ``OSError`` shapes propagate.
 
-    On a trapped errno: log ERROR with the matching sysctl runbook, then
-    ``sys.exit(75)`` (POSIX ``EX_TEMPFAIL``). systemd marks the unit
-    ``failed`` so ``systemctl is-failed`` and status-bar widgets catch it.
-    Existing fatal paths in ``run()`` (``no Dropbox roots``, ``already
-    running``) return silently with exit 0; this path deviates because the
-    kernel signal warrants a non-zero exit.
-
-    Other ``OSError`` shapes propagate; we don't suppress unknown causes.
-
-    Caller MUST invoke this from inside ``_configured_logging()`` so the
-    ERROR record reaches ``daemon.log`` and (on Linux) systemd-journald.
+    MUST be called from inside ``_configured_logging()`` so the ERROR record
+    reaches ``daemon.log`` (and journald on Linux).
     """
     try:
         observer.start()

@@ -472,10 +472,7 @@ def _build_entries(lines: list[str], spec: pathspec.PathSpec) -> list[tuple[int,
     if len(active_line_indices) == len(active_patterns):
         return list(zip(active_line_indices, active_patterns, strict=True))
 
-    # _load_file already validated the bulk parse, and pathspec 1.0.4's
-    # single-line parse is consistent with bulk. With the gitignore-correct
-    # filter above, this branch is defensive scaffolding — kept for future
-    # pathspec-version drift, not for active recovery of a known case.
+    # Defensive: triggers only on pathspec-parse drift from our filter.
     entries: list[tuple[int, pathspec.Pattern]] = []
     for i in active_line_indices:
         for p in _build_spec([lines[i]]).patterns:

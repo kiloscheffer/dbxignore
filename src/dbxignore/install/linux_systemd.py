@@ -31,16 +31,31 @@ def _unit_path() -> Path:
     return Path(home) / ".config" / "systemd" / "user" / UNIT_NAME
 
 
-def _escape_systemd_env_value(value: str) -> str:
-    """Escape backslash + double-quote for use inside a quoted Environment= line.
+def _escape_systemd_quoted_string(value: str) -> str:
+    """Escape backslash + double-quote for use inside a systemd quoted string.
 
-    systemd's unit-file parser treats ``Environment="KEY=VALUE"`` as one
-    assignment; literal backslashes and double-quotes inside VALUE must be
-    doubled and backslash-escaped respectively so the parser doesn't
-    misinterpret them as escape sequences or a premature end of the quoted
-    string.
+    Same C-style escape rules apply to both ``Environment="KEY=VALUE"`` and
+    ``ExecStart="/path with space"`` — literal backslashes are doubled and
+    literal double-quotes are backslash-escaped so systemd's parser does not
+    misinterpret them as escape sequences or a premature end-of-string.
     """
     return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _quote_exec_start_path(exe_path: Path) -> str:
+    """Return the path rendered for an ``ExecStart=`` token.
+
+    systemd splits ``ExecStart`` on whitespace, so a path containing a space
+    (e.g. ``/home/user/My Tools/dbxignored``) tokenizes incorrectly when bare.
+    Wrap such paths in double quotes and apply systemd's C-style escaping for
+    embedded ``"`` and ``\\``. Bare paths without whitespace or escape-needing
+    chars stay unquoted to match the on-disk shape stock distro installs
+    have today.
+    """
+    posix = exe_path.as_posix()
+    if any(ch.isspace() or ch in '"\\' for ch in posix):
+        return f'"{_escape_systemd_quoted_string(posix)}"'
+    return posix
 
 
 def _run_systemctl(cmd: list[str]) -> None:
@@ -68,12 +83,12 @@ def build_unit_content(
     line per entry, placed before ``ExecStart=`` in ``[Service]`` so the daemon
     process sees the variable by the time it runs.
     """
-    exec_start = f"{exe_path.as_posix()} {arguments}".strip()
+    exec_start = f"{_quote_exec_start_path(exe_path)} {arguments}".strip()
     env_lines = ""
     if environment:
         env_lines = (
             "\n".join(
-                f'Environment="{key}={_escape_systemd_env_value(value)}"'
+                f'Environment="{key}={_escape_systemd_quoted_string(value)}"'
                 for key, value in environment.items()
             )
             + "\n"

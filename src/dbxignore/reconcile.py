@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from dbxignore import markers
+from dbxignore._logging import timed_debug
 from dbxignore.rules import IGNORE_FILENAME, RuleCache
 
 logger = logging.getLogger(__name__)
@@ -137,11 +138,11 @@ def _reconcile_path(
                 # DEBUG-level boundary log for backlog item #34 timing
                 # diagnostics. Measures NTFS ADS write latency per path; on
                 # Windows this is the layer most likely to be slowed by
-                # Defender real-time scanning. No-op cost when
-                # DBXIGNORE_LOG_LEVEL != DEBUG.
-                t0 = time.perf_counter()
-                markers.set_ignored(path)
-                logger.debug("set_ignored path=%s duration=%.4fs", path, time.perf_counter() - t0)
+                # Defender real-time scanning. ``timed_debug`` gates the
+                # ``time.perf_counter()`` calls on the logger level so the
+                # per-mutation cost is zero in production INFO config.
+                with timed_debug(logger, "set_ignored path=%s", path):
+                    markers.set_ignored(path)
             else:
                 report.would_mark.append(path)
             report.marked += 1
@@ -153,9 +154,8 @@ def _reconcile_path(
                     path,
                 )
             if not dry_run:
-                t0 = time.perf_counter()
-                markers.clear_ignored(path)
-                logger.debug("clear_ignored path=%s duration=%.4fs", path, time.perf_counter() - t0)
+                with timed_debug(logger, "clear_ignored path=%s", path):
+                    markers.clear_ignored(path)
             else:
                 report.would_clear.append(path)
             report.cleared += 1

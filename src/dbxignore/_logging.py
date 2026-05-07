@@ -23,6 +23,12 @@ def timed_debug(logger: logging.Logger, msg_fmt: str, *args: object) -> Iterator
     swept tree (item #53 measured 49.62s on a 27k-dir tree). The
     ``isEnabledFor(DEBUG)`` gate makes the no-op-when-not-debug claim
     actually hold.
+
+    If the wrapped block raises, no duration is logged — matches the
+    original ``t0; op(); log()`` pattern, where the log line is
+    unreachable when ``op()`` raises. Don't add a ``try/finally`` to
+    "always log": the original semantics were intentional (a duration
+    on a partial block is misleading).
     """
     if not logger.isEnabledFor(logging.DEBUG):
         yield

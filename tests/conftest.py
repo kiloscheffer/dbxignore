@@ -95,7 +95,18 @@ def fake_psutil_process(monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201 — fa
     ) -> None:
         class _FakeProc:
             def __init__(self, _pid: int) -> None:
-                pass
+                # Embed the short-circuit contract: production code MUST
+                # consult pid_exists before constructing Process(pid). Any
+                # caller that sets pid_exists=False but doesn't short-circuit
+                # gets a clear failure here. Same assertion strength as the
+                # prior inline sentinel-Process pattern, but now applies
+                # uniformly to every pid_exists=False test.
+                if not pid_exists:
+                    raise AssertionError(
+                        "fake_psutil_process: Process(pid) was constructed "
+                        "even though pid_exists=False — production code must "
+                        "short-circuit on pid_exists before calling Process()"
+                    )
 
             def name(self) -> str:
                 if name_raises is not None:

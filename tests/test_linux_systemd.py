@@ -160,6 +160,34 @@ def test_unit_content_escapes_percent_in_bare_exec_start_path() -> None:
     assert 'ExecStart="' not in content
 
 
+def test_unit_content_escapes_dollar_in_quoted_exec_start_path() -> None:
+    """systemd expands ``$VAR`` and ``${VAR}`` in ExecStart at unit-load time
+    against the unit's environment, so a literal ``$`` in the install path
+    must be doubled to ``$$``. Otherwise an install path like
+    ``/home/me/$TOOLS folder/dbxignored`` is silently rewritten by systemd's
+    variable expander and the unit points at the wrong binary."""
+    from dbxignore.install import linux_systemd
+
+    content = linux_systemd.build_unit_content(
+        Path("/home/me/$TOOLS folder/dbxignored"),
+        "",
+    )
+    assert 'ExecStart="/home/me/$$TOOLS folder/dbxignored"' in content
+
+
+def test_unit_content_escapes_dollar_in_bare_exec_start_path() -> None:
+    """Even without whitespace, a ``$`` must be doubled — systemd's variable
+    expansion happens regardless of whether the path is quoted."""
+    from dbxignore.install import linux_systemd
+
+    content = linux_systemd.build_unit_content(
+        Path("/home/me/$TOOLS/dbxignored"),
+        "",
+    )
+    assert "ExecStart=/home/me/$$TOOLS/dbxignored\n" in content
+    assert 'ExecStart="' not in content
+
+
 def test_unit_content_leaves_simple_exec_start_path_unquoted() -> None:
     """Standard install paths (no whitespace, no escape chars) stay
     unquoted — matches the existing on-disk shape and avoids cosmetic

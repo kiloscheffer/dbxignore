@@ -115,3 +115,37 @@ def test_dir_create_event_marks_directory_when_rule_exists(
     )
 
     assert fake_markers.is_ignored(root / "build")
+
+
+def test_dir_create_under_dropped_negation_marks_path_via_dispatch(
+    tmp_path: Path, fake_markers: FakeMarkers, write_file: WriteFile
+) -> None:
+    """A directory under a dropped-negation pattern still gets marked.
+
+    With rule ``build/\\n!build/keep/\\n``, the conflict detector drops
+    the negation at rule-load time (PR #33 — Dropbox inherits ignored
+    state from ancestors, so the negation can't take effect). The
+    cache's ``match`` therefore reports the negated path as ignored, and
+    a DIR_CREATE event for that path reconciles to a marker write.
+
+    This is the dispatch-level half of the coverage that the prior
+    Windows smoke test uniquely exercised (its
+    ``markers.is_ignored(build/keep)`` assertion succeeded via the
+    watchdog DIR_CREATE fast-path, ``daemon.py:519``). Without this
+    test, a regression in either ``_dispatch``'s DIR_CREATE arm or
+    ``cache.match`` for dropped-negation paths could land silently.
+    """
+    root = tmp_path.resolve()
+    write_file(root / ".dropboxignore", "build/\n!build/keep/\n")
+    (root / "build" / "keep").mkdir(parents=True)
+
+    cache = RuleCache()
+    cache.load_root(root)
+
+    daemon._dispatch(
+        stub_event("created", str(root / "build" / "keep"), is_directory=True),
+        cache,
+        roots=[root],
+    )
+
+    assert fake_markers.is_ignored(root / "build" / "keep")

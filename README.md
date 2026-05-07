@@ -296,6 +296,34 @@ state=no_state conflicts=0
 
 A polybar module reading the daemon state could grep `state=\S+` for the at-a-glance indicator and `errors=\S+` for an error-count badge.
 
+### Command parity with git
+
+For users coming from `git`, this table maps each `dbxignore` command to its
+closest git counterpart. Some align cleanly; others have a deceptively-similar
+git verb with materially different consequences.
+
+| `dbxignore`     | git counterpart            | Notes                                                          |
+| --------------- | -------------------------- | -------------------------------------------------------------- |
+| `apply`         | (none)                     | Reconciles markers from `.dropboxignore`.                      |
+| `check-ignore`  | `git check-ignore -v`      | Alias of `explain`. `--quiet` matches git's flag.              |
+| `clear`         | (see callout below)        | **NOT** `git rm --cached`-shaped.                              |
+| `daemon`        | (none)                     | dbxignore-specific watcher + hourly sweep.                     |
+| `explain`       | `git check-ignore -v`      | Same diagnostic question; `--quiet` and exit codes match.      |
+| `generate`      | (none)                     | Translates a `.gitignore` into a `.dropboxignore`.             |
+| `init`          | `git init` (loosely)       | Scaffolds a starter `.dropboxignore`, not a repository.        |
+| `install`       | (none)                     | Registers the daemon with the platform service manager.        |
+| `list`          | (none)                     | Lists every path currently bearing the Dropbox ignore marker.  |
+| `status`        | `git status` (loosely)     | Shows daemon state, last sweep, marker counts, conflicts.      |
+| `uninstall`     | (none)                     | Removes the daemon registration; `--purge` also clears markers.|
+
+> **`clear` is NOT `git rm --cached`-shaped.** `git rm --cached` removes a path
+> from the git index without touching the working tree (cheap, local-only).
+> `dbxignore clear` removes the Dropbox ignore markers, which causes Dropbox
+> to **upload previously-ignored paths to the cloud** (potentially gigabytes
+> for a `node_modules`-class subtree) and propagate them to other linked
+> devices. The `--yes` confirmation prompt and `--dry-run` preview exist
+> specifically because of this divergence.
+
 ## Behaviour
 
 - **What "ignored" means in Dropbox.** Setting the ignore marker on a file or folder removes it from your cloud Dropbox and from every other linked device. The local copy on the device that set the marker is preserved. Removing the marker (by deleting the matching rule, or running `dbxignore clear`) restores the path to sync — the local copy is uploaded back to Dropbox and propagated to other devices. So `.dropboxignore` is **not** a `.gitignore`-style "leave this file untracked here" rule; it's an instruction to delete the path from cloud sync, with the local copy as the only surviving copy until the marker is cleared.

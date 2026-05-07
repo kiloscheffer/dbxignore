@@ -43,6 +43,51 @@ def test_status_reports_running_daemon(tmp_path: Path, monkeypatch: pytest.Monke
     assert "7" in result.output
 
 
+def test_status_reports_not_running_when_create_time_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Human-readable status path must respect daemon_create_time, just like
+    --summary and clear do. A recycled PID claimed by an unrelated python
+    process passes the substring-name check; create_time disambiguation
+    catches the false positive (backlog item #79 contract). Without
+    forwarding create_time the human path would render 'daemon: running'
+    while --summary correctly shows state=not_running — same state.json,
+    inconsistent verdict."""
+    import psutil  # type: ignore[import-untyped, unused-ignore]
+
+    s = state.State(
+        daemon_pid=12345,
+        daemon_create_time=1700000000.0,  # what state.json recorded
+        daemon_started=dt.datetime.now(dt.UTC),
+        last_sweep=dt.datetime.now(dt.UTC),
+        watched_roots=[Path(r"C:\Dropbox")],
+    )
+    path = tmp_path / "state.json"
+    state.write(s, path)
+    monkeypatch.setattr(state, "default_path", lambda: path)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [])
+
+    class _FakeProc:
+        def __init__(self, _pid: int) -> None:
+            pass
+
+        def name(self) -> str:
+            return "python.exe"
+
+        def create_time(self) -> float:
+            # Different from the recorded value — PID was recycled.
+            return 1700001234.0
+
+    monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(psutil, "Process", _FakeProc)
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "not running" in result.output.lower()
+    assert "stale" in result.output.lower()
+
+
 def test_list_prints_paths_with_ads_set(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:

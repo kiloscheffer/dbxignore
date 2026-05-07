@@ -482,7 +482,7 @@ def status(summary: bool) -> None:
     else:
         if s.daemon_pid is None:
             click.echo("daemon: not running (no pid recorded)")
-        elif state.is_daemon_alive(s.daemon_pid):
+        elif state.daemon_is_running(s):
             click.echo(f"daemon: running (pid={s.daemon_pid})")
         else:
             click.echo(f"daemon: not running (last pid={s.daemon_pid} — state.json may be stale)")

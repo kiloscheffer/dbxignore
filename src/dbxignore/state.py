@@ -32,6 +32,12 @@ class LastError:
 @dataclass
 class State:
     daemon_pid: int | None = None
+    # Per-process create timestamp (psutil.Process.create_time() value, a
+    # Unix-epoch float). Persisted alongside daemon_pid so is_daemon_alive
+    # can distinguish "the daemon is still that PID" from "the kernel
+    # recycled that PID for an unrelated process". Optional for backwards-
+    # compat with state.json files written before #79.
+    daemon_create_time: float | None = None
     daemon_started: datetime | None = None
     last_sweep: datetime | None = None
     last_sweep_duration_s: float = 0.0
@@ -173,6 +179,7 @@ def _encode(state: State) -> dict[str, Any]:
     return {
         "schema": SCHEMA_VERSION,
         "daemon_pid": state.daemon_pid,
+        "daemon_create_time": state.daemon_create_time,
         "daemon_started": state.daemon_started.isoformat() if state.daemon_started else None,
         "last_sweep": state.last_sweep.isoformat() if state.last_sweep else None,
         "last_sweep_duration_s": state.last_sweep_duration_s,
@@ -193,6 +200,10 @@ def _encode(state: State) -> dict[str, Any]:
 def _decode(raw: dict[str, Any]) -> State:
     return State(
         daemon_pid=raw.get("daemon_pid"),
+        # `daemon_create_time` is decode-tolerant: old state.json files
+        # (pre-#79) lack the field and decode to None, which triggers the
+        # legacy substring-name fallback in is_daemon_alive.
+        daemon_create_time=raw.get("daemon_create_time"),
         daemon_started=_parse_dt(raw.get("daemon_started")),
         last_sweep=_parse_dt(raw.get("last_sweep")),
         last_sweep_duration_s=raw.get("last_sweep_duration_s", 0.0),

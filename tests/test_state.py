@@ -13,6 +13,7 @@ def test_roundtrip(tmp_path: Path) -> None:
     s = state.State(
         daemon_pid=1234,
         daemon_started=datetime(2026, 4, 20, 9, 0, tzinfo=UTC),
+        daemon_create_time=1745140800.5,
         last_sweep=datetime(2026, 4, 20, 10, 0, tzinfo=UTC),
         last_sweep_duration_s=1.5,
         last_sweep_marked=5,
@@ -26,6 +27,25 @@ def test_roundtrip(tmp_path: Path) -> None:
 
     loaded = state.read(path)
     assert loaded == s
+
+
+def test_decode_tolerates_missing_daemon_create_time(tmp_path: Path) -> None:
+    """state.json files written before #79 lack daemon_create_time. Decode
+    must default to None rather than KeyError-ing into the corrupt-state arm
+    (which would silently drop the file's other fields). Backwards-compat
+    with the v0.4.x state schema."""
+    p = tmp_path / "state.json"
+    p.write_text(
+        '{"schema": 1, "daemon_pid": 4321, "daemon_started": null, '
+        '"last_sweep": null, "last_sweep_duration_s": 0.0, '
+        '"last_sweep_marked": 0, "last_sweep_cleared": 0, "last_sweep_errors": 0, '
+        '"last_error": null, "watched_roots": []}',
+        encoding="utf-8",
+    )
+    loaded = state.read(p)
+    assert loaded is not None
+    assert loaded.daemon_pid == 4321
+    assert loaded.daemon_create_time is None
 
 
 def test_read_missing_returns_none(tmp_path: Path) -> None:

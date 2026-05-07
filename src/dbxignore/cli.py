@@ -297,7 +297,7 @@ def _apply_from_gitignore(source: Path, *, dry_run: bool = False, yes: bool = Fa
     _read_and_validate_rule_source(source)
 
     cache = RuleCache()
-    cache.load_external(source, mount_at)
+    cache.load_external(source, mount_at, log_warnings=False)
 
     if dry_run:
         report = reconcile.reconcile_subtree(mount_at, mount_at, cache, dry_run=True)

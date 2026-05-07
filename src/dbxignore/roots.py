@@ -11,27 +11,25 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-def _read_dropbox_account_paths(info_path: Path) -> list[str] | None:
+def _read_dropbox_account_paths(info_path: Path) -> list[str]:
     """Parse a Dropbox ``info.json`` and return per-account ``path`` strings.
 
-    Returns:
-        ``list[str]``: zero or more strings, one per dict-shaped account entry
-        with a non-empty string ``path`` field. Iterates over ``data.values()``
-        rather than a hardcoded account-type allow-list, so any current or
-        future Dropbox account type (today: ``personal`` / ``business``) is
-        picked up automatically.
+    Returns zero or more strings, one per dict-shaped account entry with a
+    non-empty string ``path`` field. Iterates over ``data.values()`` rather
+    than a hardcoded account-type allow-list, so any current or future
+    Dropbox account type (today: ``personal`` / ``business``) is picked up
+    automatically.
 
-        ``None``: file missing, unreadable, malformed JSON, or top-level value
-        is not an object. Distinct from ``[]`` so callers can choose their own
-        error-logging policy (``roots.discover()`` logs WARNING; the macOS
-        backend's mode-detection silently falls back).
+    Raises ``OSError`` (file missing or unreadable), ``UnicodeDecodeError``
+    (file isn't valid UTF-8), ``json.JSONDecodeError`` (malformed JSON), or
+    ``ValueError`` (top-level value is not an object). Callers wrap with
+    their own try/except so they can choose between WARNING-with-detail
+    (``roots.discover()``) and silent fallback (mode detection in the macOS
+    backend on hosts where Dropbox isn't installed).
     """
-    try:
-        data = json.loads(info_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
+    data = json.loads(info_path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
-        return None
+        raise ValueError(f"top-level value is not an object: {type(data).__name__}")
     paths: list[str] = []
     for account in data.values():
         if isinstance(account, dict):
@@ -133,10 +131,9 @@ def discover() -> list[Path]:
             logger.warning("Dropbox info.json not found at any of: %s", joined)
         return []
 
-    account_paths = _read_dropbox_account_paths(info_path)
-    if account_paths is None:
-        logger.warning(
-            "Cannot read Dropbox info.json at %s (missing, unreadable, or malformed)", info_path
-        )
+    try:
+        account_paths = _read_dropbox_account_paths(info_path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        logger.warning("Cannot read Dropbox info.json at %s: %s", info_path, exc)
         return []
     return [Path(p) for p in account_paths]

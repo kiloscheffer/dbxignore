@@ -37,6 +37,7 @@ behavioral divergence documented in the spec.  ``reconcile._reconcile_path``'s
 from __future__ import annotations
 
 import errno
+import json
 import logging
 import os
 import subprocess
@@ -95,8 +96,10 @@ def _read_dropbox_paths_from_info() -> list[str]:
     home = os.environ.get("HOME")
     if not home:
         return []
-    paths = _read_dropbox_account_paths(Path(home) / ".dropbox" / "info.json")
-    return paths or []
+    try:
+        return _read_dropbox_account_paths(Path(home) / ".dropbox" / "info.json")
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return []
 
 
 def _pluginkit_extension_state() -> Literal["allowed", "disabled", "not_registered", "unknown"]:

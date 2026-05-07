@@ -384,6 +384,44 @@ def test_apply_from_gitignore_yes_skips_prompt(
     assert (tmp_path / "build").resolve() in fake_markers._ignored
 
 
+def test_apply_from_gitignore_suppresses_rules_conflict_warnings(
+    tmp_path: Path,
+    fake_markers: FakeMarkers,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Conflict WARNINGs from rules.py must not leak on the --from-gitignore path.
+
+    The regular `apply` path routes through `_load_cache`, which passes
+    ``log_warnings=False`` to suppress the per-conflict rules-layer WARNING
+    (PR #92). `_apply_from_gitignore` builds its own RuleCache and calls
+    ``load_external`` directly, so the same kwarg has to be passed there too
+    — otherwise scripted runs against a known-conflicting source spam stderr.
+    """
+    import logging
+
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "keep").mkdir()
+
+    gitignore = tmp_path / ".gitignore"
+    gitignore.write_text("build/\n!build/keep/\n", encoding="utf-8")
+
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    runner = CliRunner()
+    with caplog.at_level(logging.WARNING, logger="dbxignore.rules"):
+        result = runner.invoke(cli.main, ["apply", "--from-gitignore", str(gitignore), "--yes"])
+
+    assert result.exit_code == 0, result.output
+    conflict_warnings = [
+        r for r in caplog.records if r.name == "dbxignore.rules" and "negation" in r.message
+    ]
+    assert conflict_warnings == [], (
+        f"apply --from-gitignore should not emit conflict WARNINGs; "
+        f"got: {[r.message for r in conflict_warnings]}"
+    )
+
+
 def test_apply_from_gitignore_prompt_aborts_on_no(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:

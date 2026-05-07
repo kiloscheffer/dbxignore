@@ -165,6 +165,30 @@ def test_generate_target_outside_roots_warns_but_writes(
     assert "not under any discovered Dropbox root" in result.output
 
 
+def test_generate_warns_when_no_roots_discovered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No Dropbox roots at all → out-of-root warning must still fire.
+
+    Sibling of ``test_generate_target_outside_roots_warns_but_writes``: the
+    earlier guard short-circuited the warning when ``_discover_roots()``
+    returned ``[]``, which is precisely when the warning is most important
+    ("your file won't be observed" is true both when target is outside
+    discovered roots AND when no roots were found at all).
+    """
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [])
+
+    source = tmp_path / ".gitignore"
+    source.write_text("build/\n", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["generate", str(source)])
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / ".dropboxignore").exists()
+    assert "not under any discovered Dropbox root" in result.output
+
+
 # ---- generate-time conflict warning -----------------------------------------
 
 

@@ -108,7 +108,9 @@ def test_detect_invocation_uses_path_shim_when_present(monkeypatch: pytest.Monke
     assert args == ""
 
 
-def test_detect_invocation_returns_pythonw_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_detect_invocation_returns_pythonw_on_windows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Windows non-frozen: select ``pythonw.exe`` next to ``sys.executable``.
 
     Task Scheduler launches at logon and the daemon must not flash a
@@ -121,12 +123,25 @@ def test_detect_invocation_returns_pythonw_on_windows(monkeypatch: pytest.Monkey
     Item #50 — collapsed `windows_task.detect_invocation` into a re-export
     of `_common.detect_invocation` once the Windows non-frozen branch was
     folded in here.
+
+    Uses ``tmp_path`` for the executable rather than a hardcoded
+    ``C:\\…\\python.exe`` literal: on POSIX hosts ``Path(r"C:\\…")`` parses
+    the whole backslash string as a single filename (no path components),
+    so ``Path.with_name("pythonw.exe")`` collapses to bare ``pythonw.exe``
+    and the assertion fails on the cross-platform CI legs. Backslash
+    handling is platform-specific to ``pathlib.PureWindowsPath``, which
+    isn't what ``Path`` resolves to on POSIX. Using ``tmp_path / "..."``
+    sidesteps the asymmetry — the parent-directory-vs-filename split is
+    identical on every platform.
     """
     monkeypatch.delattr(sys, "frozen", raising=False)
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr(sys, "executable", r"C:\uv\tools\dbxignore\Scripts\python.exe")
+    python_exe = tmp_path / "Scripts" / "python.exe"
+    python_exe.parent.mkdir()
+    python_exe.write_text("")
+    monkeypatch.setattr(sys, "executable", str(python_exe))
     from dbxignore.install import _common
 
     exe, args = _common.detect_invocation()
-    assert exe == Path(r"C:\uv\tools\dbxignore\Scripts\pythonw.exe")
+    assert exe == tmp_path / "Scripts" / "pythonw.exe"
     assert args == "-m dbxignore daemon"

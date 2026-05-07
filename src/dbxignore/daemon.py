@@ -438,6 +438,16 @@ def _acquire_singleton_lock() -> Any | None:
         if os.fstat(fh.fileno()).st_size == 0:
             fh.write(b" ")
             fh.flush()
+        # Seek to byte 0 before locking. ``msvcrt.locking`` on Windows
+        # locks from the file's current cursor position; ``"ab+"`` leaves
+        # the cursor at EOF after open, and the placeholder write above
+        # advances it by one. Two concurrent fresh launches with different
+        # write timings would end at different cursors and lock different
+        # byte ranges — both succeed, singleton defeated. Forcing all
+        # contenders to lock byte 0 closes the race. ``fcntl.flock`` on
+        # POSIX is per-open-file (cursor-independent), so the seek is a
+        # no-op there but keeps the cross-platform contract uniform.
+        fh.seek(0)
         if sys.platform == "win32":
             import msvcrt  # type: ignore[import-not-found, unused-ignore]
 

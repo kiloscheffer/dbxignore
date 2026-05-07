@@ -673,42 +673,94 @@ def list_ignored(path: Path | None) -> None:
             click.echo(str(p))
 
 
+def _explain(path: Path, *, quiet: bool) -> int:
+    """Shared body for `explain` and `check-ignore`. Returns exit code.
+
+    Exit codes:
+      0 — path is ignored (cache.match returns True)
+      1 — path is not ignored (cache.match returns False; covers no-match
+          AND only-dropped-matches cases)
+      2 — fatal: no Dropbox roots discovered (preserves project convention
+          for fatal errors; see other cli.py callsites)
+
+    `quiet` suppresses stdout (the rule listing and the `no match for X`
+    line). stderr is preserved for the fatal "No Dropbox roots found." line —
+    matches `git check-ignore -q` semantics.
+    """
+    discovered = _discover_roots()
+    if not discovered:
+        click.echo("No Dropbox roots found.", err=True)
+        return 2
+
+    cache = _load_cache(discovered)
+    resolved = path.resolve()
+    is_ignored = cache.match(resolved)
+
+    if not quiet:
+        matches = cache.explain(resolved)
+        if not matches:
+            click.echo(f"no match for {path}")
+        else:
+            # Build lookup: (source, line) -> Conflict so we can annotate dropped rows.
+            conflicts_by_drop = {(c.dropped_source, c.dropped_line): c for c in cache.conflicts()}
+
+            for m in matches:
+                loc = _format_ignore_file_loc(m.ignore_file, discovered)
+                prefix = "[dropped]  " if m.is_dropped else ""
+                raw = m.pattern.strip()
+                suffix = ""
+                if m.is_dropped:
+                    c = conflicts_by_drop.get((m.ignore_file, m.line))
+                    if c is not None:
+                        masking_loc = _format_ignore_file_loc(c.masking_source, discovered)
+                        suffix = f"  (masked by {masking_loc}:{c.masking_line})"
+                click.echo(f"{loc}:{m.line}  {prefix}{raw}{suffix}")
+
+    return 0 if is_ignored else 1
+
+
 @main.command()
 @click.argument("path", type=click.Path(exists=False, path_type=Path))
-def explain(path: Path) -> None:
+@click.option(
+    "--quiet",
+    "-q",
+    is_flag=True,
+    help="Suppress stdout; only set exit code (parity with `git check-ignore -q`).",
+)
+def explain(path: Path, quiet: bool) -> None:
     """Show which .dropboxignore rule (if any) matches the path.
 
     Dropped negations (rules that can't take effect because an ancestor
     directory is ignored) appear prefixed with `[dropped]` and a pointer
     to the masking rule. See README §"Negations and Dropbox's ignore
     inheritance" for why.
+
+    Exit codes:
+      0 — path is ignored
+      1 — path is not ignored (no matching rule, or only dropped negations)
+      2 — fatal (no Dropbox roots discovered)
     """
-    discovered = _discover_roots()
-    if not discovered:
-        click.echo("No Dropbox roots found.", err=True)
-        sys.exit(2)
+    sys.exit(_explain(path, quiet=quiet))
 
-    cache = _load_cache(discovered)
 
-    matches = cache.explain(path.resolve())
-    if not matches:
-        click.echo(f"no match for {path}")
-        return
+@main.command(name="check-ignore")
+@click.argument("path", type=click.Path(exists=False, path_type=Path))
+@click.option(
+    "--quiet",
+    "-q",
+    is_flag=True,
+    help="Suppress stdout; only set exit code (parity with `git check-ignore -q`).",
+)
+def check_ignore(path: Path, quiet: bool) -> None:
+    """Alias of \\`explain\\`, named for git-fluent users (parity with \\`git check-ignore -v\\`).
 
-    # Build lookup: (source, line) -> Conflict so we can annotate dropped rows.
-    conflicts_by_drop = {(c.dropped_source, c.dropped_line): c for c in cache.conflicts()}
-
-    for m in matches:
-        loc = _format_ignore_file_loc(m.ignore_file, discovered)
-        prefix = "[dropped]  " if m.is_dropped else ""
-        raw = m.pattern.strip()
-        suffix = ""
-        if m.is_dropped:
-            c = conflicts_by_drop.get((m.ignore_file, m.line))
-            if c is not None:
-                masking_loc = _format_ignore_file_loc(c.masking_source, discovered)
-                suffix = f"  (masked by {masking_loc}:{c.masking_line})"
-        click.echo(f"{loc}:{m.line}  {prefix}{raw}{suffix}")
+    Identical behavior, output, and exit codes to \\`explain\\`. The output format
+    follows dbxignore's annotated-rule shape (each match shows ignore_file:line
+    + pattern, with \\`[dropped]\\` annotations). Use \\`dbxignore explain\\` if you
+    want the verb dbxignore documents in its own README; use \\`check-ignore\\`
+    if your muscle memory is git's.
+    """
+    sys.exit(_explain(path, quiet=quiet))
 
 
 def _run_daemon() -> None:

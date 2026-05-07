@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -10,6 +11,29 @@ from dbxignore import cli, reconcile
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def stub_event(
+    kind: str,
+    src_path: str,
+    is_directory: bool = False,
+    dest_path: str | None = None,
+) -> MagicMock:
+    """Build a watchdog-shaped event mock for direct ``daemon._dispatch`` tests.
+
+    Returns a ``MagicMock`` with ``event_type``, ``src_path``, ``dest_path``,
+    and ``is_directory`` attributes — the only fields ``_classify`` /
+    ``_dispatch`` consume. Lets dispatch tests fire synthetic events at the
+    daemon's classification + reconcile chain without bringing up a real
+    ``Observer`` (whose ``ReadDirectoryChangesW`` events are unreliable on
+    Windows CI runners — see backlog item #34).
+    """
+    e = MagicMock()
+    e.event_type = kind
+    e.src_path = src_path
+    e.dest_path = dest_path
+    e.is_directory = is_directory
+    return e
 
 
 class WriteFile(Protocol):

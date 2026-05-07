@@ -5,17 +5,7 @@ import pytest
 
 from dbxignore import daemon
 from dbxignore.debounce import EventKind
-
-
-def _stub_event(
-    kind: str, src_path: str, is_directory: bool = False, dest_path: str | None = None
-) -> MagicMock:
-    e = MagicMock()
-    e.event_type = kind
-    e.src_path = src_path
-    e.dest_path = dest_path
-    e.is_directory = is_directory
-    return e
+from tests.conftest import stub_event as _stub_event
 
 
 def test_classify_rules_file_created(tmp_path: Path) -> None:

@@ -119,6 +119,34 @@ def test_read_shape_mismatch_bad_datetime_returns_none(tmp_path: Path) -> None:
     assert state.read(p) is None
 
 
+def test_read_string_daemon_create_time_returns_none(tmp_path: Path) -> None:
+    """A non-numeric daemon_create_time (e.g. hand-edited or shape-
+    mismatched state file) must fail decode and route through the
+    corrupt-state fallback. Without strict validation at decode time,
+    the bad value would propagate to ``is_daemon_alive``'s
+    ``abs(live_create_time - create_time)`` arithmetic and raise
+    TypeError, breaking ``status`` / ``clear`` / the daemon's legacy-
+    startup guard."""
+    p = tmp_path / "state.json"
+    p.write_text(
+        '{"daemon_pid": 1234, "daemon_create_time": "not-a-number"}',
+        encoding="utf-8",
+    )
+    assert state.read(p) is None
+
+
+def test_read_bool_daemon_create_time_returns_none(tmp_path: Path) -> None:
+    """``isinstance(True, int)`` is True in Python (bool subclasses int),
+    so a naive ``isinstance(ct, (int, float))`` check would accept a bool
+    create_time. Explicit bool exclusion keeps the validation tight."""
+    p = tmp_path / "state.json"
+    p.write_text(
+        '{"daemon_pid": 1234, "daemon_create_time": true}',
+        encoding="utf-8",
+    )
+    assert state.read(p) is None
+
+
 # ---- is_daemon_alive (followup item 59) -------------------------------------
 
 

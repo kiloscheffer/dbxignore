@@ -233,8 +233,18 @@ def _decode(raw: dict[str, Any]) -> State:
         daemon_pid=raw.get("daemon_pid"),
         # `daemon_create_time` is decode-tolerant: old state.json files
         # (pre-#79) lack the field and decode to None, which triggers the
-        # legacy substring-name fallback in is_daemon_alive.
-        daemon_create_time=raw.get("daemon_create_time"),
+        # legacy substring-name fallback in is_daemon_alive. But when the
+        # field IS present, it MUST be a number — a hand-edited or shape-
+        # mismatched state file with e.g. a string ``daemon_create_time``
+        # would otherwise propagate to ``is_daemon_alive``'s
+        # ``abs(live_create_time - create_time)`` arithmetic and raise
+        # TypeError, breaking status / clear / the daemon's legacy-
+        # startup guard. Raise ValueError here so ``_read_at``'s existing
+        # corrupt-state arm catches it and ``read()`` returns None.
+        # ``isinstance(True, int)`` is True (bool subclasses int) so
+        # explicit bool exclusion is required to reject hand-edited
+        # ``"daemon_create_time": true`` values.
+        daemon_create_time=_validate_create_time(raw.get("daemon_create_time")),
         daemon_started=_parse_dt(raw.get("daemon_started")),
         last_sweep=_parse_dt(raw.get("last_sweep")),
         last_sweep_duration_s=raw.get("last_sweep_duration_s", 0.0),
@@ -254,3 +264,19 @@ def _decode(raw: dict[str, Any]) -> State:
 
 def _parse_dt(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value else None
+
+
+def _validate_create_time(value: Any) -> float | None:
+    """Coerce a JSON-decoded ``daemon_create_time`` to a float or raise.
+
+    Accepts None (field absent — pre-#79 state.json) and numeric values
+    (int or float). Rejects bool (a Python int subclass), strings, lists,
+    dicts, and anything else. ValueError surfaces through ``_read_at``'s
+    corrupt-state arm so ``read()`` returns None on a hand-edited or
+    shape-mismatched record.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"daemon_create_time must be numeric, got {type(value).__name__}")
+    return float(value)

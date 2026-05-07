@@ -908,6 +908,8 @@ The same module already has a precedent for graceful env-var handling: `DBXIGNOR
 
 **Urgency:** low. Triggered only by user error (typo in env var name's value). Worth filing because (a) the failure mode is loud-and-recurring rather than soft-and-recoverable, (b) the in-module precedent makes the inconsistency stand out, and (c) there are zero tests for `_timeouts_from_env()` despite extensive test coverage of `_configured_logging`.
 
+**Status: RESOLVED 2026-05-06 (PR #124, commit `40ac1fe`).** The fix landed silently as part of "fix: address external code-review quick-wins" — per-kind try/except + negative-value check, with WARNING-and-fall-back-to-default arms for both ValueError and `value < 0`. Two new tests in `tests/test_daemon_dispatch.py` (`test_timeouts_from_env_falls_back_on_invalid_value` and `test_timeouts_from_env_rejects_negative_values`). The tracker entry was missed in PR #124's BACKLOG-update arm; this entry backfills the close.
+
 Touches: `src/dbxignore/daemon.py:107-111`; new test in `tests/test_daemon_logging.py` or a new `test_daemon_timeouts.py`.
 
 ## 43. `reconcile_subtree` re-resolves `root` and `subdir` on every call; daemon callers don't pre-resolve
@@ -1782,7 +1784,7 @@ Touches: `src/dbxignore/install/linux_systemd.py` (ExecStart construction), `tes
 
 ### Open
 
-Twenty items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Nineteen items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
@@ -1792,7 +1794,6 @@ Twenty items. All passive (no concrete trigger requires action) — bundle each 
 - **#38** — info.json parsing duplicated between `roots.py` and `_backends/macos_xattr.py`. Both modules read `~/.dropbox/info.json` and extract per-account `path` fields with subtly different shapes. Real refactor candidate (~30 lines deduplicated) but the semantic differences (DBXIGNORE_ROOT override, account-type strictness) are intentional. Bundle with the next info.json-touching change.
 - **#39** — `_pluginkit_extension_state()` returns stringly-typed state (`"allowed"`/`"disabled"`/`"not_registered"`/`"unknown"`). Cheap fix is a `Literal[...]` return annotation so type-checkers catch caller-side typos. Single callsite limits blast radius; bundle with a future macos-backend-touching change.
 - **#40** — Dual `paths` for-loops in `_detected_attr_name()` could share a `_first_match` helper. Reviewers disagreed: one proposed extraction, another argued the dual structure correctly documents priority semantics. Filed for the design-tension record; current shape is defensible. Awaits a third predicate (rule-of-three trigger).
-- **#42** — `_timeouts_from_env` crashes the daemon if a debounce env var is non-integer (no try/except, no fallback). In-module precedent (`DBXIGNORE_LOG_LEVEL` validation) makes the inconsistency stand out. User-error-triggered; bundle with next daemon-logging touch.
 - **#50** — `windows_task.detect_invocation` partially overlaps `_common.detect_invocation` but diverges in the non-frozen branch (Windows uses `pythonw.exe` for windowless Task Scheduler launch and skips `shutil.which("dbxignored")` PATH lookup). Companion to item #26. Bundle with next install-layer touch.
 - **#51** — `install/__init__.py` platform dispatch duplicated across `install_service`/`uninstall_service`. Filed for the design-tension record (precedent: #40); current 6-block shape is defensible vs a factored-out helper that would introduce stringly-typed action coupling.
 - **#53** — `_sweep_once` walks every directory regardless of marker state — measured 49.62s on a 27k-dir tree. Skip-on-(marker-present + match-still-positive) collapses descent into already-ignored subtrees; rule-mutation events already force a re-walk, so the steady-state invariant holds. ~50 LOC. Bundle with the next daemon-touching change.
@@ -1825,6 +1826,10 @@ Twenty items. All passive (no concrete trigger requires action) — bundle each 
 - **#72** in PR #127 — README `## Commands` gained a `### Command parity with git` subsection. Markdown table maps all 10 dbxignore commands to their closest git counterparts; callout warns that `dbxignore clear` is NOT `git rm --cached`-shaped (cloud-upload divergence). Bundled with #71 in one PR per the body's recommendation.
 - **#80** in PR #128 — `rules._build_entries`'s comment filter now follows gitignore's column-0 comment rule. Pre-fix: `(s := raw.strip()) and not s.startswith("#")` wrongly classified `   #literal` lines as comments. Fix: `raw.strip() and not raw.startswith("#")` — leading whitespace before `#` is now preserved. The function docstring + body comment + CLAUDE.md gotcha bullet are updated to reflect the corrected behavior. The count-mismatch fallback stays as defensive scaffolding for future pathspec-version drift. New `tests/test_rules_basic.py::test_indented_hash_line_is_active_pattern` pins the contract via `cache._rules[path].entries`.
 - **#81** in PR #128 — `reconcile._reconcile_path`'s write arm now catches broad `OSError` symmetric to the read arm (item #21). Transient EIO on network-drive Dropbox trees no longer kills the per-root sweep worker. ENOTSUP/EOPNOTSUPP retains its specific user-friendly log message; other errnos log generic `errno=NN`. Real bugs (non-`OSError`) still propagate — pinned by `test_typeerror_on_set_propagates`. CLAUDE.md's Architecture paragraph rewritten symmetric-by-design with `#21` and `PR #128` provenance brackets.
+
+#### 2026-05-06
+
+- **#42** in PR #124 (commit `40ac1fe`) — backfill close. The fix landed silently as part of "fix: address external code-review quick-wins" but the BACKLOG-update arm of that PR missed item #42. Per-kind try/except around `int(raw)` in `_timeouts_from_env` plus a negative-value guard, both arms log WARNING and fall back to the default. Tests `test_timeouts_from_env_falls_back_on_invalid_value` + `test_timeouts_from_env_rejects_negative_values` ship in `tests/test_daemon_dispatch.py`.
 
 #### 2026-05-04
 

@@ -1792,6 +1792,38 @@ systemd's official escape rule: enclose paths with whitespace in double quotes, 
 
 Touches: `src/dbxignore/install/linux_systemd.py` (ExecStart construction), `tests/test_linux_systemd.py` (path with whitespace produces a unit file systemd would parse correctly — round-trip via the systemd parser if we add a test dep, otherwise structural assertion on the rendered unit text).
 
+## 83. Pre-flight `commit-check` loop on Windows Git Bash buffers stdin
+
+**Surfaced 2026-05-08 in PR #144 + PR #145 work.**
+
+The CLAUDE.md gotcha about `--no-verify` recommends a pre-flight loop to validate every new commit subject before push:
+
+```bash
+for sha in $(git log origin/main..HEAD --format='%h'); do
+  git log -1 --format='%B' $sha | commit-check -m /dev/stdin
+done
+```
+
+In practice on Windows Git Bash the loop reports `exit=1` for every iteration with the same error message regardless of which subject is being checked — `commit-check -m /dev/stdin` appears to consume the whole pipeline's stdin on the first iteration and reuse a stale buffer for subsequent ones. The visible symptom in PR #144's pre-push session: one over-72-char commit subject reached CI undetected because the loop output looked like every commit was failing identically (the loop's per-iteration output was the same long banner, easy to scroll past as "loop noise").
+
+The single-shot variant works fine:
+
+```bash
+echo "<subject>" | commit-check -m /dev/stdin
+```
+
+So the loop's stdin redirection is the issue, not commit-check itself.
+
+**Fix candidates:**
+
+- **Use single-shot pre-flight only.** Document the loop as buggy on Windows; recommend per-commit invocation. ~1 line of CLAUDE.md gotcha update. Lowest-effort, doesn't fix the loop.
+- **Wrap the per-iteration redirection differently.** Try `commit-check -m <(git log -1 --format='%B' $sha)` (process substitution) or write each subject to a temp file inside the loop. Restores the loop ergonomics; needs Windows verification.
+- **Replace with a Python one-liner** that imports `commit_check` directly and feeds each subject programmatically — avoids the shell's stdin handling entirely. Heaviest but most portable.
+
+**Urgency:** low — bounded annoyance during heavy stack-rewrite cycles. Bundle with the next CLAUDE.md gotcha-section touch, or fix when the loop fails again on a multi-commit subject sweep.
+
+Touches: `CLAUDE.md` Gotchas section (the existing `--no-verify` bullet documents the loop shape).
+
 ---
 
 ## Status

@@ -160,31 +160,30 @@ def test_unit_content_escapes_percent_in_bare_exec_start_path() -> None:
     assert 'ExecStart="' not in content
 
 
-def test_unit_content_escapes_dollar_in_quoted_exec_start_path() -> None:
-    """systemd expands ``$VAR`` and ``${VAR}`` in ExecStart at unit-load time
-    against the unit's environment, so a literal ``$`` in the install path
-    must be doubled to ``$$``. Otherwise an install path like
-    ``/home/me/$TOOLS folder/dbxignored`` is silently rewritten by systemd's
-    variable expander and the unit points at the wrong binary."""
+def test_unit_content_preserves_dollar_in_quoted_exec_start_path() -> None:
+    """Pass-through: a literal ``$`` mid-path must NOT be doubled. systemd
+    only expands the bare ``$VAR`` form when it is the entire argument
+    (per ``man systemd.service`` "Command Lines"); a ``$`` embedded in the
+    executable path is not expanded, so doubling it to ``$$`` would write
+    a literal ``$$`` into argv0 that systemd does not collapse back."""
     from dbxignore.install import linux_systemd
 
     content = linux_systemd.build_unit_content(
         Path("/home/me/$TOOLS folder/dbxignored"),
         "",
     )
-    assert 'ExecStart="/home/me/$$TOOLS folder/dbxignored"' in content
+    assert 'ExecStart="/home/me/$TOOLS folder/dbxignored"' in content
 
 
-def test_unit_content_escapes_dollar_in_bare_exec_start_path() -> None:
-    """Even without whitespace, a ``$`` must be doubled — systemd's variable
-    expansion happens regardless of whether the path is quoted."""
+def test_unit_content_preserves_dollar_in_bare_exec_start_path() -> None:
+    """Pass-through (bare branch): same rule as the quoted variant."""
     from dbxignore.install import linux_systemd
 
     content = linux_systemd.build_unit_content(
         Path("/home/me/$TOOLS/dbxignored"),
         "",
     )
-    assert "ExecStart=/home/me/$$TOOLS/dbxignored\n" in content
+    assert "ExecStart=/home/me/$TOOLS/dbxignored\n" in content
     assert 'ExecStart="' not in content
 
 

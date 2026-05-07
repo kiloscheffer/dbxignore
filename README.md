@@ -82,6 +82,22 @@ Notes:
 - Several common operations strip xattrs silently: `cp` without `-a`, `mv` across filesystems, most archivers, `vim`'s default save-via-rename. The watchdog plus hourly sweep re-apply markers automatically; no action needed.
 - Linux symlinks cannot carry `user.*` xattrs (kernel restriction). A symlink matched by a rule logs one `WARNING` per sweep and is skipped. Its target is not affected.
 
+### Linux daemon prerequisites
+
+The daemon uses inotify to watch the Dropbox tree recursively. The kernel
+caps the number of watches per user (`fs.inotify.max_user_watches`); on
+default-config kernels this is often 8192, which a typical Dropbox tree
+exceeds. The daemon refuses to start (exit code 75) when the limit is hit.
+
+Raise the limit (one-time, persistent across reboots):
+
+    echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/99-dbxignore.conf
+    sudo sysctl --system
+
+If the daemon won't start, check `journalctl --user -u dbxignore.service`
+for the exact errno (ENOSPC = watch count, EMFILE = instance count) and the
+sysctl command to run.
+
 ## Install (macOS)
 
 dbxignore on macOS supports both Dropbox sync modes and auto-detects which one is active:

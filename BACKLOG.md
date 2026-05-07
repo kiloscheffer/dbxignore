@@ -1792,13 +1792,45 @@ systemd's official escape rule: enclose paths with whitespace in double quotes, 
 
 Touches: `src/dbxignore/install/linux_systemd.py` (ExecStart construction), `tests/test_linux_systemd.py` (path with whitespace produces a unit file systemd would parse correctly — round-trip via the systemd parser if we add a test dep, otherwise structural assertion on the rendered unit text).
 
+## 83. Pre-flight `commit-check` loop on Windows Git Bash buffers stdin
+
+**Surfaced 2026-05-08 in PR #144 + PR #145 work.**
+
+The CLAUDE.md gotcha about `--no-verify` recommends a pre-flight loop to validate every new commit subject before push:
+
+```bash
+for sha in $(git log origin/main..HEAD --format='%h'); do
+  git log -1 --format='%B' $sha | commit-check -m /dev/stdin
+done
+```
+
+In practice on Windows Git Bash the loop reports `exit=1` for every iteration with the same error message regardless of which subject is being checked — `commit-check -m /dev/stdin` appears to consume the whole pipeline's stdin on the first iteration and reuse a stale buffer for subsequent ones. The visible symptom in PR #144's pre-push session: one over-72-char commit subject reached CI undetected because the loop output looked like every commit was failing identically (the loop's per-iteration output was the same long banner, easy to scroll past as "loop noise").
+
+The single-shot variant works fine:
+
+```bash
+echo "<subject>" | commit-check -m /dev/stdin
+```
+
+So the loop's stdin redirection is the issue, not commit-check itself.
+
+**Fix candidates:**
+
+- **Use single-shot pre-flight only.** Document the loop as buggy on Windows; recommend per-commit invocation. ~1 line of CLAUDE.md gotcha update. Lowest-effort, doesn't fix the loop.
+- **Wrap the per-iteration redirection differently.** Try `commit-check -m <(git log -1 --format='%B' $sha)` (process substitution) or write each subject to a temp file inside the loop. Restores the loop ergonomics; needs Windows verification.
+- **Replace with a Python one-liner** that imports `commit_check` directly and feeds each subject programmatically — avoids the shell's stdin handling entirely. Heaviest but most portable.
+
+**Urgency:** low — bounded annoyance during heavy stack-rewrite cycles. Bundle with the next CLAUDE.md gotcha-section touch, or fix when the loop fails again on a multi-commit subject sweep.
+
+Touches: `CLAUDE.md` Gotchas section (the existing `--no-verify` bullet documents the loop shape).
+
 ---
 
 ## Status
 
 ### Open
 
-Twelve items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Thirteen items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -1812,6 +1844,8 @@ Twelve items. All passive (no concrete trigger requires action) — bundle each 
 - **#74** — GitHub Actions pinned to mutable major-version tags (`@v4`, `@v1`, `@v2.6.0`, `@release/v1`) rather than 40-char SHAs across all workflow files. Speculative security hardening — switching to SHAs would be a project-wide convention shift requiring a Dependabot maintenance practice. Surfaced 2026-05-05 in `code-reviewer` review of PR #111. No observed incident or specific pressure.
 - **#76** — Conflict detector skips negations whose pattern starts with a glob (`**/foo/bar/`, `foo*/bar/`); `RuleCache.match()` then reports such paths as not-ignored even though Dropbox inheritance makes them ignored on disk. Marker behavior is correct (reconcile evaluates per-file `match()`); the bug surface is `status` / `explain` diagnostics. Three fix candidates filed in the body (conservative drop / targeted detection / warn-only). Surfaced 2026-05-05 in code review of the daemon classification path.
 - **#77** — Debouncer key disambiguation in `_classify` relies on string prefixing (`moved-into:` added in PR #120) rather than a structured tuple shape. The remaining first-vs-second-shape collision (move-out + created/modified on the same `.dropboxignore` within 100ms) still ships. Three fix candidates: structured tuple key (preferred), per-role queues, status-quo-plus-audit-comment. Surfaced 2026-05-05 in Codex review of PR #120.
+- **#83** — Pre-flight `commit-check` loop on Windows Git Bash buffers stdin: the CLAUDE.md-recommended `for sha in ...; do ... | commit-check -m /dev/stdin; done` produces identical per-iteration output regardless of which subject is being checked, hiding which one actually fails. Single-shot `echo "<subject>" | commit-check -m /dev/stdin` works. Three fix candidates filed (document-as-buggy / process-substitution-or-tmpfile / Python one-liner). Surfaced 2026-05-08 during PR #144 + #145 stack-rewrite cycles.
+
 ### Resolved (reverse chronological)
 
 #### 2026-05-08

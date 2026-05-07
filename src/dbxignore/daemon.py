@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import errno
 import logging
 import logging.handlers
 import os
@@ -28,6 +29,8 @@ from dbxignore.rules import IGNORE_FILENAME, RuleCache
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from watchdog.observers.api import BaseObserver
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +273,41 @@ def _timeouts_from_env() -> dict[EventKind, int]:
     return timeouts
 
 
+_ENOSPC_MESSAGE = (
+    "inotify watch limit reached (errno ENOSPC). The kernel's "
+    "fs.inotify.max_user_watches is exhausted; recursive watch on a Dropbox "
+    "tree larger than the per-user limit fails at observer startup. To raise "
+    "the limit, run as root:\n"
+    "\n"
+    "    sudo sysctl -w fs.inotify.max_user_watches=524288\n"
+    "\n"
+    "To make the change persist across reboots:\n"
+    "\n"
+    "    echo 'fs.inotify.max_user_watches=524288' | sudo tee "
+    "/etc/sysctl.d/99-dbxignore.conf\n"
+    "    sudo sysctl --system\n"
+    "\n"
+    "Alternatively, reduce the watched tree by adding rules to .dropboxignore. "
+    "Daemon exiting with status 75."
+)
+
+_EMFILE_MESSAGE = (
+    "inotify instance limit reached (errno EMFILE). The kernel's "
+    "fs.inotify.max_user_instances is exhausted. To raise the limit, run as "
+    "root:\n"
+    "\n"
+    "    sudo sysctl -w fs.inotify.max_user_instances=1024\n"
+    "\n"
+    "To make the change persist across reboots:\n"
+    "\n"
+    "    echo 'fs.inotify.max_user_instances=1024' | sudo tee "
+    "/etc/sysctl.d/99-dbxignore.conf\n"
+    "    sudo sysctl --system\n"
+    "\n"
+    "Daemon exiting with status 75."
+)
+
+
 def _log_dir() -> Path:
     return state_module.user_log_dir()
 
@@ -362,6 +400,38 @@ def _is_other_live_daemon(pid: int | None) -> bool:
     return state_module.is_daemon_alive(pid)
 
 
+def _start_observer_or_exit(observer: BaseObserver) -> None:
+    """Start ``observer``; trap kernel-watch-resource exhaustion and exit cleanly.
+
+    inotify's per-user limits surface here on Linux when a Dropbox tree
+    exceeds ``fs.inotify.max_user_watches`` (raises ``OSError(ENOSPC)``)
+    or ``fs.inotify.max_user_instances`` (raises ``OSError(EMFILE)``).
+    Without this trap the daemon dies with an opaque traceback in journalctl.
+
+    On a trapped errno: log ERROR with the matching sysctl runbook, then
+    ``sys.exit(75)`` (POSIX ``EX_TEMPFAIL``). systemd marks the unit
+    ``failed`` so ``systemctl is-failed`` and status-bar widgets catch it.
+    Existing fatal paths in ``run()`` (``no Dropbox roots``, ``already
+    running``) return silently with exit 0; this path deviates because the
+    kernel signal warrants a non-zero exit.
+
+    Other ``OSError`` shapes propagate; we don't suppress unknown causes.
+
+    Caller MUST invoke this from inside ``_configured_logging()`` so the
+    ERROR record reaches ``daemon.log`` and (on Linux) systemd-journald.
+    """
+    try:
+        observer.start()
+    except OSError as exc:
+        if exc.errno == errno.ENOSPC:
+            logger.error(_ENOSPC_MESSAGE)
+            sys.exit(75)
+        if exc.errno == errno.EMFILE:
+            logger.error(_EMFILE_MESSAGE)
+            sys.exit(75)
+        raise
+
+
 class _WatchdogHandler(FileSystemEventHandler):
     def __init__(self, debouncer: Debouncer, roots: list[Path], cache: RuleCache) -> None:
         self._debouncer = debouncer
@@ -442,7 +512,7 @@ def run(stop_event: threading.Event | None = None) -> None:
 
         debouncer.start()
         try:
-            observer.start()
+            _start_observer_or_exit(observer)
             logger.info("watching roots: %s", [str(r) for r in configured_roots])
             try:
                 while not stop_event.is_set():

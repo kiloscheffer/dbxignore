@@ -1,41 +1,9 @@
 import contextlib
 from pathlib import Path
 
-import psutil  # type: ignore[import-untyped, unused-ignore]
 import pytest
 
 from dbxignore import daemon, state
-
-
-@pytest.mark.parametrize(
-    "name,expected",
-    [
-        ("python.exe", True),
-        ("python3", True),
-        ("pythonw.exe", True),
-        ("dbxignored.exe", True),
-        ("dbxignored", True),
-        ("notepad.exe", False),
-        ("svchost.exe", False),
-    ],
-)
-def test_is_other_live_daemon_accepts_python_and_frozen_exe(
-    monkeypatch: pytest.MonkeyPatch, name: str, expected: bool
-) -> None:
-    class _FakeProc:
-        def __init__(self, _pid: int) -> None:
-            pass
-
-        def name(self) -> str:
-            return name
-
-    monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
-    monkeypatch.setattr(psutil, "Process", _FakeProc)
-
-    # Use a pid that's not our own to bypass the self-check short-circuit.
-    other_pid = 1 if daemon.os.getpid() != 1 else 2  # type: ignore[attr-defined]
-    assert daemon._is_other_live_daemon(other_pid) is expected
-
 
 # ---- singleton lock (followup item #78) -------------------------------------
 

@@ -398,19 +398,6 @@ def _configured_logging() -> Iterator[None]:
         pkg_logger.setLevel(saved_level)
 
 
-def _is_other_live_daemon(pid: int | None) -> bool:
-    """Return True if ``pid`` is a live dbxignore daemon, but not us.
-
-    Wraps ``state.is_daemon_alive`` with the singleton-check-specific
-    self-exclusion: when ``daemon.run`` reads its own freshly-written
-    ``state.json``, the recorded PID matches the current process and
-    must NOT count as a "prior daemon" — otherwise startup would refuse.
-    """
-    if pid is None or pid == os.getpid():
-        return False
-    return state_module.is_daemon_alive(pid)
-
-
 def _singleton_lock_path() -> Path:
     """Return the path of the daemon-singleton lock file.
 
@@ -557,40 +544,47 @@ def run(stop_event: threading.Event | None = None) -> None:
                 logger.error("daemon already running (singleton lock held); refusing to start")
             return
 
-        # Capture our own process create_time so the persisted state.json
-        # carries it for future is_daemon_alive(create_time=...) checks
-        # (backlog item #79). Lazy-imported because psutil is soft-required
-        # and we want graceful degradation when it's missing.
+        # Wrap the entire post-acquisition body so the lock is released on
+        # any exit path — empty-roots return, detection_summary raise,
+        # observer.start failure, etc. The kernel would also auto-release
+        # on process exit, but explicit close keeps the contract crisp for
+        # tests that bring the daemon up and down within a single process.
+        # Without the wide try/finally the empty-configured_roots return
+        # below would silently leak the handle for the rest of the process.
         try:
-            import psutil  # type: ignore[import-untyped, unused-ignore]
+            # Capture our own process create_time so the persisted state.json
+            # carries it for future is_daemon_alive(create_time=...) checks
+            # (backlog item #79). Lazy-imported because psutil is soft-required
+            # and we want graceful degradation when it's missing.
+            try:
+                import psutil  # type: ignore[import-untyped, unused-ignore]
 
-            daemon_create_time: float | None = psutil.Process(os.getpid()).create_time()
-        except Exception:  # noqa: BLE001 — psutil missing or any per-platform quirk
-            daemon_create_time = None
+                daemon_create_time: float | None = psutil.Process(os.getpid()).create_time()
+            except Exception:  # noqa: BLE001 — psutil missing or any per-platform quirk
+                daemon_create_time = None
 
-        def _signal_handler(signum: int, _frame: object) -> None:
-            logger.info("received signal %s, shutting down", signum)
-            stop_event.set()
+            def _signal_handler(signum: int, _frame: object) -> None:
+                logger.info("received signal %s, shutting down", signum)
+                stop_event.set()
 
-        for s in (signal.SIGINT, signal.SIGTERM):
-            with contextlib.suppress(ValueError, AttributeError):
-                signal.signal(s, _signal_handler)
+            for s in (signal.SIGINT, signal.SIGTERM):
+                with contextlib.suppress(ValueError, AttributeError):
+                    signal.signal(s, _signal_handler)
 
-        # Resolve at the daemon boundary; downstream layers must not re-pay.
-        configured_roots = [r.resolve() for r in roots_module.discover()]
-        if not configured_roots:
-            logger.error("no Dropbox roots discovered; exiting")
-            return
+            # Resolve at the daemon boundary; downstream layers must not re-pay.
+            configured_roots = [r.resolve() for r in roots_module.discover()]
+            if not configured_roots:
+                logger.error("no Dropbox roots discovered; exiting")
+                return
 
-        # Surface the macOS sync-mode detection result so users can self-
-        # diagnose without DBXIGNORE_LOG_LEVEL=DEBUG (followup item 37).
-        # Returns None on Windows/Linux — single-attribute platforms have
-        # no detection step to report.
-        summary = detection_summary()
-        if summary is not None:
-            logger.info("sync mode detection: %s", summary)
+            # Surface the macOS sync-mode detection result so users can self-
+            # diagnose without DBXIGNORE_LOG_LEVEL=DEBUG (followup item 37).
+            # Returns None on Windows/Linux — single-attribute platforms have
+            # no detection step to report.
+            summary = detection_summary()
+            if summary is not None:
+                logger.info("sync mode detection: %s", summary)
 
-        try:
             cache = RuleCache()
             for r in configured_roots:
                 cache.load_root(r)
@@ -623,11 +617,6 @@ def run(stop_event: threading.Event | None = None) -> None:
                 debouncer.stop()
                 logger.info("daemon stopped")
         finally:
-            # Release the OS singleton lock so a subsequent dbxignored
-            # invocation can start. The kernel would also auto-release
-            # on process exit, but explicit close keeps the contract
-            # crisp for tests that bring the daemon up and down within
-            # a single process.
             singleton_lock.close()
 
 

@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +39,16 @@ def detect_invocation() -> tuple[Path, str]:
 
 
 def build_task_xml(exe_path: Path, arguments: str = "") -> str:
-    """Return a Task Scheduler v1.2 XML document for a logon-trigger daemon."""
-    user = getpass.getuser()
-    args_element = f"<Arguments>{arguments}</Arguments>" if arguments else ""
+    """Return a Task Scheduler v1.2 XML document for a logon-trigger daemon.
+
+    All interpolated strings are passed through ``xml.sax.saxutils.escape``
+    so that ``&``, ``<``, and ``>`` in usernames or install paths (e.g.
+    ``C:\\Users\\Tom & Jerry\\``) do not produce malformed XML that
+    ``schtasks /Create /XML`` rejects.
+    """
+    user = escape(getpass.getuser())
+    command = escape(str(exe_path))
+    args_element = f"<Arguments>{escape(arguments)}</Arguments>" if arguments else ""
     return f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -84,7 +92,7 @@ def build_task_xml(exe_path: Path, arguments: str = "") -> str:
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>{exe_path}</Command>
+      <Command>{command}</Command>
       {args_element}
     </Exec>
   </Actions>

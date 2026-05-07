@@ -24,6 +24,49 @@ def test_build_xml_uses_pythonw_when_source_install(tmp_path: Path) -> None:
     assert "-m dbxignore daemon" in xml
 
 
+def test_build_xml_escapes_ampersand_in_exe_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Install paths containing ``&`` (e.g. ``C:\\Users\\Tom & Jerry\\``) must
+    not break the XML. Without escaping, ``schtasks /Create /XML`` rejects the
+    document as not-well-formed."""
+    import xml.etree.ElementTree as ET
+
+    monkeypatch.setattr("getpass.getuser", lambda: "kilo")
+    xml = install.build_task_xml(exe_path=Path(r"C:\Users\Tom & Jerry\dbxignored.exe"))
+    ET.fromstring(xml)  # would raise ParseError on unescaped ``&``
+
+
+def test_build_xml_escapes_special_chars_in_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Usernames containing ``&``, ``<``, or ``>`` are rare but legal. The XML
+    must remain well-formed regardless."""
+    import xml.etree.ElementTree as ET
+
+    monkeypatch.setattr("getpass.getuser", lambda: "A&B<C>")
+    xml = install.build_task_xml(exe_path=Path(r"C:\bin\dbxignored.exe"))
+    root = ET.fromstring(xml)
+    ns = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+    user_ids = root.findall(f".//{ns}UserId")
+    assert user_ids, "expected at least one UserId element"
+    for el in user_ids:
+        assert el.text == "A&B<C>"
+
+
+def test_build_xml_escapes_ampersand_in_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Defensive: arguments are interpolated too, and a future caller passing
+    ``&``-containing args should not silently produce malformed XML."""
+    import xml.etree.ElementTree as ET
+
+    monkeypatch.setattr("getpass.getuser", lambda: "kilo")
+    xml = install.build_task_xml(
+        exe_path=Path(r"C:\bin\dbxignored.exe"),
+        arguments="--flag a&b",
+    )
+    root = ET.fromstring(xml)
+    ns = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+    args_el = root.find(f".//{ns}Arguments")
+    assert args_el is not None
+    assert args_el.text == "--flag a&b"
+
+
 def test_detect_invocation_returns_frozen_mode_when_already_dbxignored(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

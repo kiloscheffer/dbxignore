@@ -92,6 +92,115 @@ def test_unit_content_escapes_backslash_and_quote_in_environment_value() -> None
     assert r'Environment="DBXIGNORE_ROOT=/path with \"quote\" and \\slash"' in content
 
 
+def test_unit_content_quotes_exec_start_path_with_whitespace() -> None:
+    """systemd splits ExecStart on whitespace; an executable path containing
+    a space (e.g. ``/home/user/My Tools/dbxignored``) would be tokenized into
+    two separate args, breaking the unit. Wrap the path in double quotes so
+    systemd's parser treats it as one token."""
+    from dbxignore.install import linux_systemd
+
+    content = linux_systemd.build_unit_content(
+        Path("/home/user/My Tools/dbxignored"),
+        "",
+    )
+    assert 'ExecStart="/home/user/My Tools/dbxignored"' in content
+
+
+def test_unit_content_quotes_exec_start_path_with_whitespace_and_arguments() -> None:
+    """Quoting wraps only the path, not the arguments — arguments stay
+    whitespace-separated so systemd splits them into multiple argv entries
+    as today (e.g. ``-m``, ``dbxignore``, ``daemon``)."""
+    from dbxignore.install import linux_systemd
+
+    content = linux_systemd.build_unit_content(
+        Path("/home/user/My Tools/python"),
+        "-m dbxignore daemon",
+    )
+    assert 'ExecStart="/home/user/My Tools/python" -m dbxignore daemon' in content
+
+
+def test_unit_content_escapes_backslash_and_quote_in_exec_start_path() -> None:
+    """Defensive: paths containing ``"`` or ``\\`` must be C-style-escaped
+    inside the double-quoted ExecStart. Linux paths with these chars are
+    legal but extraordinarily rare."""
+    from dbxignore.install import linux_systemd
+
+    content = linux_systemd.build_unit_content(
+        Path(r'/home/user/odd "path"/dbxignored'),
+        "",
+    )
+    assert r'ExecStart="/home/user/odd \"path\"/dbxignored"' in content
+
+
+def test_unit_content_escapes_percent_in_quoted_exec_start_path() -> None:
+    """systemd expands ``%X`` specifiers in ExecStart at unit-load time
+    (``%T`` → ``/tmp``, ``%h`` → home, etc.). A literal ``%`` in the install
+    path must be doubled to ``%%`` so the specifier expander does not
+    rewrite the executable target. This applies whether the path is quoted
+    or bare; the whitespace branch is exercised here."""
+    from dbxignore.install import linux_systemd
+
+    content = linux_systemd.build_unit_content(
+        Path("/home/me/100% Tools/dbxignored"),
+        "",
+    )
+    assert 'ExecStart="/home/me/100%% Tools/dbxignored"' in content
+
+
+def test_unit_content_escapes_percent_in_bare_exec_start_path() -> None:
+    """Even without whitespace, a ``%`` must be doubled — systemd's
+    specifier expansion happens regardless of whether the path is quoted."""
+    from dbxignore.install import linux_systemd
+
+    content = linux_systemd.build_unit_content(
+        Path("/home/me/100%Tools/dbxignored"),
+        "",
+    )
+    assert "ExecStart=/home/me/100%%Tools/dbxignored\n" in content
+    assert 'ExecStart="' not in content
+
+
+def test_unit_content_preserves_dollar_in_quoted_exec_start_path() -> None:
+    """Pass-through: a literal ``$`` mid-path must NOT be doubled. systemd
+    only expands the bare ``$VAR`` form when it is the entire argument
+    (per ``man systemd.service`` "Command Lines"); a ``$`` embedded in the
+    executable path is not expanded, so doubling it to ``$$`` would write
+    a literal ``$$`` into argv0 that systemd does not collapse back."""
+    from dbxignore.install import linux_systemd
+
+    content = linux_systemd.build_unit_content(
+        Path("/home/me/$TOOLS folder/dbxignored"),
+        "",
+    )
+    assert 'ExecStart="/home/me/$TOOLS folder/dbxignored"' in content
+
+
+def test_unit_content_preserves_dollar_in_bare_exec_start_path() -> None:
+    """Pass-through (bare branch): same rule as the quoted variant."""
+    from dbxignore.install import linux_systemd
+
+    content = linux_systemd.build_unit_content(
+        Path("/home/me/$TOOLS/dbxignored"),
+        "",
+    )
+    assert "ExecStart=/home/me/$TOOLS/dbxignored\n" in content
+    assert 'ExecStart="' not in content
+
+
+def test_unit_content_leaves_simple_exec_start_path_unquoted() -> None:
+    """Standard install paths (no whitespace, no escape chars) stay
+    unquoted — matches the existing on-disk shape and avoids cosmetic
+    churn for the common case."""
+    from dbxignore.install import linux_systemd
+
+    content = linux_systemd.build_unit_content(
+        Path("/usr/local/bin/dbxignored"),
+        "",
+    )
+    assert "ExecStart=/usr/local/bin/dbxignored\n" in content
+    assert 'ExecStart="' not in content
+
+
 def test_unit_content_accepts_none_environment() -> None:
     """environment=None is equivalent to omitting the argument entirely."""
     from dbxignore.install import linux_systemd

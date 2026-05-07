@@ -31,16 +31,50 @@ def _unit_path() -> Path:
     return Path(home) / ".config" / "systemd" / "user" / UNIT_NAME
 
 
-def _escape_systemd_env_value(value: str) -> str:
-    """Escape backslash + double-quote for use inside a quoted Environment= line.
+def _escape_systemd_quoted_string(value: str) -> str:
+    """Escape backslash + double-quote for use inside a systemd quoted string.
 
-    systemd's unit-file parser treats ``Environment="KEY=VALUE"`` as one
-    assignment; literal backslashes and double-quotes inside VALUE must be
-    doubled and backslash-escaped respectively so the parser doesn't
-    misinterpret them as escape sequences or a premature end of the quoted
-    string.
+    Same C-style escape rules apply to both ``Environment="KEY=VALUE"`` and
+    ``ExecStart="/path with space"`` — literal backslashes are doubled and
+    literal double-quotes are backslash-escaped so systemd's parser does not
+    misinterpret them as escape sequences or a premature end-of-string.
     """
     return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _quote_exec_start_path(exe_path: Path) -> str:
+    """Return the path rendered for an ``ExecStart=`` token.
+
+    Two systemd parser concerns:
+
+    - ``ExecStart`` splits on whitespace, so a path containing a space
+      (e.g. ``/home/user/My Tools/dbxignored``) tokenizes incorrectly when
+      bare. Wrap such paths in double quotes and C-style-escape embedded
+      ``"`` and ``\\``.
+    - systemd expands ``%X`` specifiers in ``ExecStart`` at unit-load time
+      (``%T`` → ``/tmp``, ``%h`` → home, etc.), so a literal ``%`` must
+      be doubled to ``%%`` regardless of quoting. Otherwise an install path
+      like ``/home/me/100% Tools/dbxignored`` is silently rewritten by the
+      specifier expander and the unit points at the wrong binary.
+
+    A ``$`` in the path is deliberately **not** escaped: systemd only
+    expands the bare ``$VAR`` form when it is the entire argument (per
+    ``man systemd.service`` "Command Lines"; the docs note the first
+    argument may not be a variable). A literal ``$`` embedded in the
+    executable path is passed through unchanged. Doubling it to ``$$``
+    would write a literal ``$$`` into argv0 that systemd does not collapse
+    back in the executable position. The ``${VAR}`` form IS expanded
+    mid-string, but a path literally containing ``${...}`` is rare enough
+    to defer — and the escape for that form would be a more careful
+    ``${`` → ``$${`` substitution, not a global ``$`` → ``$$``.
+
+    Bare paths without whitespace or escape-needing chars stay unquoted to
+    match the on-disk shape stock distro installs have today.
+    """
+    posix = exe_path.as_posix().replace("%", "%%")
+    if any(ch.isspace() or ch in '"\\' for ch in posix):
+        return f'"{_escape_systemd_quoted_string(posix)}"'
+    return posix
 
 
 def _run_systemctl(cmd: list[str]) -> None:
@@ -68,12 +102,12 @@ def build_unit_content(
     line per entry, placed before ``ExecStart=`` in ``[Service]`` so the daemon
     process sees the variable by the time it runs.
     """
-    exec_start = f"{exe_path.as_posix()} {arguments}".strip()
+    exec_start = f"{_quote_exec_start_path(exe_path)} {arguments}".strip()
     env_lines = ""
     if environment:
         env_lines = (
             "\n".join(
-                f'Environment="{key}={_escape_systemd_env_value(value)}"'
+                f'Environment="{key}={_escape_systemd_quoted_string(value)}"'
                 for key, value in environment.items()
             )
             + "\n"

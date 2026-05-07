@@ -453,24 +453,29 @@ def _build_entries(lines: list[str], spec: pathspec.PathSpec) -> list[tuple[int,
     """Pair each active source line with its compiled pattern.
 
     Fast path: filter ``spec.patterns`` to active entries (``include is not
-    None``) and zip with source-line indices whose stripped content is
-    non-blank and not a leading-``#`` comment. The two counts usually match.
+    None``) and zip with source-line indices. A line is active iff it is
+    non-blank after strip AND does not begin with ``#`` at column 0 — the
+    gitignore-correct comment rule. Leading whitespace before ``#`` makes
+    the line a literal pattern, not a comment (matching pathspec's parse).
+    The two counts usually match.
 
-    Fallback: if they don't (pathspec treating an edge case like a leading-
-    whitespace ``#`` line as a pattern), reparse each source line individually
-    to keep ``(source_line_index, pattern)`` pairing correct.
+    Fallback: defensive scaffolding for future pathspec-version drift. With
+    the gitignore-correct filter above, fast-path counts match in practice;
+    this fallback only fires if pathspec ever diverges from our filter
+    (e.g. classifying some active line as a comment that we don't, or
+    accepting a line as a pattern that our filter drops as blank).
     """
     active_line_indices = [
-        i for i, raw in enumerate(lines) if (s := raw.strip()) and not s.startswith("#")
+        i for i, raw in enumerate(lines) if raw.strip() and not raw.startswith("#")
     ]
     active_patterns = [p for p in spec.patterns if p.include is not None]
     if len(active_line_indices) == len(active_patterns):
         return list(zip(active_line_indices, active_patterns, strict=True))
 
     # _load_file already validated the bulk parse, and pathspec 1.0.4's
-    # single-line parse is consistent with bulk — if bulk succeeded, every
-    # line parses individually too. No try/except needed; a raise here
-    # would signal a real pathspec-version regression worth surfacing.
+    # single-line parse is consistent with bulk. With the gitignore-correct
+    # filter above, this branch is defensive scaffolding — kept for future
+    # pathspec-version drift, not for active recovery of a known case.
     entries: list[tuple[int, pathspec.Pattern]] = []
     for i in active_line_indices:
         for p in _build_spec([lines[i]]).patterns:

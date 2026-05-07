@@ -59,3 +59,20 @@ def test_no_dropboxignore_files_matches_nothing(tmp_path: Path) -> None:
     cache.load_root(tmp_path)
 
     assert cache.match(tmp_path / "anything") is False
+
+
+def test_indented_hash_line_is_active_pattern(tmp_path: Path) -> None:
+    """Lines like `   #literal` are active patterns per gitignore semantics, not comments.
+
+    Pins the comment-filter fix in `_build_entries`: the filter checks
+    `raw.startswith("#")` (not `raw.strip().startswith("#")`) so leading
+    whitespace before `#` keeps the line in the active-pattern set.
+    """
+    rules_path = tmp_path / ".dropboxignore"
+    rules_path.write_text("   #literal\n", encoding="utf-8")
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+
+    loaded = cache._rules[rules_path]
+    assert len(loaded.entries) == 1
+    assert loaded.entries[0][0] == 0

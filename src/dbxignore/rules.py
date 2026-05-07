@@ -137,9 +137,7 @@ class RuleCache:
                 try:
                     seen.add(ignore_file.resolve())
                 except (OSError, RuntimeError) as exc:
-                    logger.warning(
-                        "Could not resolve %s during sweep: %s", ignore_file, exc
-                    )
+                    logger.warning("Could not resolve %s during sweep: %s", ignore_file, exc)
                     continue
                 self._load_if_changed(ignore_file)
             # Drop cached entries for .dropboxignore files under this root that
@@ -284,9 +282,7 @@ class RuleCache:
         try:
             cache_key = (as_path or ignore_file).resolve()
         except (OSError, RuntimeError) as exc:
-            logger.warning(
-                "Could not resolve %s: %s", as_path or ignore_file, exc
-            )
+            logger.warning("Could not resolve %s: %s", as_path or ignore_file, exc)
             return
         try:
             lines = ignore_file.read_text(encoding="utf-8").splitlines()

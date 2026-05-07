@@ -1066,7 +1066,7 @@ def generate(path: Path, output: Path | None, stdout: bool, force: bool) -> None
 
     discovered = _discover_roots()
     target_resolved = target.resolve()
-    if discovered and find_containing(target_resolved, discovered) is None:
+    if find_containing(target_resolved, discovered) is None:
         click.echo(
             f"warning: {target} is not under any discovered Dropbox root; "
             "reconcile will not see it",

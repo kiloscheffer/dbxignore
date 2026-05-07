@@ -1623,6 +1623,8 @@ The reason this isn't urgent: when the platforms diverge in Phase 4.5 (e.g., a d
 
 **Urgency:** low. Polish surfaced from `/simplify` review; defer until either (a) a third bash script lands (e.g., a FreeBSD/BSD variant) raising the duplication-cost ratio, or (b) the manual-test scripts become a more-frequently-edited surface where the duplication starts costing per-PR effort.
 
+**Status: RESOLVED 2026-05-08 (PR #143).** Took fix candidate (option 1): extracted to `scripts/_phase_extended_cli.sh` and `source`d from both scripts via `source "$(dirname "$0")/_phase_extended_cli.sh"`. The body uses ubuntu-vps's slightly more documented variant as canonical (3 informative comments that were missing from the macOS copy now reach both scripts). ubuntu-vps reduced 775 → 654 lines, macos 697 → 579 lines; helper is 140 lines (function body + provenance header). Net `-99` LOC. Bash `-n` parse-checked all three scripts. The trade-off documented in the body — divergence makes the shared file awkward — is real but speculative; if it materializes (a darwin-only smoke check, e.g.), the case can move back into the per-platform script with a comment, leaving the helper as the shared 90% baseline. Option 2 (extract only generic helpers) was declined: the per-script duplication of `assert_grep`/`pass`/`fail` is only ~30 LOC and individually trivial, while Phase 4.5 is the load-bearing duplication.
+
 Touches: `scripts/manual-test-ubuntu-vps.sh`, `scripts/manual-test-macos.sh`, new `scripts/_phase_extended_cli.sh` (option 1) or `scripts/_test_helpers.sh` (option 2).
 
 ## 76. Conflict detector skips negations whose pattern starts with a glob
@@ -1786,7 +1788,7 @@ Touches: `src/dbxignore/install/linux_systemd.py` (ExecStart construction), `tes
 
 ### Open
 
-Eighteen items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Seventeen items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#26** — `install._common.detect_invocation` has an unreachable `RuntimeError` branch (preexisting from `linux_systemd._detect_invocation`, faithfully extracted in PR #57). Doc-vs-code inconsistency, no production hit. Fix when next touching the install layer.
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
@@ -1803,12 +1805,13 @@ Eighteen items. All passive (no concrete trigger requires action) — bundle eac
 - **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall.
 - **#68** — `dbxignore status --summary` runs the full `_load_cache(discovered).conflicts()` walk every poll. Status-bar widgets polling at high cadence pay an rglob over `.dropboxignore` files per tick. Three fix candidates filed in the body (skip conflict walk in summary mode / cache count in state.json / mtime-gated rebuild). Surfaced by `/simplify` review of PR #99's hoist, no user report yet.
 - **#74** — GitHub Actions pinned to mutable major-version tags (`@v4`, `@v1`, `@v2.6.0`, `@release/v1`) rather than 40-char SHAs across all workflow files. Speculative security hardening — switching to SHAs would be a project-wide convention shift requiring a Dependabot maintenance practice. Surfaced 2026-05-05 in `code-reviewer` review of PR #111. No observed incident or specific pressure.
-- **#75** — `phase_extended_cli()` body byte-identical between `manual-test-{ubuntu-vps,macos}.sh` (~120 LOC duplicated). Could extract to `scripts/_phase_extended_cli.sh` and `source` from both. Trade-off is duplication-vs-platform-conditional balance; only two scripts share (Windows is PowerShell). Surfaced 2026-05-05 in `/simplify` review of PRs #114 + #115.
 - **#76** — Conflict detector skips negations whose pattern starts with a glob (`**/foo/bar/`, `foo*/bar/`); `RuleCache.match()` then reports such paths as not-ignored even though Dropbox inheritance makes them ignored on disk. Marker behavior is correct (reconcile evaluates per-file `match()`); the bug surface is `status` / `explain` diagnostics. Three fix candidates filed in the body (conservative drop / targeted detection / warn-only). Surfaced 2026-05-05 in code review of the daemon classification path.
 - **#77** — Debouncer key disambiguation in `_classify` relies on string prefixing (`moved-into:` added in PR #120) rather than a structured tuple shape. The remaining first-vs-second-shape collision (move-out + created/modified on the same `.dropboxignore` within 100ms) still ships. Three fix candidates: structured tuple key (preferred), per-role queues, status-quo-plus-audit-comment. Surfaced 2026-05-05 in Codex review of PR #120.
 ### Resolved (reverse chronological)
 
 #### 2026-05-08
+
+- **#75** in PR #143 — extracted `phase_extended_cli()` from `scripts/manual-test-{ubuntu-vps,macos}.sh` to `scripts/_phase_extended_cli.sh`, sourced via `source "$(dirname "$0")/_phase_extended_cli.sh"`. Used the ubuntu-vps variant (3 informative comments more than the macOS copy) as canonical. Reduced ubuntu-vps 775 → 654 lines, macOS 697 → 579, helper is 140 lines. Net `-99` LOC; bash `-n` parse-checked all three scripts. Future PR-#NN Phase 4.5 additions only have to land in one place. Option 2 (extract generic helpers only) declined as too small a win; option 1 was the load-bearing duplication.
 
 - **#69** in PR #142 — added `test_rulecache_no_conflict_for_glob_prefix_negation` in `tests/test_rules_reload_explain.py`. Real-pathspec counterpart to the shim-based `test_detect_skips_glob_prefix_negation`: loads `**/foo/\n!**/foo/bar/\n` via `RuleCache.load_root` and asserts `cache.conflicts() == []`. Locks down the `literal_prefix() == None` early-exit at `rules_conflicts.py:237-238` against future refactors that would route glob-prefix negations into the strict-ancestor branch.
 

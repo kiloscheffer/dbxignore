@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import pytest
+import pytest
 
 
 def _daemon_name() -> str:
@@ -78,6 +76,9 @@ def test_detect_invocation_falls_back_to_daemon_subcommand_when_sibling_missing(
 
 def test_detect_invocation_falls_back_to_python_module(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delattr(sys, "frozen", raising=False)
+    # Force the Linux/macOS branch — the Windows branch short-circuits to
+    # pythonw.exe before reaching the shutil.which lookup.
+    monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(
         "shutil.which", lambda name: "/usr/bin/python3" if name == "python3" else None
     )
@@ -90,6 +91,7 @@ def test_detect_invocation_falls_back_to_python_module(monkeypatch: pytest.Monke
 
 def test_detect_invocation_uses_path_shim_when_present(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "platform", "linux")
 
     def fake_which(name: str) -> str | None:
         if name == "dbxignored":
@@ -102,3 +104,66 @@ def test_detect_invocation_uses_path_shim_when_present(monkeypatch: pytest.Monke
     exe, args = _common.detect_invocation()
     assert exe == Path("/home/u/.local/bin/dbxignored")
     assert args == ""
+
+
+def test_detect_invocation_raises_when_no_python3_and_no_sys_executable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defensive guard: ``sys.executable`` can be ``""`` or ``None`` on
+    embedded interpreters / misconfigured frozen deployments per Python's
+    docs. When ``shutil.which("dbxignored")`` and ``shutil.which("python3")``
+    both return None AND ``sys.executable`` is falsy, the function must
+    raise ``RuntimeError`` rather than silently producing ``Path('.')``
+    (broken install) or a raw ``TypeError`` from ``Path(None)``.
+
+    Surfaced by Codex review on PR #144 — the original ``if not python``
+    guard was dropped under the (incorrect) belief that ``sys.executable``
+    was always truthy.
+    """
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "executable", "")
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    from dbxignore.install import _common
+
+    with pytest.raises(RuntimeError, match="dbxignored not on PATH"):
+        _common.detect_invocation()
+
+
+def test_detect_invocation_returns_pythonw_on_windows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Windows non-frozen: select ``pythonw.exe`` next to ``sys.executable``.
+
+    Task Scheduler launches at logon and the daemon must not flash a
+    console window or orphan a ``conhost.exe`` — ``pythonw.exe`` (the
+    windowless Python interpreter) avoids both. The ``shutil.which("dbxignored")``
+    PATH-shim lookup that the Linux/macOS branch uses is intentionally
+    skipped on Windows; any shim would still launch ``python.exe`` with
+    a console attached.
+
+    Item #50 — collapsed `windows_task.detect_invocation` into a re-export
+    of `_common.detect_invocation` once the Windows non-frozen branch was
+    folded in here.
+
+    Uses ``tmp_path`` for the executable rather than a hardcoded
+    ``C:\\…\\python.exe`` literal: on POSIX hosts ``Path(r"C:\\…")`` parses
+    the whole backslash string as a single filename (no path components),
+    so ``Path.with_name("pythonw.exe")`` collapses to bare ``pythonw.exe``
+    and the assertion fails on the cross-platform CI legs. Backslash
+    handling is platform-specific to ``pathlib.PureWindowsPath``, which
+    isn't what ``Path`` resolves to on POSIX. Using ``tmp_path / "..."``
+    sidesteps the asymmetry — the parent-directory-vs-filename split is
+    identical on every platform.
+    """
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "platform", "win32")
+    python_exe = tmp_path / "Scripts" / "python.exe"
+    python_exe.parent.mkdir()
+    python_exe.write_text("")
+    monkeypatch.setattr(sys, "executable", str(python_exe))
+    from dbxignore.install import _common
+
+    exe, args = _common.detect_invocation()
+    assert exe == tmp_path / "Scripts" / "pythonw.exe"
+    assert args == "-m dbxignore daemon"

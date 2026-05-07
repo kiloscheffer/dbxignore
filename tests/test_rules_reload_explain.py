@@ -171,6 +171,33 @@ def test_rulecache_still_flags_directory_rule_negation(tmp_path: Path) -> None:
     assert conflicts[0].dropped_pattern == "!build/keep/"
 
 
+def test_rulecache_no_conflict_for_glob_prefix_negation(tmp_path: Path) -> None:
+    """Real-pathspec counterpart to ``test_detect_skips_glob_prefix_negation``.
+
+    Negations whose pattern starts with a glob (``**/foo/``, ``foo*/bar/``)
+    have no extractable literal prefix, so the conflict detector
+    short-circuits at ``literal_prefix() == None`` and never enters the
+    post-PR-#108 ``is_directory_negation`` / strict-ancestor branch
+    (``rules_conflicts.py:237-238``). Documented limitation; the negation
+    silently survives in the active rule set despite Dropbox's
+    inheritance making it semantically inert in some cases.
+
+    This test is the real-pathspec lock-down for that behavior. The
+    existing shim-based test (``test_rules_conflicts.py::test_detect_skips_glob_prefix_negation``)
+    pins the early-exit path, but a future ``literal_prefix()`` refactor
+    that started returning a non-``None`` value for glob-prefix patterns
+    would route this case into the strict-ancestor branch, flag it as
+    a conflict, and break this assertion. Surfaced by the
+    ``pr-test-analyzer`` review of PR #108.
+    """
+    root = tmp_path
+    (root / ".dropboxignore").write_text("**/foo/\n!**/foo/bar/\n", encoding="utf-8")
+    cache = RuleCache()
+    cache.load_root(root)
+
+    assert cache.conflicts() == []
+
+
 def test_rulecache_flags_descendant_negation_under_children_pattern(tmp_path: Path) -> None:
     """`build/*` + `!build/keep/foo.txt`: foo.txt is a strict descendant of
     build/keep, which gets marked by build/*. The file negation can't reach

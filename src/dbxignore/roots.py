@@ -10,7 +10,33 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_ACCOUNT_TYPES = ("personal", "business")
+
+def _read_dropbox_account_paths(info_path: Path) -> list[str]:
+    """Parse a Dropbox ``info.json`` and return per-account ``path`` strings.
+
+    Returns zero or more strings, one per dict-shaped account entry with a
+    non-empty string ``path`` field. Iterates over ``data.values()`` rather
+    than a hardcoded account-type allow-list, so any current or future
+    Dropbox account type (today: ``personal`` / ``business``) is picked up
+    automatically.
+
+    Raises ``OSError`` (file missing or unreadable), ``UnicodeDecodeError``
+    (file isn't valid UTF-8), ``json.JSONDecodeError`` (malformed JSON), or
+    ``ValueError`` (top-level value is not an object). Callers wrap with
+    their own try/except so they can choose between WARNING-with-detail
+    (``roots.discover()``) and silent fallback (mode detection in the macOS
+    backend on hosts where Dropbox isn't installed).
+    """
+    data = json.loads(info_path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"top-level value is not an object: {type(data).__name__}")
+    paths: list[str] = []
+    for account in data.values():
+        if isinstance(account, dict):
+            p = account.get("path")
+            if isinstance(p, str) and p:
+                paths.append(p)
+    return paths
 
 
 def find_containing(path: Path, roots: list[Path]) -> Path | None:
@@ -101,25 +127,13 @@ def discover() -> list[Path]:
         if len(candidates) == 1:
             logger.warning("Dropbox info.json not found at %s", candidates[0])
         else:
-            paths = ", ".join(str(p) for p in candidates)
-            logger.warning("Dropbox info.json not found at any of: %s", paths)
+            joined = ", ".join(str(p) for p in candidates)
+            logger.warning("Dropbox info.json not found at any of: %s", joined)
         return []
 
     try:
-        data = json.loads(info_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        account_paths = _read_dropbox_account_paths(info_path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         logger.warning("Cannot read Dropbox info.json at %s: %s", info_path, exc)
         return []
-
-    if not isinstance(data, dict):
-        logger.warning(
-            "Unexpected Dropbox info.json structure at %s (top-level is not an object)", info_path
-        )
-        return []
-
-    roots: list[Path] = []
-    for account_type in _ACCOUNT_TYPES:
-        account = data.get(account_type)
-        if isinstance(account, dict) and isinstance(account.get("path"), str):
-            roots.append(Path(account["path"]))
-    return roots
+    return [Path(p) for p in account_paths]

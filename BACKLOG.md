@@ -792,6 +792,8 @@ Surfaced 2026-05-02 in a `/simplify` pass on PR #79.
 
 **Urgency:** low. Pure code-quality refactor; no behavior change for users.
 
+**Status: RESOLVED 2026-05-08 (PR #145).** Took fix candidate (1) — extracted `_read_dropbox_account_paths(info_path: Path) -> list[str]` into `roots.py`. Both call sites delegate: `roots.discover()` runs the helper after its own platform-aware path lookup + DBXIGNORE_ROOT override; `_backends/macos_xattr._read_dropbox_paths_from_info()` collapsed to a 4-liner that hardcodes `~/.dropbox/info.json` (preserving the intentional bypass of the DBXIGNORE_ROOT override). The shared helper iterates over `data.values()` rather than the previously-hardcoded `_ACCOUNT_TYPES = ("personal", "business")` filter, picking up future Dropbox account types automatically — small behavior improvement noted in the body. The helper raises (`OSError` / `UnicodeDecodeError` / `JSONDecodeError` / `ValueError`) rather than collapsing to a `None` return; each caller wraps with its own try/except so `roots.discover()` keeps the original "Cannot read Dropbox info.json at %s: %s" WARNING with the exception detail (initial PR draft used a `None`-return shape that lost that detail; the post-review refinement restored it). Net `-19` LOC.
+
 Touches: `src/dbxignore/roots.py`; `src/dbxignore/_backends/macos_xattr.py`; possibly new `src/dbxignore/_dropbox_info.py`; tests for both call sites.
 
 ## 39. `_pluginkit_extension_state()` returns stringly-typed state
@@ -811,6 +813,8 @@ Surfaced 2026-05-02 in a `/simplify` pass on PR #79.
 **Recommendation:** `Literal[...]` annotation if anything — the cost is one line and we get type-checker support for caller-side typos. Don't bother with a full enum; the ergonomics gain is small relative to the boilerplate.
 
 **Urgency:** low. Pure code-quality. Single callsite limits blast radius.
+
+**Status: RESOLVED 2026-05-08 (PR #145).** Took fix candidate (2) — `Literal[...]` return-type annotation. `_pluginkit_extension_state()` is now `def _pluginkit_extension_state() -> Literal["allowed", "disabled", "not_registered", "unknown"]:`, giving mypy/pyright the type information needed to flag caller-side typos like `if extension_state == "disablled":` at type-check time. Did not go for the full enum: the ergonomics gain over the existing string comparisons would be modest given the single callsite, and the body's recommendation already settled the trade-off.
 
 Touches: `src/dbxignore/_backends/macos_xattr.py` (one line annotation, plus possibly an enum class if we go that route).
 
@@ -1792,14 +1796,12 @@ Touches: `src/dbxignore/install/linux_systemd.py` (ExecStart construction), `tes
 
 ### Open
 
-Fifteen items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Thirteen items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
 - **#29** — Codesigning + notarization for macOS binaries. Smooths Gatekeeper UX but requires $99/yr Apple Developer membership. Awaits concrete pain signal.
 - **#30** — Windows-aware single binary via `AttachConsole(ATTACH_PARENT_PROCESS)`. Collapses `dbxignore.exe` + `dbxignored.exe` to one. Three-context UX tradeoff (terminal / Task Scheduler / double-click) is load-bearing today; ctypes path is the implementation route. Awaits binary-size or build-time pain signal.
-- **#38** — info.json parsing duplicated between `roots.py` and `_backends/macos_xattr.py`. Both modules read `~/.dropbox/info.json` and extract per-account `path` fields with subtly different shapes. Real refactor candidate (~30 lines deduplicated) but the semantic differences (DBXIGNORE_ROOT override, account-type strictness) are intentional. Bundle with the next info.json-touching change.
-- **#39** — `_pluginkit_extension_state()` returns stringly-typed state (`"allowed"`/`"disabled"`/`"not_registered"`/`"unknown"`). Cheap fix is a `Literal[...]` return annotation so type-checkers catch caller-side typos. Single callsite limits blast radius; bundle with a future macos-backend-touching change.
 - **#40** — Dual `paths` for-loops in `_detected_attr_name()` could share a `_first_match` helper. Reviewers disagreed: one proposed extraction, another argued the dual structure correctly documents priority semantics. Filed for the design-tension record; current shape is defensible. Awaits a third predicate (rule-of-three trigger).
 - **#51** — `install/__init__.py` platform dispatch duplicated across `install_service`/`uninstall_service`. Filed for the design-tension record (precedent: #40); current 6-block shape is defensible vs a factored-out helper that would introduce stringly-typed action coupling.
 - **#53** — `_sweep_once` walks every directory regardless of marker state — measured 49.62s on a 27k-dir tree. Skip-on-(marker-present + match-still-positive) collapses descent into already-ignored subtrees; rule-mutation events already force a re-walk, so the steady-state invariant holds. ~50 LOC. Bundle with the next daemon-touching change.
@@ -1812,6 +1814,8 @@ Fifteen items. All passive (no concrete trigger requires action) — bundle each
 ### Resolved (reverse chronological)
 
 #### 2026-05-08
+
+- **#38 + #39** in PR #145 — macOS backend cleanup, bundled. **#38**: extracted `_read_dropbox_account_paths(info_path: Path) -> list[str] | None` into `roots.py` as the canonical info.json parser. `roots.discover()` and `_backends/macos_xattr._read_dropbox_paths_from_info()` both delegate, each wrapping with their own error-logging policy (WARNING vs silent). The helper iterates over `data.values()` rather than a hardcoded `_ACCOUNT_TYPES` allow-list, so future Dropbox account types are picked up automatically — the small behavior improvement the body noted as a side-benefit. Net `-19` LOC. **#39**: changed `_pluginkit_extension_state()`'s return annotation from `-> str` to `-> Literal["allowed", "disabled", "not_registered", "unknown"]`. Type-checkers now flag caller-side typos in the `extension_state == "..."` comparisons in `_detect()`. Did not go for the full enum — the ergonomics gain would be modest given the single callsite.
 
 - **#26 + #50** in PR #144 — install-layer cleanup, bundled. **#26**: framing correction — the original BACKLOG body claimed `sys.executable` was "always a non-empty string", but Python docs allow `""` or `None` on embedded interpreters / misconfigured frozen deployments. The guard had real protective value; the merged shape **keeps** the `if not python: raise RuntimeError(...)` arm, and the docstring now spells out when it fires. New regression test `test_detect_invocation_raises_when_no_python3_and_no_sys_executable` pins the contract by monkeypatching `shutil.which` to None and `sys.executable` to `""`. **#50**: extended `_common.detect_invocation`'s non-frozen branch to handle Windows directly — returns `(Path(sys.executable).with_name("pythonw.exe"), "-m dbxignore daemon")` when `sys.platform == "win32"`, intentionally skipping the `shutil.which("dbxignored")` PATH-shim lookup that any Linux/macOS user would hit (a Windows shim would still launch `python.exe` with a console attached, defeating the windowless launch the Task Scheduler logon trigger needs). `install/windows_task.py`'s local `detect_invocation` collapsed to `from dbxignore.install._common import detect_invocation as detect_invocation`, removing the previously-duplicated frozen-branch logic. Four redundant frozen-branch tests in `tests/test_install.py` deleted; a new `test_detect_invocation_returns_pythonw_on_windows` in `tests/test_install_common.py` pins the Windows non-frozen branch.
 

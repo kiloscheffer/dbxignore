@@ -42,8 +42,11 @@ import logging
 import os
 import subprocess
 from pathlib import Path
+from typing import Literal
 
 import xattr  # type: ignore[import-not-found, import-untyped, unused-ignore]
+
+from dbxignore.roots import _read_dropbox_account_paths
 
 from . import require_absolute as _require_absolute
 
@@ -80,30 +83,26 @@ _decision_cache: tuple[list[str], str] | None = None
 def _read_dropbox_paths_from_info() -> list[str]:
     """Read configured sync paths from ``~/.dropbox/info.json``.
 
-    Returns a list because info.json can list multiple accounts (typically
-    ``personal`` and ``business`` keys), each with its own ``path`` field.
-    Returns an empty list if info.json is missing, malformed, or unreadable —
-    callers should treat that as "no Dropbox configured" rather than as an
-    error.
+    Returns ``[]`` if info.json is missing, malformed, or unreadable — mode
+    detection treats that as "no Dropbox configured" and silently falls
+    back rather than logging the kind of WARNING ``roots.discover()`` emits
+    (the macOS backend should never make noise on hosts where Dropbox isn't
+    even installed).
+
+    Bypasses ``roots.discover()``'s ``DBXIGNORE_ROOT`` override on purpose:
+    the override tells the daemon its operational root, but mode detection
+    needs the user's *configured* sync mode, which lives only in info.json.
     """
     home = os.environ.get("HOME")
     if not home:
         return []
-    info_path = Path(home) / ".dropbox" / "info.json"
     try:
-        data = json.loads(info_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        return _read_dropbox_account_paths(Path(home) / ".dropbox" / "info.json")
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return []
-    paths: list[str] = []
-    for account in data.values():
-        if isinstance(account, dict):
-            p = account.get("path")
-            if isinstance(p, str) and p:
-                paths.append(p)
-    return paths
 
 
-def _pluginkit_extension_state() -> str:
+def _pluginkit_extension_state() -> Literal["allowed", "disabled", "not_registered", "unknown"]:
     """Query Apple's PluginKit registry for Dropbox's File Provider extension.
 
     Returns one of:

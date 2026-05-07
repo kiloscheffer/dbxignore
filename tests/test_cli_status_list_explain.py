@@ -71,13 +71,14 @@ def test_explain_prints_matching_rule(tmp_path: Path, monkeypatch: pytest.Monkey
 
 
 def test_explain_no_match_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Not-ignored path → exit 1 (verdict-driven, parity with git check-ignore)."""
     (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
     (tmp_path / "src").mkdir()
     monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
 
     runner = CliRunner()
     result = runner.invoke(cli.main, ["explain", str(tmp_path / "src")])
-    assert result.exit_code == 0
+    assert result.exit_code == 1
     assert "no match" in result.output.lower()
 
 
@@ -315,3 +316,144 @@ def test_status_does_not_log_conflict_warning_to_stderr(
         f"status should not emit conflict WARNINGs; got: {[r.message for r in conflict_warnings]}"
     )
     assert "masked by" in result.output
+
+
+# ---- explain verdict-driven exit codes (followup item 70/71/72) --------
+
+
+def test_explain_exits_0_when_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Path matched by an active rule → exit 0."""
+    (tmp_path / ".dropboxignore").write_text("node_modules/\n", encoding="utf-8")
+    (tmp_path / "node_modules").mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["explain", str(tmp_path / "node_modules")])
+    assert result.exit_code == 0
+    assert "node_modules/" in result.output
+
+
+def test_explain_exits_1_when_not_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Path with no matching rule → exit 1."""
+    (tmp_path / ".dropboxignore").write_text("node_modules/\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["explain", str(tmp_path / "src")])
+    assert result.exit_code == 1
+    assert "no match" in result.output.lower()
+
+
+def test_explain_exits_2_when_no_dropbox_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No Dropbox roots discovered → exit 2 (fatal, project convention).
+
+    The `2` exit is preserved despite git's `128` for fatal because
+    project-wide convention uses `2` for all fatal CLI errors. See spec.
+    """
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [])
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["explain", "anything"])
+    assert result.exit_code == 2
+    # "No Dropbox roots found." goes to stderr.
+    assert "No Dropbox roots found." in result.output
+
+
+def test_explain_dropped_negation_path_still_exits_0(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Path ignored via an ancestor whose negation under it was dropped → exit 0.
+
+    Pins that the verdict comes from `cache.match()` (post-drops), NOT from
+    a list-derivation heuristic over `cache.explain()`'s match list. A naive
+    `any(not m.is_dropped for m in matches)` would coincidentally agree here,
+    but the contract is that `cache.match()` is canonical.
+    """
+    (tmp_path / ".dropboxignore").write_text("build/\n!build/keep/\n", encoding="utf-8")
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "keep").mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["explain", str(tmp_path / "build" / "keep")])
+    assert result.exit_code == 0
+    assert "[dropped]" in result.output
+
+
+def test_explain_quiet_suppresses_stdout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--quiet on an ignored path → exit 0, empty stdout."""
+    (tmp_path / ".dropboxignore").write_text("node_modules/\n", encoding="utf-8")
+    (tmp_path / "node_modules").mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["explain", "--quiet", str(tmp_path / "node_modules")])
+    assert result.exit_code == 0
+    # Click's CliRunner merges stdout+stderr into result.output by default.
+    # When --quiet suppresses stdout AND there's no fatal error (so stderr is
+    # also empty), the merged output is empty. Use mix_stderr=False if we
+    # need to disambiguate.
+    assert result.output == ""
+
+
+def test_explain_quiet_keeps_stderr_for_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--quiet on no-roots → exit 2, stderr preserved (parity with git -q)."""
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [])
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["explain", "--quiet", "anything"])
+    assert result.exit_code == 2
+    # Fatal error still goes to stderr (via click.echo(..., err=True)).
+    # CliRunner merges stdout+stderr into result.output, so we just verify
+    # the error message is there, not suppressed by --quiet.
+    assert "No Dropbox roots found." in result.output
+
+
+@pytest.mark.parametrize(
+    "ignored_path,expected_code",
+    [("node_modules", 0), ("src", 1)],
+)
+def test_check_ignore_alias_identical_to_explain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ignored_path: str,
+    expected_code: int,
+) -> None:
+    """`check-ignore <path>` produces the same output and exit code as `explain <path>`.
+
+    Pins the alias's identical-behavior contract for both ignored and
+    not-ignored cases.
+    """
+    (tmp_path / ".dropboxignore").write_text("node_modules/\n", encoding="utf-8")
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "src").mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    runner = CliRunner()
+    explain_result = runner.invoke(cli.main, ["explain", str(tmp_path / ignored_path)])
+    check_ignore_result = runner.invoke(cli.main, ["check-ignore", str(tmp_path / ignored_path)])
+
+    assert explain_result.exit_code == expected_code
+    assert check_ignore_result.exit_code == expected_code
+    assert explain_result.output == check_ignore_result.output
+
+
+def test_check_ignore_help_distinguishes_from_explain() -> None:
+    """`check-ignore --help` mentions the alias-of framing; `explain --help` does not.
+
+    Pins the deliberate-distinct-docstring decision (Q2=B in the spec) against
+    a future refactor that collapses them via `main.add_command(explain, name=...)`.
+    """
+    runner = CliRunner()
+    explain_help = runner.invoke(cli.main, ["explain", "--help"])
+    check_ignore_help = runner.invoke(cli.main, ["check-ignore", "--help"])
+
+    assert explain_help.exit_code == 0
+    assert check_ignore_help.exit_code == 0
+    assert "Alias of `explain`" in check_ignore_help.output
+    assert "Alias of `explain`" not in explain_help.output

@@ -52,6 +52,14 @@ def detect_invocation() -> tuple[Path, str]:
     - **Linux/macOS** (systemd / launchd): try ``shutil.which("dbxignored")``
       first (the ``uv tool install`` PATH-shim case); fall back to
       ``python3 -m dbxignore daemon`` otherwise.
+
+    Raises ``RuntimeError`` if no ``dbxignored`` shim is on PATH AND
+    ``python3`` isn't on PATH AND ``sys.executable`` is empty/None. This
+    last-ditch case is rare in practice (``sys.executable`` is normally
+    set), but Python's docs allow it for embedded interpreters or
+    misconfigured frozen deployments. CLI callers (``cli.install`` /
+    ``cli.uninstall``) translate the RuntimeError to a clean error rather
+    than a raw traceback.
     """
     if getattr(sys, "frozen", False):
         exe = Path(sys.executable)
@@ -69,4 +77,14 @@ def detect_invocation() -> tuple[Path, str]:
     if exe_str:
         return Path(exe_str), ""
     python = shutil.which("python3") or sys.executable
+    if not python:
+        # ``sys.executable`` can be ``""`` or ``None`` on embedded
+        # interpreters or misconfigured frozen deployments per Python's
+        # docs. Without this guard, ``Path("")`` would silently produce
+        # ``PosixPath('.')`` (broken install) and ``Path(None)`` would
+        # raise a raw ``TypeError`` mid-install.
+        raise RuntimeError(
+            "dbxignored not on PATH and no python3 found; "
+            "run `uv tool install .` from the dbxignore checkout first"
+        )
     return Path(python), "-m dbxignore daemon"

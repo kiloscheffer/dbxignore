@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import pytest
+import pytest
 
 
 def _daemon_name() -> str:
@@ -106,6 +104,30 @@ def test_detect_invocation_uses_path_shim_when_present(monkeypatch: pytest.Monke
     exe, args = _common.detect_invocation()
     assert exe == Path("/home/u/.local/bin/dbxignored")
     assert args == ""
+
+
+def test_detect_invocation_raises_when_no_python3_and_no_sys_executable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defensive guard: ``sys.executable`` can be ``""`` or ``None`` on
+    embedded interpreters / misconfigured frozen deployments per Python's
+    docs. When ``shutil.which("dbxignored")`` and ``shutil.which("python3")``
+    both return None AND ``sys.executable`` is falsy, the function must
+    raise ``RuntimeError`` rather than silently producing ``Path('.')``
+    (broken install) or a raw ``TypeError`` from ``Path(None)``.
+
+    Surfaced by Codex review on PR #144 — the original ``if not python``
+    guard was dropped under the (incorrect) belief that ``sys.executable``
+    was always truthy.
+    """
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "executable", "")
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    from dbxignore.install import _common
+
+    with pytest.raises(RuntimeError, match="dbxignored not on PATH"):
+        _common.detect_invocation()
 
 
 def test_detect_invocation_returns_pythonw_on_windows(

@@ -139,13 +139,19 @@ def _reconcile_path(
         # Write failed: the marker state is still whatever we read.
         return currently_ignored
     except OSError as exc:
+        # Symmetric to the read-side broad-OSError arm (item #21). Tolerates
+        # transient I/O errors (EIO on network drives, ENOSPC on quota-full
+        # disks, etc.) without killing the per-root sweep worker. Other
+        # exception types (real bugs, e.g. AttributeError, TypeError) still
+        # propagate.
         if exc.errno in (errno.ENOTSUP, errno.EOPNOTSUPP):
             logger.warning("Filesystem does not support ignore markers on %s: %s", path, exc)
             report.errors.append((path, f"unsupported: {exc}"))
-            # Mirror PermissionError's return: preserve last-known marker
-            # state so subtree pruning fires when an already-marked
-            # directory's clear fails.
-            return currently_ignored
-        raise
+        else:
+            logger.warning("I/O error writing marker on %s: errno=%s %s", path, exc.errno, exc)
+            report.errors.append((path, f"write: errno={exc.errno} {exc}"))
+        # Preserve last-known marker state so subtree pruning fires when an
+        # already-marked directory's write fails. Mirrors PermissionError arm.
+        return currently_ignored
 
     return currently_ignored

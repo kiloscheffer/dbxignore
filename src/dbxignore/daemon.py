@@ -562,6 +562,29 @@ def run(stop_event: threading.Event | None = None) -> None:
         # Without the wide try/finally the empty-configured_roots return
         # below would silently leak the handle for the rest of the process.
         try:
+            # Defense-in-depth for the migration window: a legacy
+            # (pre-#78) daemon wrote state.json but never created
+            # daemon.lock, so the lock-acquire above succeeded against
+            # nothing. Re-check state.json against the live process
+            # table and refuse if a different live daemon is recorded.
+            # Once everyone has run this version once, state.json's
+            # daemon_pid matches the most recent (this-version) daemon
+            # whose lock would have already blocked the second start,
+            # so this branch becomes vacuous.
+            prior = state_module.read()
+            if (
+                prior is not None
+                and prior.daemon_pid is not None
+                and prior.daemon_pid != os.getpid()
+                and state_module.is_daemon_alive(prior.daemon_pid, prior.daemon_create_time)
+            ):
+                logger.error(
+                    "daemon already running (pid=%d); refusing to start "
+                    "(legacy daemon predates the singleton lock file)",
+                    prior.daemon_pid,
+                )
+                return
+
             # Capture our own process create_time so the persisted state.json
             # carries it for future is_daemon_alive(create_time=...) checks
             # (backlog item #79). Lazy-imported because psutil is soft-required

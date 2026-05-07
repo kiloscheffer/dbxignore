@@ -1,4 +1,5 @@
 import contextlib
+import threading
 from pathlib import Path
 
 import pytest
@@ -111,3 +112,74 @@ def test_run_refuses_when_singleton_lock_is_held(
         assert any("already running" in rec.message.lower() for rec in caplog.records)
     finally:
         lock_holder.close()
+
+
+def test_run_refuses_when_legacy_daemon_alive_without_lock(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Migration defense-in-depth: a legacy (pre-#78) daemon wrote
+    state.json but never created daemon.lock. The new daemon's lock-
+    acquire succeeds (no contention from the legacy process), so without
+    a state-check after acquisition two daemons would run on the same
+    Dropbox roots during the migration window.
+
+    Test: write a state.json with a legacy daemon's pid (no
+    daemon_create_time, simulating a pre-#79 record), mock psutil to
+    claim that pid is a live python process, call daemon.run(), assert
+    it refuses and releases the lock.
+    """
+    import psutil  # type: ignore[import-untyped, unused-ignore]
+
+    monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")
+    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])  # type: ignore[attr-defined]
+    monkeypatch.setattr(daemon, "_configured_logging", contextlib.nullcontext)
+
+    # Pick a pid that's not our own so the self-exclusion branch doesn't
+    # short-circuit. 99999 is in the "almost certainly unused" range; the
+    # mocked psutil makes its existence claim deterministic regardless.
+    legacy_pid = 99999
+    s = state.State(daemon_pid=legacy_pid)
+    state.write(s, tmp_path / "state.json")
+
+    class _FakeProc:
+        def __init__(self, _pid: int) -> None:
+            pass
+
+        def name(self) -> str:
+            return "python.exe"
+
+    monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(psutil, "Process", _FakeProc)
+
+    caplog.set_level("ERROR", logger="dbxignore.daemon")
+
+    # Run daemon in a background thread so that — in the pre-fix world,
+    # where the daemon would proceed past the (missing) legacy check and
+    # block in the main sweep loop — the test can assert the absence of
+    # the early-refusal exit and clean up via stop_event rather than
+    # hanging until pytest-timeout fires. With the fix in place, the
+    # thread exits in milliseconds.
+    stop_event = threading.Event()
+    t = threading.Thread(target=daemon.run, args=(stop_event,), daemon=True)
+    t.start()
+    t.join(timeout=2.0)
+    daemon_returned_early = not t.is_alive()
+    if not daemon_returned_early:
+        stop_event.set()
+        t.join(timeout=5.0)
+
+    assert daemon_returned_early, (
+        "daemon should have refused on legacy-daemon scenario but instead "
+        "proceeded to the main loop — defense-in-depth state-check missing"
+    )
+    assert any("already running" in rec.message.lower() for rec in caplog.records), (
+        f"expected refusal log, got: {[r.message for r in caplog.records]}"
+    )
+
+    # Lock must have been released so a future invocation (after the
+    # legacy daemon dies) can acquire. If we leaked the handle, this
+    # acquisition would fail.
+    fh = daemon._acquire_singleton_lock()
+    assert fh is not None, "lock must be released after legacy-daemon refusal"
+    fh.close()

@@ -156,7 +156,9 @@ def is_daemon_alive(pid: int | None, create_time: float | None = None) -> bool:
     # by platform (Windows is sub-second; Linux/macOS read from /proc or
     # equivalent). A strict equality check is too tight given float
     # round-trip through json; allow a millisecond of slack.
-    return abs(live_create_time - create_time) < 0.001
+    # bool() narrowing because psutil is untyped — without it mypy infers
+    # the comparison's result as Any.
+    return bool(abs(live_create_time - create_time) < 0.001)
 
 
 def write(state: State, path: Path | None = None) -> None:

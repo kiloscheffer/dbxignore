@@ -411,6 +411,60 @@ def _is_other_live_daemon(pid: int | None) -> bool:
     return state_module.is_daemon_alive(pid)
 
 
+def _singleton_lock_path() -> Path:
+    """Return the path of the daemon-singleton lock file.
+
+    Sits next to ``state.json`` under the per-user state directory.
+    Cleaned by ``cli._purge_local_state`` on ``uninstall --purge``.
+    """
+    return state_module.user_state_dir() / "daemon.lock"
+
+
+def _acquire_singleton_lock() -> Any | None:
+    """Try to acquire the daemon-singleton lock.
+
+    Returns the open file handle on success — the caller MUST keep it
+    open for the daemon's lifetime; closing it releases the lock. The
+    OS releases the lock automatically on process exit (handles SIGKILL,
+    power loss, and crashes that bypass the cleanup), so a stale lock
+    file on disk is never a problem on subsequent restarts.
+
+    Returns ``None`` on contention (another process holds the lock).
+
+    Cross-platform via ``fcntl.flock`` on POSIX and ``msvcrt.locking``
+    on Windows. Both use non-blocking exclusive semantics: a second
+    acquisition fails immediately rather than waiting. This is the
+    singleton gate that backlog item #78 introduces — the prior
+    state-based check (read state.json → check is_daemon_alive(prior.pid))
+    had a non-atomic window between read and the first state.write, so
+    two concurrent ``dbxignored`` launches could both decide "no other
+    daemon" and proceed.
+    """
+    lock_path = _singleton_lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    # Open in append+binary+read so the file is created if missing without
+    # truncating an existing one. msvcrt.locking on Windows requires the
+    # locked region to overlap actual file bytes, so write a placeholder
+    # byte if the file is empty.
+    fh = open(lock_path, "ab+")  # noqa: SIM115 — caller closes for daemon lifetime
+    try:
+        if os.fstat(fh.fileno()).st_size == 0:
+            fh.write(b" ")
+            fh.flush()
+        if sys.platform == "win32":
+            import msvcrt  # type: ignore[import-not-found, unused-ignore]
+
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl  # type: ignore[import-not-found, unused-ignore]
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        return None
+    return fh
+
+
 def _start_observer_or_exit(observer: BaseObserver) -> None:
     """Start ``observer``; trap inotify watch/instance exhaustion and exit 75.
 
@@ -481,11 +535,38 @@ def run(stop_event: threading.Event | None = None) -> None:
         stop_event = stop_event or threading.Event()
         daemon_started = dt.datetime.now(dt.UTC)
 
-        # Refuse to run if another daemon is already running.
-        prior = state_module.read()
-        if prior is not None and _is_other_live_daemon(prior.daemon_pid):
-            logger.error("daemon already running (pid=%d); refusing to start", prior.daemon_pid)
+        # Singleton gate (backlog item #78). The OS-level lock is the
+        # authoritative check: kernel-released on process exit so a stale
+        # lock file is never a problem, and acquisition is atomic so two
+        # concurrent ``dbxignored`` launches can't both proceed. The
+        # prior state-based check (read state.json → is_daemon_alive)
+        # had a non-atomic window between read and the first state.write
+        # and is now removed in favor of this lock.
+        singleton_lock = _acquire_singleton_lock()
+        if singleton_lock is None:
+            # Read state.json (best-effort) to recover the existing
+            # daemon's PID for a more useful error. Falls back to a
+            # generic "lock held" message if state is unreadable.
+            prior = state_module.read()
+            if prior is not None and prior.daemon_pid is not None:
+                logger.error(
+                    "daemon already running (pid=%d); refusing to start",
+                    prior.daemon_pid,
+                )
+            else:
+                logger.error("daemon already running (singleton lock held); refusing to start")
             return
+
+        # Capture our own process create_time so the persisted state.json
+        # carries it for future is_daemon_alive(create_time=...) checks
+        # (backlog item #79). Lazy-imported because psutil is soft-required
+        # and we want graceful degradation when it's missing.
+        try:
+            import psutil  # type: ignore[import-untyped, unused-ignore]
+
+            daemon_create_time: float | None = psutil.Process(os.getpid()).create_time()
+        except Exception:  # noqa: BLE001 — psutil missing or any per-platform quirk
+            daemon_create_time = None
 
         def _signal_handler(signum: int, _frame: object) -> None:
             logger.info("received signal %s, shutting down", signum)
@@ -509,40 +590,53 @@ def run(stop_event: threading.Event | None = None) -> None:
         if summary is not None:
             logger.info("sync mode detection: %s", summary)
 
-        cache = RuleCache()
-        for r in configured_roots:
-            cache.load_root(r)
-
-        _sweep_once(configured_roots, cache, daemon_started)
-
-        debouncer = Debouncer(
-            on_emit=lambda item: _dispatch(item[2], cache, configured_roots),
-            timeouts_ms=_timeouts_from_env(),
-        )
-        handler = _WatchdogHandler(debouncer, configured_roots, cache)
-        observer = Observer()
-        for r in configured_roots:
-            observer.schedule(handler, str(r), recursive=True)
-
-        debouncer.start()
         try:
-            _start_observer_or_exit(observer)
-            logger.info("watching roots: %s", [str(r) for r in configured_roots])
+            cache = RuleCache()
+            for r in configured_roots:
+                cache.load_root(r)
+
+            _sweep_once(configured_roots, cache, daemon_started, daemon_create_time)
+
+            debouncer = Debouncer(
+                on_emit=lambda item: _dispatch(item[2], cache, configured_roots),
+                timeouts_ms=_timeouts_from_env(),
+            )
+            handler = _WatchdogHandler(debouncer, configured_roots, cache)
+            observer = Observer()
+            for r in configured_roots:
+                observer.schedule(handler, str(r), recursive=True)
+
+            debouncer.start()
             try:
-                while not stop_event.is_set():
-                    woke = stop_event.wait(SWEEP_INTERVAL_S)
-                    if woke:
-                        break
-                    _sweep_once(configured_roots, cache, daemon_started)
+                _start_observer_or_exit(observer)
+                logger.info("watching roots: %s", [str(r) for r in configured_roots])
+                try:
+                    while not stop_event.is_set():
+                        woke = stop_event.wait(SWEEP_INTERVAL_S)
+                        if woke:
+                            break
+                        _sweep_once(configured_roots, cache, daemon_started, daemon_create_time)
+                finally:
+                    observer.stop()
+                    observer.join()
             finally:
-                observer.stop()
-                observer.join()
+                debouncer.stop()
+                logger.info("daemon stopped")
         finally:
-            debouncer.stop()
-            logger.info("daemon stopped")
+            # Release the OS singleton lock so a subsequent dbxignored
+            # invocation can start. The kernel would also auto-release
+            # on process exit, but explicit close keeps the contract
+            # crisp for tests that bring the daemon up and down within
+            # a single process.
+            singleton_lock.close()
 
 
-def _sweep_once(roots: list[Path], cache: RuleCache, daemon_started: dt.datetime) -> None:
+def _sweep_once(
+    roots: list[Path],
+    cache: RuleCache,
+    daemon_started: dt.datetime,
+    daemon_create_time: float | None = None,
+) -> None:
     sweep_start = time.perf_counter()
 
     # Phase 1: refresh the rule cache. Sequential — load_root mutates the
@@ -582,6 +676,7 @@ def _sweep_once(roots: list[Path], cache: RuleCache, daemon_started: dt.datetime
 
     s = state_module.State(
         daemon_pid=os.getpid(),
+        daemon_create_time=daemon_create_time,
         daemon_started=daemon_started,
         last_sweep=now,
         last_sweep_duration_s=wall_duration,

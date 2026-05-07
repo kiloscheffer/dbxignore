@@ -20,7 +20,7 @@ def test_classify_rules_file_created(tmp_path: Path) -> None:
     assert classification is not None
     kind, key, classified_root, classified_src, _ = classification
     assert kind == EventKind.RULES
-    assert key == str(src.resolve()).lower()
+    assert key == ("single", str(src.resolve()).lower())
     assert classified_root == root
     assert classified_src == src.resolve()
 
@@ -306,7 +306,7 @@ def test_classify_moved_into_rules_keys_on_dest_for_debounce_coalesce(tmp_path: 
     _, key_b, _, _, _ = classification_b
 
     assert key_a == key_b
-    assert str(dest).lower() in key_a
+    assert key_a == ("moved-into", str(dest.resolve()).lower())
 
 
 def test_classify_moved_with_empty_src_to_rule_dest_classifies_as_rules(tmp_path: Path) -> None:
@@ -459,6 +459,44 @@ def test_classify_moved_out_and_moved_into_same_path_have_distinct_keys(tmp_path
     _, key_in, _, _, _ = classification_in
 
     assert key_out != key_in
+
+
+def test_classify_moved_out_and_single_same_path_have_distinct_roles(tmp_path: Path) -> None:
+    """A move-out (`A/.dropboxignore` -> `B/.dropboxignore`, src is rule)
+    and a single-path event (created/modified/deleted on `A/.dropboxignore`)
+    both carry the same path but are semantically distinct: the move-out
+    wants its dest-side reload of B preserved, while the single event
+    just refreshes A. Pre-#77 both keyed on bare ``str(src).lower()`` and
+    a scripted ``mv A/.dropboxignore B/ && touch A/.dropboxignore`` within
+    the 100ms RULES debounce window collapsed them under last-wins.
+
+    The ``DebounceKey`` role discriminator (``"moved-out"`` vs ``"single"``)
+    closes that gap: same path, different role tokens, distinct debounce
+    queues. Regression guard for BACKLOG #77."""
+    root = tmp_path.resolve()
+    a = root / "A"
+    b = root / "B"
+    a.mkdir()
+    b.mkdir()
+    a_rule = a / ".dropboxignore"
+    b_rule = b / ".dropboxignore"
+    a_rule.write_text("build/\n", encoding="utf-8")
+
+    move_out = _stub_event("moved", str(a_rule), dest_path=str(b_rule))
+    single = _stub_event("modified", str(a_rule))
+
+    classification_out = daemon._classify(move_out, roots=[root])
+    classification_single = daemon._classify(single, roots=[root])
+    assert classification_out is not None
+    assert classification_single is not None
+    _, key_out, _, _, _ = classification_out
+    _, key_single, _, _, _ = classification_single
+
+    # Same path component, different role discriminator.
+    assert key_out[1] == key_single[1]
+    assert key_out[0] == "moved-out"
+    assert key_single[0] == "single"
+    assert key_out != key_single
 
 
 def test_dispatch_moved_non_rules_to_rules_reloads_dest(

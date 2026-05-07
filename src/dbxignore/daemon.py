@@ -21,7 +21,7 @@ from watchdog.observers import Observer
 
 from dbxignore import roots as roots_module
 from dbxignore import state as state_module
-from dbxignore.debounce import Debouncer, EventKind
+from dbxignore.debounce import DebounceKey, Debouncer, DebounceRole, EventKind
 from dbxignore.markers import detection_summary
 from dbxignore.reconcile import reconcile_subtree
 from dbxignore.roots import find_containing
@@ -79,13 +79,20 @@ def _moved_dest_under_root(event: Any, roots: list[Path]) -> tuple[Path, Path] |
 
 def _classify(
     event: Any, roots: list[Path]
-) -> tuple[EventKind, str, Path, Path, tuple[Path, Path] | None] | None:
+) -> tuple[EventKind, DebounceKey, Path, Path, tuple[Path, Path] | None] | None:
     """Classify a watchdog event and return
     ``(kind, key, root, resolved_src, dest_pair)``.
 
     ``roots`` MUST already be resolved (see ``_discover_roots`` in cli.py
     and ``run()`` below). ``resolved_src`` is hoisted out of ``_dispatch``
     so downstream consumers don't repeat the syscall.
+
+    ``key`` is a ``DebounceKey`` (``(role, path)`` tuple) — the role
+    discriminator distinguishes the three RULES sub-shapes that previously
+    collided under a single string-keyed model (BACKLOG #77). Roles in
+    use: ``"single"`` for create/modify/delete-on-rule and for all
+    DIR_CREATE / OTHER events; ``"moved-out"`` for moved events with
+    src=rule_file; ``"moved-into"`` for moved events with dest=rule_file.
 
     ``dest_pair`` is ``(dest_root, resolved_dest)`` for moved events whose
     dest is a `.dropboxignore` under a watched root, else ``None``. Threaded
@@ -106,7 +113,7 @@ def _classify(
             dest_root, dest = dest_rule
             return (
                 EventKind.RULES,
-                f"moved-into:{str(dest).lower()}",
+                ("moved-into", str(dest).lower()),
                 dest_root,
                 dest,
                 dest_rule,
@@ -114,7 +121,17 @@ def _classify(
         return None
     root, src = located
     if src.name == IGNORE_FILENAME:
-        return EventKind.RULES, str(src).lower(), root, src, dest_rule
+        # Distinguish moved-out (move event with src=rule) from single
+        # (create/modify/delete on the rule file). Both key on `str(src)`
+        # at the path level, but the role discriminator separates their
+        # debounce queues — a scripted `mv A/.dropboxignore B/ && touch
+        # A/.dropboxignore` within the 100ms RULES debounce window
+        # otherwise lost one of the two dispatches under last-wins
+        # coalesce. Editor save patterns don't naturally produce that
+        # sequence, so the bug was rare; the role discriminator closes
+        # the correctness gap regardless.
+        role: DebounceRole = "moved-out" if event.event_type == "moved" else "single"
+        return EventKind.RULES, (role, str(src).lower()), root, src, dest_rule
     # Moved event with src inside a root but not a rule file, dest is a rule
     # file (atomic-save: `.dropboxignore.tmp` -> `.dropboxignore`). Without
     # this branch the event lands in OTHER and the new rules don't load
@@ -124,20 +141,12 @@ def _classify(
         # name). Atomic-save editors generate unique tmp filenames per
         # save; keying on src would defeat the RULES debounce window for
         # consecutive saves of the same `.dropboxignore`.
-        #
-        # Prefix with `moved-into:` so the key cannot collide with the
-        # first branch's bare-path key (which uses the same path string
-        # when src IS the rule file). Without the prefix, a move-out
-        # `A/.dropboxignore` -> `B/...` (key `A/...`) and a move-into
-        # `tmp` -> `A/.dropboxignore` (key would also be `A/...`) land
-        # on the same debouncer token, and last-wins coalesce drops
-        # one event's dest-side handling.
         _, dest = dest_rule
-        return EventKind.RULES, f"moved-into:{str(dest).lower()}", root, src, dest_rule
+        return EventKind.RULES, ("moved-into", str(dest).lower()), root, src, dest_rule
     if event.event_type == "created" and event.is_directory:
-        return EventKind.DIR_CREATE, str(src).lower(), root, src, None
+        return EventKind.DIR_CREATE, ("single", str(src).lower()), root, src, None
     if event.event_type in ("created", "moved"):
-        return EventKind.OTHER, str(src).lower(), root, src, None
+        return EventKind.OTHER, ("single", str(src).lower()), root, src, None
     return None
 
 

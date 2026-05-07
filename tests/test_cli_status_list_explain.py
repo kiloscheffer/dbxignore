@@ -6,7 +6,7 @@ import pytest
 from click.testing import CliRunner
 
 from dbxignore import cli, state
-from tests.conftest import FakeMarkers
+from tests.conftest import FakeMarkers, FakePsutilProcess
 
 
 def test_status_reports_no_state_when_file_missing(
@@ -44,7 +44,9 @@ def test_status_reports_running_daemon(tmp_path: Path, monkeypatch: pytest.Monke
 
 
 def test_status_reports_not_running_when_create_time_mismatch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_psutil_process
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_psutil_process: FakePsutilProcess,
 ) -> None:
     """Human-readable status path must respect daemon_create_time, just like
     --summary and clear do. A recycled PID claimed by an unrelated python

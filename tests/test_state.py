@@ -7,6 +7,7 @@ import psutil  # type: ignore[import-untyped, unused-ignore]
 import pytest
 
 from dbxignore import state
+from tests.conftest import FakePsutilProcess
 
 
 def test_roundtrip(tmp_path: Path) -> None:
@@ -155,14 +156,14 @@ def test_is_daemon_alive_none_pid_returns_false() -> None:
     assert state.is_daemon_alive(None) is False
 
 
-def test_is_daemon_alive_dead_pid_returns_false(fake_psutil_process) -> None:
+def test_is_daemon_alive_dead_pid_returns_false(fake_psutil_process: FakePsutilProcess) -> None:
     """psutil reports the PID doesn't exist → False, no Process construction."""
     fake_psutil_process(pid_exists=False)
     assert state.is_daemon_alive(99999) is False
 
 
 def test_is_daemon_alive_recycled_pid_returns_false_for_unrelated_process(
-    fake_psutil_process,
+    fake_psutil_process: FakePsutilProcess,
 ) -> None:
     """PID is alive but the process at that PID isn't a dbxignore daemon —
     the PID was reused by something else (firefox, svchost, etc.). The
@@ -172,14 +173,14 @@ def test_is_daemon_alive_recycled_pid_returns_false_for_unrelated_process(
     assert state.is_daemon_alive(12345) is False
 
 
-def test_is_daemon_alive_python_process_returns_true(fake_psutil_process) -> None:
+def test_is_daemon_alive_python_process_returns_true(fake_psutil_process: FakePsutilProcess) -> None:
     """Source-run daemon: process is python (or python3, pythonw.exe, etc.).
     Match is case-insensitive and substring-based so all common variants pass."""
     fake_psutil_process(name="Python3.11")
     assert state.is_daemon_alive(12345) is True
 
 
-def test_is_daemon_alive_dbxignored_process_returns_true(fake_psutil_process) -> None:
+def test_is_daemon_alive_dbxignored_process_returns_true(fake_psutil_process: FakePsutilProcess) -> None:
     """Frozen PyInstaller install: process is dbxignored.exe (or dbxignored
     on macOS/Linux). The 'd' suffix distinguishes the daemon binary from
     the dbxignore CLI binary."""
@@ -187,7 +188,7 @@ def test_is_daemon_alive_dbxignored_process_returns_true(fake_psutil_process) ->
     assert state.is_daemon_alive(12345) is True
 
 
-def test_is_daemon_alive_create_time_match_returns_true(fake_psutil_process) -> None:
+def test_is_daemon_alive_create_time_match_returns_true(fake_psutil_process: FakePsutilProcess) -> None:
     """Both pid_exists AND create_time matching → True. The strict-mode
     contract that backlog item #79 motivates: a recycled PID claimed by an
     unrelated python process would have a different create_time, so this
@@ -196,7 +197,7 @@ def test_is_daemon_alive_create_time_match_returns_true(fake_psutil_process) -> 
     assert state.is_daemon_alive(12345, create_time=1700000000.5) is True
 
 
-def test_is_daemon_alive_create_time_mismatch_returns_false(fake_psutil_process) -> None:
+def test_is_daemon_alive_create_time_mismatch_returns_false(fake_psutil_process: FakePsutilProcess) -> None:
     """pid_exists True but create_time differs → False. This is the
     backlog item #79 fix: catches PID-reuse where the recycled process
     happens to have a name-substring match (another python instance).
@@ -206,7 +207,7 @@ def test_is_daemon_alive_create_time_mismatch_returns_false(fake_psutil_process)
     assert state.is_daemon_alive(12345, create_time=1700000000.5) is False
 
 
-def test_is_daemon_alive_create_time_none_falls_back_to_substring(fake_psutil_process) -> None:
+def test_is_daemon_alive_create_time_none_falls_back_to_substring(fake_psutil_process: FakePsutilProcess) -> None:
     """When create_time is None (state.json predates #79 OR the daemon
     hasn't yet written its create_time), fall back to the substring-name
     check. Backwards-compat with v0.4.x state.json files. The fixture's
@@ -217,7 +218,7 @@ def test_is_daemon_alive_create_time_none_falls_back_to_substring(fake_psutil_pr
     assert state.is_daemon_alive(12345, create_time=None) is True
 
 
-def test_is_daemon_alive_psutil_error_returns_false(fake_psutil_process) -> None:
+def test_is_daemon_alive_psutil_error_returns_false(fake_psutil_process: FakePsutilProcess) -> None:
     """psutil.Process(pid).name() raises (NoSuchProcess if the PID died
     between pid_exists and the name call) → False. Race-window safety net."""
     fake_psutil_process(name_raises=psutil.NoSuchProcess(12345))

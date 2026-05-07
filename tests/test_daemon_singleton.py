@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from dbxignore import daemon, state
+from tests.conftest import FakePsutilProcess
 
 # ---- singleton lock (followup item #78) -------------------------------------
 
@@ -118,7 +119,7 @@ def test_run_refuses_when_legacy_daemon_alive_without_lock(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
-    fake_psutil_process,
+    fake_psutil_process: FakePsutilProcess,
 ) -> None:
     """Migration defense-in-depth: a legacy (pre-#78) daemon wrote
     state.json but never created daemon.lock. The new daemon's lock-

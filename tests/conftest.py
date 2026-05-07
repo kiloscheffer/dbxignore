@@ -18,6 +18,19 @@ class WriteFile(Protocol):
     def __call__(self, path: Path, content: str = ...) -> Path: ...
 
 
+class FakePsutilProcess(Protocol):
+    """Callable shape for the `fake_psutil_process` fixture's install function."""
+
+    def __call__(
+        self,
+        *,
+        name: str = ...,
+        create_time: float | None = ...,
+        pid_exists: bool = ...,
+        name_raises: BaseException | None = ...,
+    ) -> None: ...
+
+
 class FakeMarkers:
     """In-memory stand-in for the ``markers`` module."""
 
@@ -62,7 +75,7 @@ def write_file() -> WriteFile:
 
 
 @pytest.fixture
-def fake_psutil_process(monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201 — factory-fixture
+def fake_psutil_process(monkeypatch: pytest.MonkeyPatch) -> FakePsutilProcess:
     """Factory: install a fake ``psutil.Process`` + ``pid_exists`` pair.
 
     Centralizes the per-test ``_FakeProc`` boilerplate that

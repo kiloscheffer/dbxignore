@@ -59,3 +59,59 @@ def write_file() -> WriteFile:
         return path
 
     return _write
+
+
+@pytest.fixture
+def fake_psutil_process(monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201 — factory-fixture
+    """Factory: install a fake ``psutil.Process`` + ``pid_exists`` pair.
+
+    Centralizes the per-test ``_FakeProc`` boilerplate that
+    ``state.is_daemon_alive`` tests (and a couple of CLI / daemon-singleton
+    callers) had been duplicating ~10 times. The factory returns an
+    install-callable so a single test can configure the fake exactly once
+    and let the rest of the test exercise the real code.
+
+    Kwargs:
+
+    - ``name`` — string returned by ``proc.name()``. Default ``"python.exe"``.
+    - ``create_time`` — float returned by ``proc.create_time()``. Default
+      ``None``; if ``None``, calling ``proc.create_time()`` raises an
+      AssertionError so a test that doesn't expect the create_time path to
+      fire can detect when it does.
+    - ``pid_exists`` — bool returned by ``psutil.pid_exists``. Default
+      ``True``.
+    - ``name_raises`` — exception instance to raise from ``proc.name()``
+      instead of returning the name. Default ``None`` (return the name).
+      Useful for the ``psutil.NoSuchProcess`` race-window test.
+    """
+    import psutil  # type: ignore[import-untyped, unused-ignore]
+
+    def _install(
+        *,
+        name: str = "python.exe",
+        create_time: float | None = None,
+        pid_exists: bool = True,
+        name_raises: BaseException | None = None,
+    ) -> None:
+        class _FakeProc:
+            def __init__(self, _pid: int) -> None:
+                pass
+
+            def name(self) -> str:
+                if name_raises is not None:
+                    raise name_raises
+                return name
+
+            def create_time(self) -> float:
+                if create_time is None:
+                    raise AssertionError(
+                        "fake_psutil_process: create_time() called but the "
+                        "test didn't supply a value — pass create_time=... "
+                        "to the factory if the strict-mode path is expected"
+                    )
+                return create_time
+
+        monkeypatch.setattr(psutil, "pid_exists", lambda _pid: pid_exists)
+        monkeypatch.setattr(psutil, "Process", _FakeProc)
+
+    return _install

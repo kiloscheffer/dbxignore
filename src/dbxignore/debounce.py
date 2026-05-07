@@ -60,7 +60,18 @@ class Debouncer:
             self._thread = None
 
     def submit(self, kind: EventKind, key: str, payload: object) -> None:
-        deadline = time.monotonic() + self._timeouts[kind]
+        timeout = self._timeouts[kind]
+        deadline = time.monotonic() + timeout
+        # DEBUG-level boundary log for backlog item #34 timing diagnostics.
+        # Pairs with the `emit` log below to measure debouncer queue
+        # latency. No-op cost when DBXIGNORE_LOG_LEVEL != DEBUG.
+        logger.debug(
+            "submit kind=%s key=%s timeout=%.3fs queue_depth=%d",
+            kind.value,
+            key,
+            timeout,
+            len(self._pending),
+        )
         with self._cond:
             self._pending[(kind, key)] = _Pending(payload=payload, deadline=deadline)
             # Always notify: the worker recomputes its wait-until on every
@@ -69,14 +80,18 @@ class Debouncer:
 
     def _run(self) -> None:
         while True:
-            due: list[tuple[EventKind, str, object]] = []
+            due: list[tuple[EventKind, str, object, float]] = []
             with self._cond:
                 if self._stopped:
                     return
                 now = time.monotonic()
                 for key, pending in list(self._pending.items()):
                     if pending.deadline <= now:
-                        due.append((key[0], key[1], pending.payload))
+                        # Carry deadline alongside the payload so the post-lock
+                        # emit log can report queue dwell time (now - deadline).
+                        # Deadline is the SCHEDULED fire time; if dwell > 0 the
+                        # worker thread was starved between deadline and now.
+                        due.append((key[0], key[1], pending.payload, pending.deadline))
                         del self._pending[key]
                 if not due:
                     # Wait until the soonest deadline, or indefinitely if no
@@ -91,8 +106,20 @@ class Debouncer:
                         self._cond.wait()
                     continue
             # Emit outside the lock so on_emit can re-entrantly call submit().
-            for item in due:
+            for emit_kind, emit_key, payload, deadline in due:
+                # DEBUG-level boundary log for backlog item #34 timing
+                # diagnostics. `dwell` measures how long after the deadline
+                # the worker actually got to the item — under GIL/CPU
+                # starvation this can be much larger than the configured
+                # timeout. No-op cost when DBXIGNORE_LOG_LEVEL != DEBUG.
+                emit_at = time.monotonic()
+                logger.debug(
+                    "emit kind=%s key=%s dwell=%.3fs",
+                    emit_kind.value,
+                    emit_key,
+                    emit_at - deadline,
+                )
                 try:
-                    self._on_emit(item)
+                    self._on_emit((emit_kind, emit_key, payload))
                 except Exception:  # noqa: BLE001
                     logger.exception("debouncer emit handler failed")

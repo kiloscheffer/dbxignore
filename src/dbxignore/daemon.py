@@ -146,6 +146,17 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
     if classification is None:
         return
     kind, _key, root, src, dest_pair = classification
+    # DEBUG-level boundary log for backlog item #34 timing diagnostics.
+    # Emitted on the debouncer worker thread (or synchronously from the
+    # watchdog thread for fast-path DIR_CREATEs that route through here in
+    # the future). Pairs with `submit` / `emit` timestamps to measure
+    # queue-to-dispatch latency. No-op cost when DBXIGNORE_LOG_LEVEL != DEBUG.
+    logger.debug(
+        "dispatch kind=%s event_type=%s path=%s",
+        kind.value,
+        event.event_type,
+        src,
+    )
 
     if kind is EventKind.RULES:
         if event.event_type == "deleted":
@@ -429,6 +440,16 @@ class _WatchdogHandler(FileSystemEventHandler):
         self._cache = cache
 
     def on_any_event(self, event: Any) -> None:
+        # DEBUG-level boundary log for backlog item #34 timing diagnostics.
+        # Emitted on the watchdog thread BEFORE classification so we can
+        # measure kernel-event-delivery latency from the test-side write
+        # timestamp. No-op cost when DBXIGNORE_LOG_LEVEL != DEBUG.
+        logger.debug(
+            "on_any_event type=%s path=%s is_dir=%s",
+            event.event_type,
+            event.src_path,
+            event.is_directory,
+        )
         try:
             classification = _classify(event, self._roots)
             if classification is None:
@@ -444,9 +465,12 @@ class _WatchdogHandler(FileSystemEventHandler):
             # processed RULES event, the bypass marks a path that the next
             # reconcile_subtree (driven by that RULES event) will clear —
             # bounded transient false-positive (followup item 57).
-            if kind is EventKind.DIR_CREATE and self._cache.match(src):
-                reconcile_subtree(root, src, self._cache)
-                return
+            if kind is EventKind.DIR_CREATE:
+                matched = self._cache.match(src)
+                logger.debug("fast-path DIR_CREATE: match=%s path=%s", matched, src)
+                if matched:
+                    reconcile_subtree(root, src, self._cache)
+                    return
             self._debouncer.submit(kind, key, event)
         except Exception:  # noqa: BLE001 — watcher must not die
             logger.exception("watchdog handler failed on event %r", event)

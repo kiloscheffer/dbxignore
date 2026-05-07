@@ -51,6 +51,11 @@ def reconcile_subtree(
     """
     start = time.perf_counter()
     report = Report()
+    # DEBUG-level boundary log for backlog item #34 timing diagnostics.
+    # Pairs with the `done` log below to measure subtree-walk wall-clock.
+    # Under AV scanning, this can be the dominant cost on Windows runners.
+    # No-op cost when DBXIGNORE_LOG_LEVEL != DEBUG.
+    logger.debug("reconcile_subtree start subdir=%s dry_run=%s", subdir, dry_run)
 
     if subdir != root and not subdir.is_relative_to(root):
         raise ValueError(f"subdir {subdir} is not under root {root}")
@@ -58,6 +63,14 @@ def reconcile_subtree(
     # If subdir itself ends up ignored, don't descend.
     if _reconcile_path(subdir, cache, report, dry_run=dry_run):
         report.duration_s = time.perf_counter() - start
+        logger.debug(
+            "reconcile_subtree done subdir=%s duration=%.4fs marked=%d cleared=%d errors=%d",
+            subdir,
+            report.duration_s,
+            report.marked,
+            report.cleared,
+            len(report.errors),
+        )
         return report
 
     for current, dirnames, filenames in os.walk(subdir, followlinks=False):
@@ -73,6 +86,14 @@ def reconcile_subtree(
             _reconcile_path(current_path / name, cache, report, dry_run=dry_run)
 
     report.duration_s = time.perf_counter() - start
+    logger.debug(
+        "reconcile_subtree done subdir=%s duration=%.4fs marked=%d cleared=%d errors=%d",
+        subdir,
+        report.duration_s,
+        report.marked,
+        report.cleared,
+        len(report.errors),
+    )
     return report
 
 
@@ -113,7 +134,14 @@ def _reconcile_path(
     try:
         if should_ignore and not currently_ignored:
             if not dry_run:
+                # DEBUG-level boundary log for backlog item #34 timing
+                # diagnostics. Measures NTFS ADS write latency per path; on
+                # Windows this is the layer most likely to be slowed by
+                # Defender real-time scanning. No-op cost when
+                # DBXIGNORE_LOG_LEVEL != DEBUG.
+                t0 = time.perf_counter()
                 markers.set_ignored(path)
+                logger.debug("set_ignored path=%s duration=%.4fs", path, time.perf_counter() - t0)
             else:
                 report.would_mark.append(path)
             report.marked += 1
@@ -125,7 +153,9 @@ def _reconcile_path(
                     path,
                 )
             if not dry_run:
+                t0 = time.perf_counter()
                 markers.clear_ignored(path)
+                logger.debug("clear_ignored path=%s duration=%.4fs", path, time.perf_counter() - t0)
             else:
                 report.would_clear.append(path)
             report.cleared += 1

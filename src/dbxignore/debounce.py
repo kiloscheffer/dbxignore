@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -21,6 +21,28 @@ class EventKind(enum.Enum):
     OTHER = "other"  # everything else worth reconciling
 
 
+# Role discriminator on the debounce key. `"single"` is the default for any
+# event whose dedupe identity is just the path (DIR_CREATE, OTHER, and most
+# RULES events). The other two roles disambiguate the two RULES sub-shapes
+# that previously collided under a single string-keyed model:
+#
+#   - `"moved-out"` — moved event whose src is a `.dropboxignore` (the
+#     rule file is moving away from its parent directory).
+#   - `"moved-into"` — moved event whose dest is a `.dropboxignore` (the
+#     rule file is appearing at a new parent — atomic save or cross-watch
+#     move-in).
+#
+# Without the role discriminator a move-out `A/.dropboxignore` -> `B/...`
+# and a created/modified event for `A/.dropboxignore` within the 100ms
+# RULES debounce window both keyed on `str(A/.dropboxignore).lower()`, and
+# the Debouncer's last-wins overwrite would drop one event's dispatch.
+# Surfaced in BACKLOG item #77; the previous string-prefix `"moved-into:"`
+# scheme (PR #120) addressed only the moved-out vs moved-into half of the
+# disambiguation.
+DebounceRole = Literal["single", "moved-out", "moved-into"]
+DebounceKey = tuple[DebounceRole, str]
+
+
 @dataclass
 class _Pending:
     payload: object
@@ -32,12 +54,12 @@ class Debouncer:
 
     def __init__(
         self,
-        on_emit: Callable[[tuple[EventKind, str, object]], None],
+        on_emit: Callable[[tuple[EventKind, DebounceKey, object]], None],
         timeouts_ms: dict[EventKind, int],
     ) -> None:
         self._on_emit = on_emit
         self._timeouts = {k: v / 1000.0 for k, v in timeouts_ms.items()}
-        self._pending: dict[tuple[EventKind, str], _Pending] = {}
+        self._pending: dict[tuple[EventKind, DebounceKey], _Pending] = {}
         # Condition wraps its own lock; _pending is guarded by that lock.
         self._cond = threading.Condition()
         self._stopped = False
@@ -59,7 +81,7 @@ class Debouncer:
             self._thread.join()
             self._thread = None
 
-    def submit(self, kind: EventKind, key: str, payload: object) -> None:
+    def submit(self, kind: EventKind, key: DebounceKey, payload: object) -> None:
         timeout = self._timeouts[kind]
         deadline = time.monotonic() + timeout
         with self._cond:
@@ -70,9 +92,10 @@ class Debouncer:
             # `emit` log below to measure debouncer queue latency. No-op cost
             # when DBXIGNORE_LOG_LEVEL != DEBUG.
             logger.debug(
-                "submit kind=%s key=%s timeout=%.3fs queue_depth=%d",
+                "submit kind=%s role=%s path=%s timeout=%.3fs queue_depth=%d",
                 kind.value,
-                key,
+                key[0],
+                key[1],
                 timeout,
                 len(self._pending),
             )
@@ -82,7 +105,7 @@ class Debouncer:
 
     def _run(self) -> None:
         while True:
-            due: list[tuple[EventKind, str, object, float]] = []
+            due: list[tuple[EventKind, DebounceKey, object, float]] = []
             with self._cond:
                 if self._stopped:
                     return
@@ -116,9 +139,10 @@ class Debouncer:
                 # timeout. No-op cost when DBXIGNORE_LOG_LEVEL != DEBUG.
                 emit_at = time.monotonic()
                 logger.debug(
-                    "emit kind=%s key=%s dwell=%.3fs",
+                    "emit kind=%s role=%s path=%s dwell=%.3fs",
                     emit_kind.value,
-                    emit_key,
+                    emit_key[0],
+                    emit_key[1],
                     emit_at - deadline,
                 )
                 try:

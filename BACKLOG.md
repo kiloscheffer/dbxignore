@@ -1830,7 +1830,7 @@ Touches: `CLAUDE.md` Gotchas section (the existing `--no-verify` bullet document
 
 ### Open
 
-Twelve items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Thirteen items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -1844,6 +1844,8 @@ Twelve items. All passive (no concrete trigger requires action) — bundle each 
 - **#74** — GitHub Actions pinned to mutable major-version tags (`@v4`, `@v1`, `@v2.6.0`, `@release/v1`) rather than 40-char SHAs across all workflow files. Speculative security hardening — switching to SHAs would be a project-wide convention shift requiring a Dependabot maintenance practice. Surfaced 2026-05-05 in `code-reviewer` review of PR #111. No observed incident or specific pressure.
 - **#76** — Conflict detector skips negations whose pattern starts with a glob (`**/foo/bar/`, `foo*/bar/`); `RuleCache.match()` then reports such paths as not-ignored even though Dropbox inheritance makes them ignored on disk. Marker behavior is correct (reconcile evaluates per-file `match()`); the bug surface is `status` / `explain` diagnostics. Three fix candidates filed in the body (conservative drop / targeted detection / warn-only). Surfaced 2026-05-05 in code review of the daemon classification path.
 - **#77** — Debouncer key disambiguation in `_classify` relies on string prefixing (`moved-into:` added in PR #120) rather than a structured tuple shape. The remaining first-vs-second-shape collision (move-out + created/modified on the same `.dropboxignore` within 100ms) still ships. Three fix candidates: structured tuple key (preferred), per-role queues, status-quo-plus-audit-comment. Surfaced 2026-05-05 in Codex review of PR #120.
+- **#83** — Pre-flight `commit-check` loop on Windows Git Bash buffers stdin: the CLAUDE.md-recommended `for sha in ...; do ... | commit-check -m /dev/stdin; done` produces identical per-iteration output regardless of which subject is being checked, hiding which one actually fails. Single-shot `echo "<subject>" | commit-check -m /dev/stdin` works. Three fix candidates filed (document-as-buggy / process-substitution-or-tmpfile / Python one-liner). Surfaced 2026-05-08 during PR #144 + #145 stack-rewrite cycles.
+
 ### Resolved (reverse chronological)
 
 #### 2026-05-08

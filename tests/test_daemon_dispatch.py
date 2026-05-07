@@ -571,8 +571,7 @@ def test_timeouts_from_env_falls_back_on_invalid_value(
     assert timeouts[EventKind.OTHER] == daemon.DEFAULT_TIMEOUTS_MS[EventKind.OTHER]
     assert timeouts[EventKind.RULES] == 150
     assert any(
-        "DBXIGNORE_DEBOUNCE_OTHER_MS" in r.message and "fast" in r.message
-        for r in caplog.records
+        "DBXIGNORE_DEBOUNCE_OTHER_MS" in r.message and "fast" in r.message for r in caplog.records
     ), [r.message for r in caplog.records]
 
 

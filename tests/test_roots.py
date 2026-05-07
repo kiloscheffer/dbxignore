@@ -185,8 +185,7 @@ def test_discover_env_override_relative_path_warns_and_returns_empty(
 
     assert result == []
     assert any(
-        "DBXIGNORE_ROOT" in rec.message and "absolute" in rec.message
-        for rec in caplog.records
+        "DBXIGNORE_ROOT" in rec.message and "absolute" in rec.message for rec in caplog.records
     ), [rec.message for rec in caplog.records]
 
 

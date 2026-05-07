@@ -172,7 +172,7 @@ def test_status_summary_flag_emits_single_line(
     path = tmp_path / "state.json"
     state.write(s, path)
     monkeypatch.setattr(state, "default_path", lambda: path)
-    monkeypatch.setattr(state, "is_daemon_alive", lambda pid: True)
+    monkeypatch.setattr(state, "is_daemon_alive", lambda pid, create_time=None: True)
     monkeypatch.setattr(cli, "_discover_roots", lambda: [])
 
     runner = CliRunner()

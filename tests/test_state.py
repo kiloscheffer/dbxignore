@@ -192,6 +192,77 @@ def test_is_daemon_alive_dbxignored_process_returns_true(monkeypatch: pytest.Mon
     assert state.is_daemon_alive(12345) is True
 
 
+def test_is_daemon_alive_create_time_match_returns_true(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both pid_exists AND create_time matching → True. The strict-mode
+    contract that backlog item #79 motivates: a recycled PID claimed by an
+    unrelated python process would have a different create_time, so this
+    branch shouldn't fire for the false-positive case."""
+
+    class _FakeProc:
+        def __init__(self, _pid: int) -> None:
+            pass
+
+        def name(self) -> str:
+            return "python.exe"
+
+        def create_time(self) -> float:
+            return 1700000000.5
+
+    monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(psutil, "Process", _FakeProc)
+    assert state.is_daemon_alive(12345, create_time=1700000000.5) is True
+
+
+def test_is_daemon_alive_create_time_mismatch_returns_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """pid_exists True but create_time differs → False. This is the
+    backlog item #79 fix: catches PID-reuse where the recycled process
+    happens to have a name-substring match (another python instance).
+    Without create_time disambiguation, the prior is_daemon_alive would
+    return True and incorrectly block destructive verbs."""
+
+    class _FakeProc:
+        def __init__(self, _pid: int) -> None:
+            pass
+
+        def name(self) -> str:
+            return "python.exe"
+
+        def create_time(self) -> float:
+            return 1700001000.0  # different from the state-recorded value
+
+    monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(psutil, "Process", _FakeProc)
+    assert state.is_daemon_alive(12345, create_time=1700000000.5) is False
+
+
+def test_is_daemon_alive_create_time_none_falls_back_to_substring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When create_time is None (state.json predates #79 OR the daemon
+    hasn't yet written its create_time), fall back to the substring-name
+    check. Backwards-compat with v0.4.x state.json files."""
+
+    class _FakeProc:
+        def __init__(self, _pid: int) -> None:
+            pass
+
+        def name(self) -> str:
+            return "python.exe"
+
+        def create_time(self) -> float:
+            # Sentinel that would fail the strict-match check if reached;
+            # the None path must not call create_time().
+            raise AssertionError("create_time should not be called when caller passed None")
+
+    monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(psutil, "Process", _FakeProc)
+    assert state.is_daemon_alive(12345, create_time=None) is True
+
+
 def test_is_daemon_alive_psutil_error_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
     """psutil.Process(pid).name() raises (NoSuchProcess if the PID died
     between pid_exists and the name call) → False. Race-window safety net."""

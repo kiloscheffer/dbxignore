@@ -88,29 +88,41 @@ def daemon_is_running(state_obj: State | None) -> bool:
     "state.json says PID X is the daemon — is X actually running?" check.
     Folds the None-state and None-pid edges into a single bool so callers
     don't have to repeat ``s is not None and s.daemon_pid is not None and
-    is_daemon_alive(s.daemon_pid)``.
+    is_daemon_alive(s.daemon_pid)``. Forwards ``state_obj.daemon_create_time``
+    so a recycled PID at the same numeric value but with a different
+    create_time is correctly rejected (followup item #79).
     """
     if state_obj is None or state_obj.daemon_pid is None:
         return False
-    return is_daemon_alive(state_obj.daemon_pid)
+    return is_daemon_alive(state_obj.daemon_pid, create_time=state_obj.daemon_create_time)
 
 
-def is_daemon_alive(pid: int | None) -> bool:
+def is_daemon_alive(pid: int | None, create_time: float | None = None) -> bool:
     """Return True if ``pid`` is a live dbxignore daemon process.
 
-    Verifies BOTH that the PID exists AND that the process at that PID is
-    plausibly a dbxignore daemon: a recycled PID claimed by an unrelated
-    process registers as alive under a bare existence check, which is the
-    PID-reuse false positive we want to avoid. Frozen PyInstaller installs
-    run as ``dbxignored.exe``; source runs are typically ``python -m
-    dbxignore daemon`` (or pytest under the test suite).
+    Two-stage check. The first stage verifies that the PID exists AND that
+    the process at that PID is plausibly a dbxignore daemon by name: a
+    recycled PID claimed by an unrelated process registers as alive under
+    a bare existence check, which is the PID-reuse false positive we want
+    to avoid. Frozen PyInstaller installs run as ``dbxignored.exe``;
+    source runs are typically ``python -m dbxignore daemon`` (or pytest
+    under the test suite).
+
+    The second stage, gated on a non-None ``create_time``, additionally
+    requires the live process's ``psutil.Process.create_time()`` to match
+    the caller-supplied value. This is the followup item #79 enhancement:
+    a substring-name match is not enough when the recycled PID's new
+    occupant happens to also be a python process (very common when the
+    test suite or any python tooling runs after a daemon dies). Comparing
+    the create_time disambiguates "still that daemon" from "PID was
+    recycled by another python".
 
     Lazy-imports ``psutil``; falls back to ``os.kill(pid, 0)`` for the
     bare-existence check when ``psutil`` isn't installed (in which case
-    PID-reuse can't be detected — a known limitation, not a behavior
-    bug). Used by ``cli.status`` to render the "running / not running /
-    state may be stale" UI and by ``daemon._is_other_live_daemon`` for
-    the singleton check.
+    PID-reuse can't be detected and ``create_time`` is silently ignored —
+    a known limitation, not a behavior bug). Used by ``cli.status`` to
+    render the "running / not running / state may be stale" UI and by
+    ``daemon._is_other_live_daemon`` for the singleton check.
     """
     if pid is None:
         return False
@@ -129,7 +141,22 @@ def is_daemon_alive(pid: int | None) -> bool:
         name = proc.name().lower()
     except psutil.Error:
         return False
-    return "python" in name or "dbxignored" in name
+    if "python" not in name and "dbxignored" not in name:
+        return False
+    if create_time is None:
+        return True
+    # Strict-mode: caller supplied the create_time the daemon recorded
+    # at startup. If it doesn't match the live process's create_time,
+    # the PID was recycled.
+    try:
+        live_create_time = proc.create_time()
+    except psutil.Error:
+        return False
+    # psutil reports create_time as a Unix-epoch float. Resolution varies
+    # by platform (Windows is sub-second; Linux/macOS read from /proc or
+    # equivalent). A strict equality check is too tight given float
+    # round-trip through json; allow a millisecond of slack.
+    return abs(live_create_time - create_time) < 0.001
 
 
 def write(state: State, path: Path | None = None) -> None:

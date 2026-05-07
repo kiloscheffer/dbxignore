@@ -62,18 +62,20 @@ class Debouncer:
     def submit(self, kind: EventKind, key: str, payload: object) -> None:
         timeout = self._timeouts[kind]
         deadline = time.monotonic() + timeout
-        # DEBUG-level boundary log for backlog item #34 timing diagnostics.
-        # Pairs with the `emit` log below to measure debouncer queue
-        # latency. No-op cost when DBXIGNORE_LOG_LEVEL != DEBUG.
-        logger.debug(
-            "submit kind=%s key=%s timeout=%.3fs queue_depth=%d",
-            kind.value,
-            key,
-            timeout,
-            len(self._pending),
-        )
         with self._cond:
             self._pending[(kind, key)] = _Pending(payload=payload, deadline=deadline)
+            # DEBUG-level boundary log for backlog item #34 timing diagnostics.
+            # Inside the lock + after the insert so `queue_depth` is the
+            # post-insert size, not a racing pre-insert read. Pairs with the
+            # `emit` log below to measure debouncer queue latency. No-op cost
+            # when DBXIGNORE_LOG_LEVEL != DEBUG.
+            logger.debug(
+                "submit kind=%s key=%s timeout=%.3fs queue_depth=%d",
+                kind.value,
+                key,
+                timeout,
+                len(self._pending),
+            )
             # Always notify: the worker recomputes its wait-until on every
             # iteration anyway, so a spurious wakeup is just one no-op loop.
             self._cond.notify()

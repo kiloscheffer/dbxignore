@@ -32,6 +32,12 @@ class LastError:
 @dataclass
 class State:
     daemon_pid: int | None = None
+    # Per-process create timestamp (psutil.Process.create_time() value, a
+    # Unix-epoch float). Persisted alongside daemon_pid so is_daemon_alive
+    # can distinguish "the daemon is still that PID" from "the kernel
+    # recycled that PID for an unrelated process". Optional for backwards-
+    # compat with state.json files written before #79.
+    daemon_create_time: float | None = None
     daemon_started: datetime | None = None
     last_sweep: datetime | None = None
     last_sweep_duration_s: float = 0.0
@@ -82,29 +88,43 @@ def daemon_is_running(state_obj: State | None) -> bool:
     "state.json says PID X is the daemon — is X actually running?" check.
     Folds the None-state and None-pid edges into a single bool so callers
     don't have to repeat ``s is not None and s.daemon_pid is not None and
-    is_daemon_alive(s.daemon_pid)``.
+    is_daemon_alive(s.daemon_pid)``. Forwards ``state_obj.daemon_create_time``
+    so a recycled PID at the same numeric value but with a different
+    create_time is correctly rejected (followup item #79).
     """
     if state_obj is None or state_obj.daemon_pid is None:
         return False
-    return is_daemon_alive(state_obj.daemon_pid)
+    return is_daemon_alive(state_obj.daemon_pid, create_time=state_obj.daemon_create_time)
 
 
-def is_daemon_alive(pid: int | None) -> bool:
+def is_daemon_alive(pid: int | None, create_time: float | None = None) -> bool:
     """Return True if ``pid`` is a live dbxignore daemon process.
 
-    Verifies BOTH that the PID exists AND that the process at that PID is
-    plausibly a dbxignore daemon: a recycled PID claimed by an unrelated
-    process registers as alive under a bare existence check, which is the
-    PID-reuse false positive we want to avoid. Frozen PyInstaller installs
-    run as ``dbxignored.exe``; source runs are typically ``python -m
-    dbxignore daemon`` (or pytest under the test suite).
+    Two-stage check. The first stage verifies that the PID exists AND that
+    the process at that PID is plausibly a dbxignore daemon by name: a
+    recycled PID claimed by an unrelated process registers as alive under
+    a bare existence check, which is the PID-reuse false positive we want
+    to avoid. Frozen PyInstaller installs run as ``dbxignored.exe``;
+    source runs are typically ``python -m dbxignore daemon`` (or pytest
+    under the test suite).
+
+    The second stage, gated on a non-None ``create_time``, additionally
+    requires the live process's ``psutil.Process.create_time()`` to match
+    the caller-supplied value. This is the followup item #79 enhancement:
+    a substring-name match is not enough when the recycled PID's new
+    occupant happens to also be a python process (very common when the
+    test suite or any python tooling runs after a daemon dies). Comparing
+    the create_time disambiguates "still that daemon" from "PID was
+    recycled by another python".
 
     Lazy-imports ``psutil``; falls back to ``os.kill(pid, 0)`` for the
     bare-existence check when ``psutil`` isn't installed (in which case
-    PID-reuse can't be detected — a known limitation, not a behavior
-    bug). Used by ``cli.status`` to render the "running / not running /
-    state may be stale" UI and by ``daemon._is_other_live_daemon`` for
-    the singleton check.
+    PID-reuse can't be detected and ``create_time`` is silently ignored —
+    a known limitation, not a behavior bug). Used by ``cli.status`` to
+    render the "running / not running / state may be stale" UI. The
+    daemon's singleton gate has moved to a process-lifetime OS lock (see
+    ``daemon._acquire_singleton_lock``), so this helper is no longer on
+    that path.
     """
     if pid is None:
         return False
@@ -123,7 +143,24 @@ def is_daemon_alive(pid: int | None) -> bool:
         name = proc.name().lower()
     except psutil.Error:
         return False
-    return "python" in name or "dbxignored" in name
+    if "python" not in name and "dbxignored" not in name:
+        return False
+    if create_time is None:
+        return True
+    # Strict-mode: caller supplied the create_time the daemon recorded
+    # at startup. If it doesn't match the live process's create_time,
+    # the PID was recycled.
+    try:
+        live_create_time = proc.create_time()
+    except psutil.Error:
+        return False
+    # psutil reports create_time as a Unix-epoch float. Resolution varies
+    # by platform (Windows is sub-second; Linux/macOS read from /proc or
+    # equivalent). A strict equality check is too tight given float
+    # round-trip through json; allow a millisecond of slack.
+    # bool() narrowing because psutil is untyped — without it mypy infers
+    # the comparison's result as Any.
+    return bool(abs(live_create_time - create_time) < 0.001)
 
 
 def write(state: State, path: Path | None = None) -> None:
@@ -173,6 +210,7 @@ def _encode(state: State) -> dict[str, Any]:
     return {
         "schema": SCHEMA_VERSION,
         "daemon_pid": state.daemon_pid,
+        "daemon_create_time": state.daemon_create_time,
         "daemon_started": state.daemon_started.isoformat() if state.daemon_started else None,
         "last_sweep": state.last_sweep.isoformat() if state.last_sweep else None,
         "last_sweep_duration_s": state.last_sweep_duration_s,
@@ -193,6 +231,20 @@ def _encode(state: State) -> dict[str, Any]:
 def _decode(raw: dict[str, Any]) -> State:
     return State(
         daemon_pid=raw.get("daemon_pid"),
+        # `daemon_create_time` is decode-tolerant: old state.json files
+        # (pre-#79) lack the field and decode to None, which triggers the
+        # legacy substring-name fallback in is_daemon_alive. But when the
+        # field IS present, it MUST be a number — a hand-edited or shape-
+        # mismatched state file with e.g. a string ``daemon_create_time``
+        # would otherwise propagate to ``is_daemon_alive``'s
+        # ``abs(live_create_time - create_time)`` arithmetic and raise
+        # TypeError, breaking status / clear / the daemon's legacy-
+        # startup guard. Raise ValueError here so ``_read_at``'s existing
+        # corrupt-state arm catches it and ``read()`` returns None.
+        # ``isinstance(True, int)`` is True (bool subclasses int) so
+        # explicit bool exclusion is required to reject hand-edited
+        # ``"daemon_create_time": true`` values.
+        daemon_create_time=_validate_create_time(raw.get("daemon_create_time")),
         daemon_started=_parse_dt(raw.get("daemon_started")),
         last_sweep=_parse_dt(raw.get("last_sweep")),
         last_sweep_duration_s=raw.get("last_sweep_duration_s", 0.0),
@@ -212,3 +264,19 @@ def _decode(raw: dict[str, Any]) -> State:
 
 def _parse_dt(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value else None
+
+
+def _validate_create_time(value: Any) -> float | None:
+    """Coerce a JSON-decoded ``daemon_create_time`` to a float or raise.
+
+    Accepts None (field absent — pre-#79 state.json) and numeric values
+    (int or float). Rejects bool (a Python int subclass), strings, lists,
+    dicts, and anything else. ValueError surfaces through ``_read_at``'s
+    corrupt-state arm so ``read()`` returns None on a hand-edited or
+    shape-mismatched record.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"daemon_create_time must be numeric, got {type(value).__name__}")
+    return float(value)

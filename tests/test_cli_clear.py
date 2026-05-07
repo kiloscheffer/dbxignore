@@ -29,7 +29,7 @@ def _setup_marked_tree(
     monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
     monkeypatch.setattr(state, "default_path", lambda: root / "_state.json")
     # Ensure no daemon-alive false positive blocks the test.
-    monkeypatch.setattr(state, "is_daemon_alive", lambda pid: False)
+    monkeypatch.setattr(state, "is_daemon_alive", lambda pid, create_time=None: False)
 
     marked_dir = root / "build"
     marked_dir.mkdir()
@@ -90,7 +90,7 @@ def test_clear_refuses_when_daemon_alive(
     # Set up a state.json with a pid; pin is_daemon_alive=True.
     s = state.State(daemon_pid=os.getpid())
     state.write(s, paths["root"] / "_state.json")
-    monkeypatch.setattr(state, "is_daemon_alive", lambda pid: True)
+    monkeypatch.setattr(state, "is_daemon_alive", lambda pid, create_time=None: True)
 
     runner = CliRunner()
     result = runner.invoke(cli.main, ["clear", "--yes"])
@@ -109,7 +109,7 @@ def test_clear_force_overrides_daemon_alive(
     paths = _setup_marked_tree(tmp_path, fake_markers, monkeypatch)
     s = state.State(daemon_pid=os.getpid())
     state.write(s, paths["root"] / "_state.json")
-    monkeypatch.setattr(state, "is_daemon_alive", lambda pid: True)
+    monkeypatch.setattr(state, "is_daemon_alive", lambda pid, create_time=None: True)
 
     runner = CliRunner()
     result = runner.invoke(cli.main, ["clear", "--force", "--yes"])
@@ -144,7 +144,7 @@ def test_clear_path_arg_scopes_to_subtree(
     root = tmp_path
     monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
     monkeypatch.setattr(state, "default_path", lambda: root / "_state.json")
-    monkeypatch.setattr(state, "is_daemon_alive", lambda pid: False)
+    monkeypatch.setattr(state, "is_daemon_alive", lambda pid, create_time=None: False)
 
     sub_a = root / "a"
     sub_a.mkdir()
@@ -174,7 +174,7 @@ def test_clear_path_outside_roots_errors(
     root.mkdir()
     monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
     monkeypatch.setattr(state, "default_path", lambda: root / "_state.json")
-    monkeypatch.setattr(state, "is_daemon_alive", lambda pid: False)
+    monkeypatch.setattr(state, "is_daemon_alive", lambda pid, create_time=None: False)
 
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
@@ -193,7 +193,7 @@ def test_clear_no_markers_prints_message(
     root = tmp_path
     monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
     monkeypatch.setattr(state, "default_path", lambda: root / "_state.json")
-    monkeypatch.setattr(state, "is_daemon_alive", lambda pid: False)
+    monkeypatch.setattr(state, "is_daemon_alive", lambda pid, create_time=None: False)
     (root / "file.txt").touch()
 
     runner = CliRunner()

@@ -67,7 +67,13 @@ def _purge_local_state() -> None:
     if state_dir.exists():
         _purge_dir(
             state_dir,
-            patterns=["state.json", "state.json.tmp", "daemon.log", "daemon.log.*"],
+            patterns=[
+                "state.json",
+                "state.json.tmp",
+                "daemon.lock",
+                "daemon.log",
+                "daemon.log.*",
+            ],
         )
         click.echo(f"Cleaned {state_dir}.")
 
@@ -476,7 +482,7 @@ def status(summary: bool) -> None:
     else:
         if s.daemon_pid is None:
             click.echo("daemon: not running (no pid recorded)")
-        elif state.is_daemon_alive(s.daemon_pid):
+        elif state.daemon_is_running(s):
             click.echo(f"daemon: running (pid={s.daemon_pid})")
         else:
             click.echo(f"daemon: not running (last pid={s.daemon_pid} — state.json may be stale)")

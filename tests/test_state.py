@@ -13,6 +13,7 @@ def test_roundtrip(tmp_path: Path) -> None:
     s = state.State(
         daemon_pid=1234,
         daemon_started=datetime(2026, 4, 20, 9, 0, tzinfo=UTC),
+        daemon_create_time=1745140800.5,
         last_sweep=datetime(2026, 4, 20, 10, 0, tzinfo=UTC),
         last_sweep_duration_s=1.5,
         last_sweep_marked=5,
@@ -26,6 +27,25 @@ def test_roundtrip(tmp_path: Path) -> None:
 
     loaded = state.read(path)
     assert loaded == s
+
+
+def test_decode_tolerates_missing_daemon_create_time(tmp_path: Path) -> None:
+    """state.json files written before #79 lack daemon_create_time. Decode
+    must default to None rather than KeyError-ing into the corrupt-state arm
+    (which would silently drop the file's other fields). Backwards-compat
+    with the v0.4.x state schema."""
+    p = tmp_path / "state.json"
+    p.write_text(
+        '{"schema": 1, "daemon_pid": 4321, "daemon_started": null, '
+        '"last_sweep": null, "last_sweep_duration_s": 0.0, '
+        '"last_sweep_marked": 0, "last_sweep_cleared": 0, "last_sweep_errors": 0, '
+        '"last_error": null, "watched_roots": []}',
+        encoding="utf-8",
+    )
+    loaded = state.read(p)
+    assert loaded is not None
+    assert loaded.daemon_pid == 4321
+    assert loaded.daemon_create_time is None
 
 
 def test_read_missing_returns_none(tmp_path: Path) -> None:
@@ -96,6 +116,34 @@ def test_read_shape_mismatch_bad_datetime_returns_none(tmp_path: Path) -> None:
     """Valid JSON but a stored datetime fails to parse (ValueError arm)."""
     p = tmp_path / "state.json"
     p.write_text('{"daemon_started": "not-a-datetime"}', encoding="utf-8")
+    assert state.read(p) is None
+
+
+def test_read_string_daemon_create_time_returns_none(tmp_path: Path) -> None:
+    """A non-numeric daemon_create_time (e.g. hand-edited or shape-
+    mismatched state file) must fail decode and route through the
+    corrupt-state fallback. Without strict validation at decode time,
+    the bad value would propagate to ``is_daemon_alive``'s
+    ``abs(live_create_time - create_time)`` arithmetic and raise
+    TypeError, breaking ``status`` / ``clear`` / the daemon's legacy-
+    startup guard."""
+    p = tmp_path / "state.json"
+    p.write_text(
+        '{"daemon_pid": 1234, "daemon_create_time": "not-a-number"}',
+        encoding="utf-8",
+    )
+    assert state.read(p) is None
+
+
+def test_read_bool_daemon_create_time_returns_none(tmp_path: Path) -> None:
+    """``isinstance(True, int)`` is True in Python (bool subclasses int),
+    so a naive ``isinstance(ct, (int, float))`` check would accept a bool
+    create_time. Explicit bool exclusion keeps the validation tight."""
+    p = tmp_path / "state.json"
+    p.write_text(
+        '{"daemon_pid": 1234, "daemon_create_time": true}',
+        encoding="utf-8",
+    )
     assert state.read(p) is None
 
 
@@ -170,6 +218,77 @@ def test_is_daemon_alive_dbxignored_process_returns_true(monkeypatch: pytest.Mon
     monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
     monkeypatch.setattr(psutil, "Process", _FakeProc)
     assert state.is_daemon_alive(12345) is True
+
+
+def test_is_daemon_alive_create_time_match_returns_true(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both pid_exists AND create_time matching → True. The strict-mode
+    contract that backlog item #79 motivates: a recycled PID claimed by an
+    unrelated python process would have a different create_time, so this
+    branch shouldn't fire for the false-positive case."""
+
+    class _FakeProc:
+        def __init__(self, _pid: int) -> None:
+            pass
+
+        def name(self) -> str:
+            return "python.exe"
+
+        def create_time(self) -> float:
+            return 1700000000.5
+
+    monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(psutil, "Process", _FakeProc)
+    assert state.is_daemon_alive(12345, create_time=1700000000.5) is True
+
+
+def test_is_daemon_alive_create_time_mismatch_returns_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """pid_exists True but create_time differs → False. This is the
+    backlog item #79 fix: catches PID-reuse where the recycled process
+    happens to have a name-substring match (another python instance).
+    Without create_time disambiguation, the prior is_daemon_alive would
+    return True and incorrectly block destructive verbs."""
+
+    class _FakeProc:
+        def __init__(self, _pid: int) -> None:
+            pass
+
+        def name(self) -> str:
+            return "python.exe"
+
+        def create_time(self) -> float:
+            return 1700001000.0  # different from the state-recorded value
+
+    monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(psutil, "Process", _FakeProc)
+    assert state.is_daemon_alive(12345, create_time=1700000000.5) is False
+
+
+def test_is_daemon_alive_create_time_none_falls_back_to_substring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When create_time is None (state.json predates #79 OR the daemon
+    hasn't yet written its create_time), fall back to the substring-name
+    check. Backwards-compat with v0.4.x state.json files."""
+
+    class _FakeProc:
+        def __init__(self, _pid: int) -> None:
+            pass
+
+        def name(self) -> str:
+            return "python.exe"
+
+        def create_time(self) -> float:
+            # Sentinel that would fail the strict-match check if reached;
+            # the None path must not call create_time().
+            raise AssertionError("create_time should not be called when caller passed None")
+
+    monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(psutil, "Process", _FakeProc)
+    assert state.is_daemon_alive(12345, create_time=None) is True
 
 
 def test_is_daemon_alive_psutil_error_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:

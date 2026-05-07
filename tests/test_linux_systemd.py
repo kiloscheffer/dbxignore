@@ -132,6 +132,34 @@ def test_unit_content_escapes_backslash_and_quote_in_exec_start_path() -> None:
     assert r'ExecStart="/home/user/odd \"path\"/dbxignored"' in content
 
 
+def test_unit_content_escapes_percent_in_quoted_exec_start_path() -> None:
+    """systemd expands ``%X`` specifiers in ExecStart at unit-load time
+    (``%T`` → ``/tmp``, ``%h`` → home, etc.). A literal ``%`` in the install
+    path must be doubled to ``%%`` so the specifier expander does not
+    rewrite the executable target. This applies whether the path is quoted
+    or bare; the whitespace branch is exercised here."""
+    from dbxignore.install import linux_systemd
+
+    content = linux_systemd.build_unit_content(
+        Path("/home/me/100% Tools/dbxignored"),
+        "",
+    )
+    assert 'ExecStart="/home/me/100%% Tools/dbxignored"' in content
+
+
+def test_unit_content_escapes_percent_in_bare_exec_start_path() -> None:
+    """Even without whitespace, a ``%`` must be doubled — systemd's
+    specifier expansion happens regardless of whether the path is quoted."""
+    from dbxignore.install import linux_systemd
+
+    content = linux_systemd.build_unit_content(
+        Path("/home/me/100%Tools/dbxignored"),
+        "",
+    )
+    assert "ExecStart=/home/me/100%%Tools/dbxignored\n" in content
+    assert 'ExecStart="' not in content
+
+
 def test_unit_content_leaves_simple_exec_start_path_unquoted() -> None:
     """Standard install paths (no whitespace, no escape chars) stay
     unquoted — matches the existing on-disk shape and avoids cosmetic

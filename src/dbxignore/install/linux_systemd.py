@@ -45,14 +45,22 @@ def _escape_systemd_quoted_string(value: str) -> str:
 def _quote_exec_start_path(exe_path: Path) -> str:
     """Return the path rendered for an ``ExecStart=`` token.
 
-    systemd splits ``ExecStart`` on whitespace, so a path containing a space
-    (e.g. ``/home/user/My Tools/dbxignored``) tokenizes incorrectly when bare.
-    Wrap such paths in double quotes and apply systemd's C-style escaping for
-    embedded ``"`` and ``\\``. Bare paths without whitespace or escape-needing
-    chars stay unquoted to match the on-disk shape stock distro installs
-    have today.
+    Two systemd parser concerns:
+
+    - ``ExecStart`` splits on whitespace, so a path containing a space
+      (e.g. ``/home/user/My Tools/dbxignored``) tokenizes incorrectly when
+      bare. Wrap such paths in double quotes and C-style-escape embedded
+      ``"`` and ``\\``.
+    - systemd expands ``%X`` specifiers in ``ExecStart`` at unit-load time
+      (``%T`` → ``/tmp``, ``%h`` → home, etc.), so a literal ``%`` must
+      be doubled to ``%%`` regardless of quoting. Otherwise an install path
+      like ``/home/me/100% Tools/dbxignored`` is silently rewritten by the
+      specifier expander and the unit points at the wrong binary.
+
+    Bare paths without whitespace or escape-needing chars stay unquoted to
+    match the on-disk shape stock distro installs have today.
     """
-    posix = exe_path.as_posix()
+    posix = exe_path.as_posix().replace("%", "%%")
     if any(ch.isspace() or ch in '"\\' for ch in posix):
         return f'"{_escape_systemd_quoted_string(posix)}"'
     return posix

@@ -20,6 +20,7 @@ def test_roundtrip(tmp_path: Path) -> None:
         last_sweep_marked=5,
         last_sweep_cleared=2,
         last_sweep_errors=0,
+        last_sweep_conflicts=3,
         last_error=None,
         watched_roots=[Path(r"C:\Dropbox")],
     )
@@ -28,6 +29,23 @@ def test_roundtrip(tmp_path: Path) -> None:
 
     loaded = state.read(path)
     assert loaded == s
+
+
+def test_decode_tolerates_missing_last_sweep_conflicts(tmp_path: Path) -> None:
+    """state.json files written before #68 lack last_sweep_conflicts. Decode
+    must default to 0 rather than KeyError-ing into the corrupt-state arm.
+    Backwards-compat with the schema as it shipped pre-#68."""
+    p = tmp_path / "state.json"
+    p.write_text(
+        '{"schema": 1, "daemon_pid": 4321, "daemon_create_time": null, '
+        '"daemon_started": null, "last_sweep": null, "last_sweep_duration_s": 0.0, '
+        '"last_sweep_marked": 0, "last_sweep_cleared": 0, "last_sweep_errors": 0, '
+        '"last_error": null, "watched_roots": []}',
+        encoding="utf-8",
+    )
+    loaded = state.read(p)
+    assert loaded is not None
+    assert loaded.last_sweep_conflicts == 0
 
 
 def test_decode_tolerates_missing_daemon_create_time(tmp_path: Path) -> None:

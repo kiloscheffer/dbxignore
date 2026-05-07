@@ -211,6 +211,32 @@ def _find_masking_include(
     return None
 
 
+def _find_masking_directory_include(
+    earlier_entries: Sequence[_SequenceEntryLike],
+) -> _SequenceEntryLike | None:
+    """Return any earlier entry that is a directory-marking include.
+
+    "Directory-marking" means the include's raw text ends in ``/`` —
+    covers literal-prefix forms (``build/``) and glob-prefix forms
+    (``**/foo/``, ``src/*/build/``) alike. Excludes children-only forms
+    like ``build/*`` (which don't mark the parent directory itself) and
+    file-level forms like ``*.log``.
+
+    Used by the glob-prefix-negation arm of ``_detect_conflicts`` (item
+    #76): when a negation has no extractable literal prefix, we can't
+    statically reason about which on-disk paths it lands on, so the
+    conservative call is "if any earlier directory-marking include
+    exists, the negation could be inert under Dropbox's ancestor-
+    inheritance regardless of where the glob lands — flag it."
+    """
+    for include in earlier_entries:
+        if not include.pattern.include:
+            continue
+        if include.raw.strip().endswith("/"):
+            return include
+    return None
+
+
 def _detect_conflicts(sequence: Sequence[_SequenceEntryLike], *, root: Path) -> list[Conflict]:
     """Static rule-conflict detection.
 
@@ -220,10 +246,17 @@ def _detect_conflicts(sequence: Sequence[_SequenceEntryLike], *, root: Path) -> 
     of the pattern), and ``pattern`` (a pathspec pattern with ``.include``
     and ``.match_file``).
 
-    Returns one ``Conflict`` per negation entry whose literal prefix is
-    matched-as-ignored by any earlier include rule in the sequence.
-    Skips negations whose pattern has no extractable literal prefix
-    (documented limitation for glob-prefix patterns).
+    Returns one ``Conflict`` per negation entry that is masked by an
+    earlier include rule in the sequence:
+
+    - Literal-prefix negations (``!build/keep/``): walk extracted
+      ancestors and run them against earlier includes (precise).
+    - Glob-prefix directory negations (``!**/foo/bar/``, ``!foo*/bar/``):
+      flag if any earlier directory-marking include exists in the same
+      sequence (conservative — see ``_find_masking_directory_include``).
+      Glob-prefix file-level negations (``!**/important.log``) are still
+      skipped, since file-level rules don't propagate via ancestor
+      inheritance.
     """
     conflicts: list[Conflict] = []
     for i, entry in enumerate(sequence):
@@ -235,6 +268,30 @@ def _detect_conflicts(sequence: Sequence[_SequenceEntryLike], *, root: Path) -> 
             raw = raw[1:]
         prefix = literal_prefix(raw)
         if prefix is None:
+            # Glob-prefix negation. Static ancestor-walk isn't available,
+            # so apply the conservative drop (item #76): if the negation
+            # is directory-targeting AND any earlier include marks a
+            # directory, treat the negation as inert. The negation's
+            # actual on-disk reach depends on what `**`/`*` lands on,
+            # which we can't know without I/O — but Dropbox's ancestor-
+            # inheritance makes the negation inert wherever it does land
+            # under a marked directory, so flagging the rule globally is
+            # the safe call.
+            if not raw.rstrip().endswith("/"):
+                continue
+            masking = _find_masking_directory_include(sequence[:i])
+            if masking is None:
+                continue
+            conflicts.append(
+                Conflict(
+                    dropped_source=entry.source,
+                    dropped_line=entry.line,
+                    dropped_pattern=entry.raw.strip(),
+                    masking_source=masking.source,
+                    masking_line=masking.line,
+                    masking_pattern=masking.raw.strip(),
+                )
+            )
             continue
         if not prefix.endswith("/"):
             # File-level target; Dropbox's ignored-folder inheritance only

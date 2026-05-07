@@ -78,6 +78,9 @@ def test_detect_invocation_falls_back_to_daemon_subcommand_when_sibling_missing(
 
 def test_detect_invocation_falls_back_to_python_module(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delattr(sys, "frozen", raising=False)
+    # Force the Linux/macOS branch — the Windows branch short-circuits to
+    # pythonw.exe before reaching the shutil.which lookup.
+    monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(
         "shutil.which", lambda name: "/usr/bin/python3" if name == "python3" else None
     )
@@ -90,6 +93,7 @@ def test_detect_invocation_falls_back_to_python_module(monkeypatch: pytest.Monke
 
 def test_detect_invocation_uses_path_shim_when_present(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "platform", "linux")
 
     def fake_which(name: str) -> str | None:
         if name == "dbxignored":
@@ -102,3 +106,27 @@ def test_detect_invocation_uses_path_shim_when_present(monkeypatch: pytest.Monke
     exe, args = _common.detect_invocation()
     assert exe == Path("/home/u/.local/bin/dbxignored")
     assert args == ""
+
+
+def test_detect_invocation_returns_pythonw_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows non-frozen: select ``pythonw.exe`` next to ``sys.executable``.
+
+    Task Scheduler launches at logon and the daemon must not flash a
+    console window or orphan a ``conhost.exe`` — ``pythonw.exe`` (the
+    windowless Python interpreter) avoids both. The ``shutil.which("dbxignored")``
+    PATH-shim lookup that the Linux/macOS branch uses is intentionally
+    skipped on Windows; any shim would still launch ``python.exe`` with
+    a console attached.
+
+    Item #50 — collapsed `windows_task.detect_invocation` into a re-export
+    of `_common.detect_invocation` once the Windows non-frozen branch was
+    folded in here.
+    """
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "executable", r"C:\uv\tools\dbxignore\Scripts\python.exe")
+    from dbxignore.install import _common
+
+    exe, args = _common.detect_invocation()
+    assert exe == Path(r"C:\uv\tools\dbxignore\Scripts\pythonw.exe")
+    assert args == "-m dbxignore daemon"

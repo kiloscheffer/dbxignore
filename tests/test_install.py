@@ -67,63 +67,10 @@ def test_build_xml_escapes_ampersand_in_arguments(monkeypatch: pytest.MonkeyPatc
     assert args_el.text == "--flag a&b"
 
 
-def test_detect_invocation_returns_frozen_mode_when_already_dbxignored(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """User invoked `dbxignored.exe install` directly: sys.executable IS the daemon shim."""
-    daemon_exe = tmp_path / "dbxignored.exe"
-    daemon_exe.write_text("")
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", str(daemon_exe))
-    exe, args = install.detect_invocation()
-    assert exe == daemon_exe
-    assert args == ""
-
-
-def test_detect_invocation_finds_dbxignored_sibling_from_dbxignore(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """User invoked `dbxignore.exe install` (frozen): resolve to `dbxignored.exe` sibling.
-
-    Common case — both PyInstaller binaries ship as a paired set, the user runs
-    the long-form CLI for install, and Task Scheduler needs the daemon-shim
-    binary as its `<Command>` invocation target. Mirrors the macOS/Linux path
-    in `tests/test_install_common.py`.
-    """
-    cli_exe = tmp_path / "dbxignore.exe"
-    cli_exe.write_text("")
-    daemon_exe = tmp_path / "dbxignored.exe"
-    daemon_exe.write_text("")
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", str(cli_exe))
-    exe, args = install.detect_invocation()
-    assert exe == daemon_exe
-    assert args == ""
-
-
-def test_detect_invocation_falls_back_to_daemon_subcommand_when_sibling_missing(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """No `dbxignored.exe` sibling: invoke ourselves with the `daemon` subcommand.
-
-    Defensive case — PyInstaller specs always emit both binaries, so this
-    fallback is for unusual deployments only.
-    """
-    cli_exe = tmp_path / "dbxignore.exe"
-    cli_exe.write_text("")
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", str(cli_exe))
-    exe, args = install.detect_invocation()
-    assert exe == cli_exe
-    assert args == "daemon"
-
-
-def test_detect_invocation_returns_source_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delattr(sys, "frozen", raising=False)
-    monkeypatch.setattr(sys, "executable", r"C:\uv\tools\dbxignore\Scripts\python.exe")
-    exe, args = install.detect_invocation()
-    assert exe.name == "pythonw.exe"
-    assert args == "-m dbxignore daemon"
+# detect_invocation tests live in tests/test_install_common.py — windows_task
+# now re-exports the shared helper (item #50 collapse). The non-frozen
+# Windows-specific behavior (pythonw.exe selection) is exercised by
+# test_detect_invocation_returns_pythonw_on_windows there.
 
 
 def test_uninstall_task_raises_on_schtasks_failure(monkeypatch: pytest.MonkeyPatch) -> None:

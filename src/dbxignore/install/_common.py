@@ -40,12 +40,18 @@ def detect_invocation() -> tuple[Path, str]:
     print symptom is `last exit code = 2 / runs = N` with no daemon ever
     actually starting (v0.4 beta-tester report 2026-05-01).
 
-    Otherwise (non-frozen): searches PATH for `dbxignored` shim (uv tool
-    install pattern). Final fallback: `python3 -m dbxignore daemon`.
+    Non-frozen branch is platform-conditional:
 
-    Raises RuntimeError if no python3 is on PATH and no shim is found —
-    callers (cli.install / cli.uninstall) translate this to a clean error
-    rather than a raw traceback.
+    - **Windows** (Task Scheduler logon launch): use ``pythonw.exe`` —
+      the windowless interpreter sibling next to ``sys.executable`` — to
+      avoid the console flash + orphan ``conhost.exe`` that ``python.exe``
+      would produce. The ``shutil.which("dbxignored")`` PATH-shim lookup
+      is intentionally skipped on Windows: the typical Windows dev path
+      is ``.venv/Scripts/python.exe``, and any PATH shim would still
+      launch ``python.exe`` with a console.
+    - **Linux/macOS** (systemd / launchd): try ``shutil.which("dbxignored")``
+      first (the ``uv tool install`` PATH-shim case); fall back to
+      ``python3 -m dbxignore daemon`` otherwise.
     """
     if getattr(sys, "frozen", False):
         exe = Path(sys.executable)
@@ -56,13 +62,11 @@ def detect_invocation() -> tuple[Path, str]:
         if sibling.exists():
             return sibling, ""
         return exe, "daemon"
+    if sys.platform == "win32":
+        pythonw = Path(sys.executable).with_name("pythonw.exe")
+        return pythonw, "-m dbxignore daemon"
     exe_str = shutil.which("dbxignored")
     if exe_str:
         return Path(exe_str), ""
     python = shutil.which("python3") or sys.executable
-    if not python:
-        raise RuntimeError(
-            "dbxignored not on PATH and no python3 found; "
-            "run `uv tool install .` from the dbxignore checkout first"
-        )
     return Path(python), "-m dbxignore daemon"

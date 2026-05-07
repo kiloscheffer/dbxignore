@@ -467,15 +467,22 @@ def status(summary: bool) -> None:
     """Show daemon status and last sweep summary."""
     s = state.read()
 
-    # Compute conflicts upfront so summary and human paths share the work.
-    # Skip the rule-cache walk entirely when there are no roots — otherwise
-    # `status` pays for an rglob we don't need.
+    if summary:
+        # Read the conflict count from state.json's `last_sweep_conflicts`
+        # (item #68) rather than walking the rule cache: status-bar widgets
+        # poll `--summary` at a high cadence and the rglob over every
+        # `.dropboxignore` file in the watched tree was a per-tick cost.
+        # Trade-off: the count is from the last daemon sweep (or 0 if no
+        # state file), same staleness lineage as `last_sweep_marked` etc.
+        conflicts_count = s.last_sweep_conflicts if s is not None else 0
+        click.echo(_format_summary(s, state.daemon_is_running(s), conflicts_count))
+        return
+
+    # Human path: walk the cache so we can show the actual conflict details
+    # below, not just the count. Skip the walk when there are no roots
+    # (otherwise `status` pays for an rglob we don't need).
     discovered = _discover_roots()
     conflicts = _load_cache(discovered).conflicts() if discovered else []
-
-    if summary:
-        click.echo(_format_summary(s, state.daemon_is_running(s), len(conflicts)))
-        return
 
     if s is None:
         click.echo("dbxignore: no state file found (daemon never ran).")

@@ -696,6 +696,12 @@ def _sweep_once(
         None,
     )
 
+    # Snapshot the conflict count so `cli.status --summary` can report it
+    # without re-walking the rule cache on every poll (item #68). Free —
+    # `cache.conflicts()` reads the already-computed `_conflicts` list that
+    # `cache.load_root` populated above.
+    total_conflicts = len(cache.conflicts())
+
     s = state_module.State(
         daemon_pid=os.getpid(),
         daemon_create_time=daemon_create_time,
@@ -705,6 +711,7 @@ def _sweep_once(
         last_sweep_marked=total_marked,
         last_sweep_cleared=total_cleared,
         last_sweep_errors=total_errors,
+        last_sweep_conflicts=total_conflicts,
         last_error=(
             state_module.LastError(time=now, path=last_err[0], message=last_err[1])
             if last_err is not None

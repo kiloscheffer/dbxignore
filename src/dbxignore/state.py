@@ -44,6 +44,11 @@ class State:
     last_sweep_marked: int = 0
     last_sweep_cleared: int = 0
     last_sweep_errors: int = 0
+    # Count of rule conflicts detected at the last sweep's `cache.load_root`.
+    # Persisted so `cli.status --summary` can report it without re-walking
+    # the rule cache on every poll (item #68). Stale when the daemon isn't
+    # running, same lineage as `last_sweep_*` above.
+    last_sweep_conflicts: int = 0
     last_error: LastError | None = None
     watched_roots: list[Path] = field(default_factory=list)
 
@@ -217,6 +222,7 @@ def _encode(state: State) -> dict[str, Any]:
         "last_sweep_marked": state.last_sweep_marked,
         "last_sweep_cleared": state.last_sweep_cleared,
         "last_sweep_errors": state.last_sweep_errors,
+        "last_sweep_conflicts": state.last_sweep_conflicts,
         "last_error": {
             "time": state.last_error.time.isoformat(),
             "path": str(state.last_error.path),
@@ -251,6 +257,10 @@ def _decode(raw: dict[str, Any]) -> State:
         last_sweep_marked=raw.get("last_sweep_marked", 0),
         last_sweep_cleared=raw.get("last_sweep_cleared", 0),
         last_sweep_errors=raw.get("last_sweep_errors", 0),
+        # Decode-tolerant: pre-#68 state.json files lack this field and
+        # decode to 0, which keeps `status --summary conflicts=0` sane until
+        # the next daemon sweep refreshes the count.
+        last_sweep_conflicts=raw.get("last_sweep_conflicts", 0),
         last_error=LastError(
             time=datetime.fromisoformat(raw["last_error"]["time"]),
             path=Path(raw["last_error"]["path"]),

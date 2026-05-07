@@ -236,6 +236,71 @@ def test_status_summary_no_state_emits_no_state_token(
     assert result.output.strip() == "state=no_state conflicts=0"
 
 
+def test_status_summary_reads_conflicts_count_from_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`status --summary` reports ``conflicts=N`` from ``state.last_sweep_conflicts``
+    rather than re-walking the rule cache.
+
+    Item #68: status-bar widgets poll ``--summary`` at high cadence. The
+    pre-fix code ran ``_load_cache(discovered).conflicts()`` per tick, which
+    rglobbed every ``.dropboxignore`` under the watched roots. The fix caches
+    the count on the daemon side at sweep time; ``--summary`` reads from
+    state.json. Trade-off: the count is from the last sweep, same staleness
+    lineage as ``last_sweep_marked`` / ``cleared`` / ``errors``.
+    """
+    s = state.State(
+        daemon_pid=12345,
+        daemon_started=dt.datetime.now(dt.UTC),
+        last_sweep=dt.datetime.now(dt.UTC),
+        last_sweep_marked=0,
+        last_sweep_cleared=0,
+        last_sweep_errors=0,
+        last_sweep_conflicts=7,
+    )
+    path = tmp_path / "state.json"
+    state.write(s, path)
+    monkeypatch.setattr(state, "default_path", lambda: path)
+    monkeypatch.setattr(state, "is_daemon_alive", lambda pid, create_time=None: True)
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["status", "--summary"])
+    assert result.exit_code == 0
+    assert "conflicts=7" in result.output
+
+
+def test_status_summary_skips_load_cache_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--summary`` must not call ``cli._load_cache`` (item #68 perf invariant).
+
+    Pinned by patching ``_load_cache`` to raise: if ``--summary`` ever
+    regresses to walking the cache, the test fails loudly. The human
+    ``status`` path still walks (it shows conflict details, not just count),
+    so this assertion is specific to the summary branch.
+    """
+    s = state.State(
+        daemon_pid=12345,
+        daemon_started=dt.datetime.now(dt.UTC),
+        last_sweep=dt.datetime.now(dt.UTC),
+        last_sweep_conflicts=0,
+    )
+    path = tmp_path / "state.json"
+    state.write(s, path)
+    monkeypatch.setattr(state, "default_path", lambda: path)
+    monkeypatch.setattr(state, "is_daemon_alive", lambda pid, create_time=None: True)
+
+    def _load_cache_must_not_be_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("status --summary must not walk the rule cache (item #68)")
+
+    monkeypatch.setattr(cli, "_load_cache", _load_cache_must_not_be_called)
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["status", "--summary"])
+    assert result.exit_code == 0
+    assert "state=running" in result.output
+
+
 def test_status_lists_rule_conflicts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`status` surfaces RuleCache conflicts alongside daemon pid / sweep info."""
     import click.testing

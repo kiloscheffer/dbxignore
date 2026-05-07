@@ -171,6 +171,33 @@ def test_rulecache_still_flags_directory_rule_negation(tmp_path: Path) -> None:
     assert conflicts[0].dropped_pattern == "!build/keep/"
 
 
+def test_rulecache_glob_prefix_same_target_override_keeps_path_unignored(
+    tmp_path: Path,
+) -> None:
+    """Same-target override carve-out (Codex P1 on PR #149).
+
+    ``**/foo/`` followed by ``!**/foo/`` is the explicit last-match-wins
+    case — the user wrote the negation to unignore the same target the
+    earlier include marked. Pre-fix the conservative-drop arm dropped
+    the negation as inert, leaving ``foo/`` directories on disk
+    ignored; ``RuleCache.match()`` consults ``_dropped`` before pathspec
+    so the dropped negation changed marker behavior, not just
+    diagnostics.
+
+    Post-fix the same-target carve-out preserves the negation: no
+    conflict reported, and ``cache.match(root / "foo")`` returns False
+    (path is NOT ignored). Marker-behavior regression guard.
+    """
+    root = tmp_path
+    (root / ".dropboxignore").write_text("**/foo/\n!**/foo/\n", encoding="utf-8")
+    (root / "foo").mkdir()
+    cache = RuleCache()
+    cache.load_root(root)
+
+    assert cache.conflicts() == []
+    assert not cache.match(root / "foo")
+
+
 def test_rulecache_flags_glob_prefix_negation_under_dir_marking_glob_include(
     tmp_path: Path,
 ) -> None:

@@ -236,6 +236,42 @@ def test_detect_glob_prefix_dir_negation_alone_no_flag(tmp_path: Path) -> None:
     assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
 
 
+def test_detect_glob_prefix_same_target_override_no_flag(tmp_path: Path) -> None:
+    """Same-target override carve-out: ``**/foo/`` followed by ``!**/foo/``
+    is the explicit pathspec last-match-wins case — the user wrote the
+    negation immediately after the include to unignore the same target.
+    The conservative-drop arm must NOT flag this, because dropping the
+    negation would leave ``foo/`` directories ignored on disk (``RuleCache.match()``
+    filters entries listed in ``_dropped`` before consulting pathspec,
+    so a dropped negation changes marker behavior, not just diagnostics).
+
+    Surfaced by Codex review on PR #149."""
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "**/foo/", str(root)),
+        _entry(str(root / ".dropboxignore"), 2, "!**/foo/", str(root)),
+    ]
+    assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
+
+
+def test_detect_glob_prefix_same_target_override_with_other_dir_include_no_flag(
+    tmp_path: Path,
+) -> None:
+    """Same-target override stays effective even with unrelated directory
+    includes in the same sequence. ``**/bar/`` exists but doesn't share
+    the negation's target — the negation's explicit override of
+    ``**/foo/`` still produces real marker effect, so the negation must
+    not be dropped just because some OTHER directory-marking include
+    happens to be present."""
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "**/foo/", str(root)),
+        _entry(str(root / ".dropboxignore"), 2, "**/bar/", str(root)),
+        _entry(str(root / ".dropboxignore"), 3, "!**/foo/", str(root)),
+    ]
+    assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
+
+
 def test_detect_multiple_independent_conflicts(tmp_path: Path) -> None:
     root = tmp_path
     sequence = [

@@ -279,6 +279,23 @@ def _detect_conflicts(sequence: Sequence[_SequenceEntryLike], *, root: Path) -> 
             # the safe call.
             if not raw.rstrip().endswith("/"):
                 continue
+            # Same-target override carve-out: if any earlier include's
+            # raw text matches the negation's exact pattern (e.g.
+            # `**/foo/` followed by `!**/foo/`), the user explicitly
+            # wanted to override that include and pathspec's last-match-
+            # wins handles it correctly. The negation produces real
+            # marker effect on at least the directly-overridden target,
+            # so it is not fully inert and must not be dropped — that
+            # would change marker behavior, not just diagnostics, since
+            # `RuleCache.match()` filters entries listed in `_dropped`
+            # before consulting pathspec. Surfaced by Codex review on
+            # PR #149.
+            negation_target = raw.rstrip()
+            if any(
+                e.pattern.include and e.raw.strip() == negation_target
+                for e in sequence[:i]
+            ):
+                continue
             masking = _find_masking_directory_include(sequence[:i])
             if masking is None:
                 continue

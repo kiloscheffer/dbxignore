@@ -6,13 +6,13 @@ import errno
 import logging
 from typing import TYPE_CHECKING
 
+import pytest
+
 from dbxignore import reconcile
 from dbxignore.rules import RuleCache
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
     from tests.conftest import FakeMarkers, WriteFile
 
@@ -166,3 +166,86 @@ def test_enotsup_on_directory_clear_prunes_subtree(
         "subtree pruning failed: walk descended into the still-marked "
         "directory and attempted to clear its child"
     )
+
+
+def test_eio_on_set_is_reported_not_raised(
+    fake_markers: FakeMarkers,
+    tmp_path: Path,
+    write_file: WriteFile,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Write-side EIO (e.g. transient network-drive failure) must not kill the sweep.
+
+    Symmetric to `test_oserror_on_read_is_reported_not_raised` on the read side.
+    """
+    root = tmp_path
+    write_file(root / ".dropboxignore", "ignoreme.txt\n")
+    target = write_file(root / "ignoreme.txt")
+
+    monkeypatch.setattr(fake_markers, "set_ignored", _raise_eio)
+
+    cache = RuleCache()
+    cache.load_root(root)
+
+    with caplog.at_level(logging.WARNING, logger="dbxignore.reconcile"):
+        report = reconcile.reconcile_subtree(root, root, cache)
+
+    assert report.marked == 0
+    assert any(p.resolve() == target.resolve() for p, _ in report.errors)
+    assert any(f"errno={errno.EIO}" in msg for _, msg in report.errors)
+    assert any("I/O error writing marker" in r.message for r in caplog.records)
+
+
+def test_eio_on_clear_is_reported_not_raised(
+    fake_markers: FakeMarkers,
+    tmp_path: Path,
+    write_file: WriteFile,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Write-side EIO during clear must not kill the sweep."""
+    root = tmp_path
+    target = write_file(root / "manually_marked.txt")
+    fake_markers.set_ignored(target)
+    (root / ".dropboxignore").write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(fake_markers, "clear_ignored", _raise_eio)
+
+    cache = RuleCache()
+    cache.load_root(root)
+
+    with caplog.at_level(logging.WARNING, logger="dbxignore.reconcile"):
+        report = reconcile.reconcile_subtree(root, root, cache)
+
+    assert report.cleared == 0
+    assert any(p.resolve() == target.resolve() for p, _ in report.errors)
+    assert any(f"errno={errno.EIO}" in msg for _, msg in report.errors)
+
+
+def test_typeerror_on_set_propagates(
+    fake_markers: FakeMarkers,
+    tmp_path: Path,
+    write_file: WriteFile,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-OSError write failures (real code bugs) still propagate.
+
+    Pins the "we don't suppress unknown causes" contract: the broad-OSError
+    arm must be limited to OSError, not bare Exception. A future refactor
+    that widened to `except Exception` would fail this test.
+    """
+    root = tmp_path
+    write_file(root / ".dropboxignore", "ignoreme.txt\n")
+    write_file(root / "ignoreme.txt")
+
+    def _raise_typeerror(*_args: object, **_kwargs: object) -> None:
+        raise TypeError("synthetic bug")
+
+    monkeypatch.setattr(fake_markers, "set_ignored", _raise_typeerror)
+
+    cache = RuleCache()
+    cache.load_root(root)
+
+    with pytest.raises(TypeError, match="synthetic bug"):
+        reconcile.reconcile_subtree(root, root, cache)

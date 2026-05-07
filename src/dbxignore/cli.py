@@ -67,7 +67,13 @@ def _purge_local_state() -> None:
     if state_dir.exists():
         _purge_dir(
             state_dir,
-            patterns=["state.json", "state.json.tmp", "daemon.log", "daemon.log.*"],
+            patterns=[
+                "state.json",
+                "state.json.tmp",
+                "daemon.lock",
+                "daemon.log",
+                "daemon.log.*",
+            ],
         )
         click.echo(f"Cleaned {state_dir}.")
 

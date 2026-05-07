@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
@@ -149,10 +150,17 @@ class RuleCache:
 
     def reload_file(self, ignore_file: Path, *, log_warnings: bool = True) -> None:
         """Re-read a single .dropboxignore file, replacing any cached version."""
+        # DEBUG-level boundary log for backlog item #34 timing diagnostics.
+        # Measures rule-cache reload + conflict-detector recompute under the
+        # write lock. Lock contention against the watchdog thread's lock-free
+        # `match()` reads can in principle delay this; the log makes that
+        # observable. No-op cost when DBXIGNORE_LOG_LEVEL != DEBUG.
+        t0 = time.perf_counter()
         with self._lock:
             self._rules.pop(ignore_file.resolve(), None)
             self._load_file(ignore_file)
             self._recompute_conflicts(log_warnings=log_warnings)
+        logger.debug("reload_file path=%s duration=%.4fs", ignore_file, time.perf_counter() - t0)
 
     def remove_file(self, ignore_file: Path, *, log_warnings: bool = True) -> None:
         """Drop all cached state for a .dropboxignore file (e.g. after deletion)."""

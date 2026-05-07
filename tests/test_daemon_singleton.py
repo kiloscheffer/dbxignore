@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from dbxignore import daemon, state
+from tests.conftest import FakePsutilProcess
 
 # ---- singleton lock (followup item #78) -------------------------------------
 
@@ -115,7 +116,10 @@ def test_run_refuses_when_singleton_lock_is_held(
 
 
 def test_run_refuses_when_legacy_daemon_alive_without_lock(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    fake_psutil_process: FakePsutilProcess,
 ) -> None:
     """Migration defense-in-depth: a legacy (pre-#78) daemon wrote
     state.json but never created daemon.lock. The new daemon's lock-
@@ -128,8 +132,6 @@ def test_run_refuses_when_legacy_daemon_alive_without_lock(
     claim that pid is a live python process, call daemon.run(), assert
     it refuses and releases the lock.
     """
-    import psutil  # type: ignore[import-untyped, unused-ignore]
-
     monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
     monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")
     monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])  # type: ignore[attr-defined]
@@ -142,15 +144,7 @@ def test_run_refuses_when_legacy_daemon_alive_without_lock(
     s = state.State(daemon_pid=legacy_pid)
     state.write(s, tmp_path / "state.json")
 
-    class _FakeProc:
-        def __init__(self, _pid: int) -> None:
-            pass
-
-        def name(self) -> str:
-            return "python.exe"
-
-    monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
-    monkeypatch.setattr(psutil, "Process", _FakeProc)
+    fake_psutil_process(name="python.exe")
 
     caplog.set_level("ERROR", logger="dbxignore.daemon")
 

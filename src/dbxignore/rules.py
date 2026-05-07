@@ -5,13 +5,13 @@ from __future__ import annotations
 import logging
 import re
 import threading
-import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 import pathspec
 from pathspec.patterns.gitwildmatch import GitIgnoreSpecPattern  # type: ignore[attr-defined]
 
+from dbxignore._logging import timed_debug
 from dbxignore.roots import find_containing
 from dbxignore.rules_conflicts import Conflict as Conflict
 from dbxignore.rules_conflicts import _detect_conflicts
@@ -154,13 +154,11 @@ class RuleCache:
         # Measures rule-cache reload + conflict-detector recompute under the
         # write lock. Lock contention against the watchdog thread's lock-free
         # `match()` reads can in principle delay this; the log makes that
-        # observable. No-op cost when DBXIGNORE_LOG_LEVEL != DEBUG.
-        t0 = time.perf_counter()
-        with self._lock:
+        # observable. ``timed_debug`` no-ops when DEBUG isn't enabled.
+        with timed_debug(logger, "reload_file path=%s", ignore_file), self._lock:
             self._rules.pop(ignore_file.resolve(), None)
             self._load_file(ignore_file)
             self._recompute_conflicts(log_warnings=log_warnings)
-        logger.debug("reload_file path=%s duration=%.4fs", ignore_file, time.perf_counter() - t0)
 
     def remove_file(self, ignore_file: Path, *, log_warnings: bool = True) -> None:
         """Drop all cached state for a .dropboxignore file (e.g. after deletion)."""

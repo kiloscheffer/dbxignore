@@ -6,7 +6,7 @@ import pytest
 from click.testing import CliRunner
 
 from dbxignore import cli, state
-from tests.conftest import FakeMarkers
+from tests.conftest import FakeMarkers, FakePsutilProcess
 
 
 def test_status_reports_no_state_when_file_missing(
@@ -44,7 +44,9 @@ def test_status_reports_running_daemon(tmp_path: Path, monkeypatch: pytest.Monke
 
 
 def test_status_reports_not_running_when_create_time_mismatch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_psutil_process: FakePsutilProcess,
 ) -> None:
     """Human-readable status path must respect daemon_create_time, just like
     --summary and clear do. A recycled PID claimed by an unrelated python
@@ -53,8 +55,6 @@ def test_status_reports_not_running_when_create_time_mismatch(
     forwarding create_time the human path would render 'daemon: running'
     while --summary correctly shows state=not_running — same state.json,
     inconsistent verdict."""
-    import psutil  # type: ignore[import-untyped, unused-ignore]
-
     s = state.State(
         daemon_pid=12345,
         daemon_create_time=1700000000.0,  # what state.json recorded
@@ -67,19 +67,9 @@ def test_status_reports_not_running_when_create_time_mismatch(
     monkeypatch.setattr(state, "default_path", lambda: path)
     monkeypatch.setattr(cli, "_discover_roots", lambda: [])
 
-    class _FakeProc:
-        def __init__(self, _pid: int) -> None:
-            pass
-
-        def name(self) -> str:
-            return "python.exe"
-
-        def create_time(self) -> float:
-            # Different from the recorded value — PID was recycled.
-            return 1700001234.0
-
-    monkeypatch.setattr(psutil, "pid_exists", lambda pid: True)
-    monkeypatch.setattr(psutil, "Process", _FakeProc)
+    # Live process at the recorded PID has a different create_time — PID
+    # was recycled.
+    fake_psutil_process(name="python.exe", create_time=1700001234.0)
 
     runner = CliRunner()
     result = runner.invoke(cli.main, ["status"])

@@ -18,6 +18,19 @@ class WriteFile(Protocol):
     def __call__(self, path: Path, content: str = ...) -> Path: ...
 
 
+class FakePsutilProcess(Protocol):
+    """Callable shape for the `fake_psutil_process` fixture's install function."""
+
+    def __call__(
+        self,
+        *,
+        name: str = ...,
+        create_time: float | None = ...,
+        pid_exists: bool = ...,
+        name_raises: BaseException | None = ...,
+    ) -> None: ...
+
+
 class FakeMarkers:
     """In-memory stand-in for the ``markers`` module."""
 
@@ -59,3 +72,70 @@ def write_file() -> WriteFile:
         return path
 
     return _write
+
+
+@pytest.fixture
+def fake_psutil_process(monkeypatch: pytest.MonkeyPatch) -> FakePsutilProcess:
+    """Factory: install a fake ``psutil.Process`` + ``pid_exists`` pair.
+
+    Centralizes the per-test ``_FakeProc`` boilerplate that
+    ``state.is_daemon_alive`` tests (and a couple of CLI / daemon-singleton
+    callers) had been duplicating ~10 times. The factory returns an
+    install-callable so a single test can configure the fake exactly once
+    and let the rest of the test exercise the real code.
+
+    Kwargs:
+
+    - ``name`` — string returned by ``proc.name()``. Default ``"python.exe"``.
+    - ``create_time`` — float returned by ``proc.create_time()``. Default
+      ``None``; if ``None``, calling ``proc.create_time()`` raises an
+      AssertionError so a test that doesn't expect the create_time path to
+      fire can detect when it does.
+    - ``pid_exists`` — bool returned by ``psutil.pid_exists``. Default
+      ``True``.
+    - ``name_raises`` — exception instance to raise from ``proc.name()``
+      instead of returning the name. Default ``None`` (return the name).
+      Useful for the ``psutil.NoSuchProcess`` race-window test.
+    """
+    import psutil  # type: ignore[import-untyped, unused-ignore]
+
+    def _install(
+        *,
+        name: str = "python.exe",
+        create_time: float | None = None,
+        pid_exists: bool = True,
+        name_raises: BaseException | None = None,
+    ) -> None:
+        class _FakeProc:
+            def __init__(self, _pid: int) -> None:
+                # Embed the short-circuit contract: production code MUST
+                # consult pid_exists before constructing Process(pid). Any
+                # caller that sets pid_exists=False but doesn't short-circuit
+                # gets a clear failure here. Same assertion strength as the
+                # prior inline sentinel-Process pattern, but now applies
+                # uniformly to every pid_exists=False test.
+                if not pid_exists:
+                    raise AssertionError(
+                        "fake_psutil_process: Process(pid) was constructed "
+                        "even though pid_exists=False — production code must "
+                        "short-circuit on pid_exists before calling Process()"
+                    )
+
+            def name(self) -> str:
+                if name_raises is not None:
+                    raise name_raises
+                return name
+
+            def create_time(self) -> float:
+                if create_time is None:
+                    raise AssertionError(
+                        "fake_psutil_process: create_time() called but the "
+                        "test didn't supply a value — pass create_time=... "
+                        "to the factory if the strict-mode path is expected"
+                    )
+                return create_time
+
+        monkeypatch.setattr(psutil, "pid_exists", lambda _pid: pid_exists)
+        monkeypatch.setattr(psutil, "Process", _FakeProc)
+
+    return _install

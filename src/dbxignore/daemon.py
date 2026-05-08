@@ -761,8 +761,15 @@ def _sweep_once(
 
     # Phase 1: refresh the rule cache. Sequential — load_root mutates the
     # shared _rules dict and is cheap (only stats .dropboxignore files).
+    # `stop_event` threads through to load_root's rglob so SIGTERM during
+    # the rule scan is observed without waiting for the full traversal;
+    # the between-roots check covers multi-root configurations where one
+    # root's full scan completes before the next would start.
     for r in roots:
-        cache.load_root(r)
+        if stop_event is not None and stop_event.is_set():
+            logger.debug("sweep cancelled in phase 1; skipping remaining roots")
+            return
+        cache.load_root(r, stop_event=stop_event)
 
     # Phase 2: reconcile each root. Reads cache (no writes) and writes
     # per-file ADS markers on disjoint paths, so threads across roots

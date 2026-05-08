@@ -122,13 +122,32 @@ class RuleCache:
         self._dropped: set[tuple[Path, int]] = set()
         self._conflicts: list[Conflict] = []
 
-    def load_root(self, root: Path, *, log_warnings: bool = True) -> None:
+    def load_root(
+        self,
+        root: Path,
+        *,
+        log_warnings: bool = True,
+        stop_event: threading.Event | None = None,
+    ) -> None:
         root = root.resolve()
         with self._lock:
             if root not in self._roots:
                 self._roots.append(root)
             seen: set[Path] = set()
             for ignore_file in root.rglob(IGNORE_FILENAME):
+                # Cooperative cancellation between rglob yields. On a tree
+                # with many `.dropboxignore` files this gives reasonable
+                # SIGTERM responsiveness during phase 1 of _sweep_once.
+                # Note: rglob's internal traversal between yields can still
+                # block (one stat per directory between matches), so a tree
+                # with few rule files but many directories has coarser
+                # cancellation granularity. Returning here skips the
+                # stale-purge step intentionally — purging against an
+                # incomplete `seen` set would corrupt the cache by dropping
+                # entries that simply weren't reached. Surfaced by Codex
+                # on PR #162.
+                if stop_event is not None and stop_event.is_set():
+                    return
                 # Same resolve-failure shape as `_load_file`: a `.dropboxignore`
                 # discovered by rglob whose path now contains a symlink loop
                 # would crash the sweep here before `_load_if_changed` runs.

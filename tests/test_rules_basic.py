@@ -76,3 +76,43 @@ def test_indented_hash_line_is_active_pattern(tmp_path: Path) -> None:
     loaded = cache._rules[rules_path]
     assert len(loaded.entries) == 1
     assert loaded.entries[0][0] == 0
+
+
+def test_load_root_honors_stop_event_between_rglob_yields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`RuleCache.load_root` must check stop_event between rglob yields so
+    SIGTERM during phase 1 of `_sweep_once` is observed without scanning
+    every `.dropboxignore` in a large tree. Surfaced by Codex P2 #6 on
+    PR #162."""
+    import threading
+
+    file_a = tmp_path / "a" / ".dropboxignore"
+    file_b = tmp_path / "b" / ".dropboxignore"
+    file_a.parent.mkdir()
+    file_b.parent.mkdir()
+    file_a.write_text("a/\n", encoding="utf-8")
+    file_b.write_text("b/\n", encoding="utf-8")
+
+    stop = threading.Event()
+
+    def fake_rglob(self: Path, pattern: str):  # type: ignore[no-untyped-def]
+        # Yield file_a, then set stop_event before the next yield. The
+        # next iteration of load_root's for-loop sees the set event and
+        # returns early; file_b is never processed.
+        yield file_a
+        stop.set()
+        yield file_b
+
+    monkeypatch.setattr(Path, "rglob", fake_rglob)
+
+    cache = RuleCache()
+    cache.load_root(tmp_path, stop_event=stop)
+
+    # file_a was processed (rule loaded into cache); file_b was NOT
+    # (the stop_event check fired before its iteration body).
+    assert file_a.resolve() in cache._rules, "file_a should have been processed"
+    assert file_b.resolve() not in cache._rules, (
+        "file_b should NOT have been processed — stop_event should have "
+        "broken out of the rglob loop after file_a"
+    )

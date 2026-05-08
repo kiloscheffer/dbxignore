@@ -318,6 +318,65 @@ def test_cooperative_shutdown_during_initial_sweep(
     )
 
 
+def test_state_starting_appears_before_rule_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    write_file: WriteFile,
+) -> None:
+    """`cache.load_root` must run only in the worker thread, so a slow
+    rule-file scan on a large tree doesn't delay the early
+    ``state.json``/``state=starting`` visibility. Verify by blocking
+    ``RuleCache.load_root`` and asserting ``state.json`` still appears
+    before the block is released. Surfaced by Codex P2 #5 on PR #162."""
+    from dbxignore.rules import RuleCache
+
+    root = tmp_path / "root"
+    write_file(root / ".dropboxignore", "")
+
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(state, "default_path", lambda: state_dir / "state.json")
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(state, "user_log_dir", lambda: state_dir)
+    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [root])  # type: ignore[attr-defined, unused-ignore]
+
+    load_root_gate = threading.Event()
+    original_load_root = RuleCache.load_root
+
+    def blocking_load_root(self: RuleCache, root_path: Path) -> None:
+        load_root_gate.wait(timeout=10.0)
+        original_load_root(self, root_path)
+
+    monkeypatch.setattr(RuleCache, "load_root", blocking_load_root)
+
+    stop = threading.Event()
+    t = threading.Thread(target=daemon.run, args=(stop,), daemon=True)
+    t.start()
+    try:
+        # state.json should appear within a few seconds even though
+        # `cache.load_root` is blocked. Without the fix, the main thread
+        # would call `cache.load_root` before `state.write`, so the gate
+        # would block state.json creation.
+        appeared = _poll_until(
+            lambda: (state_dir / "state.json").exists(),
+            timeout_s=5.0,
+        )
+        assert appeared, (
+            "state.json did not appear within 5s while cache.load_root was "
+            "blocked — main thread may still be waiting on load_root before "
+            "the early state.write"
+        )
+
+        s = state.read()
+        assert s is not None
+        assert s.last_sweep is None, (
+            f"expected state=starting (last_sweep=None), got last_sweep={s.last_sweep}"
+        )
+    finally:
+        load_root_gate.set()
+        stop.set()
+        t.join(timeout=10.0)
+
+
 def test_periodic_sweep_skipped_while_initial_worker_alive(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

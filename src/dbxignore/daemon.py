@@ -635,8 +635,18 @@ def run(stop_event: threading.Event | None = None) -> None:
                 logger.info("sync mode detection: %s", summary)
 
             cache = RuleCache()
-            for r in configured_roots:
-                cache.load_root(r)
+            # `cache.load_root` is NOT called here on purpose. The worker
+            # thread's `_sweep_once` does it (and its own reconcile pass)
+            # so the main thread's early `state.write` below isn't blocked
+            # by a slow `rglob('**/.dropboxignore')` on large trees. The
+            # cost the BACKLOG #53 fix is meant to remove was the synchronous
+            # initial sweep, but a similar argument applies to the rule scan
+            # — both belong on the worker side. Watchdog events arriving
+            # before the worker populates the cache are still dispatched;
+            # `_dispatch` calls `cache.reload_file` for RULES events, and
+            # OTHER/DIR_CREATE events on an empty cache simply produce
+            # `match()=False` (no markers set) until the worker's sweep
+            # converges the state. Surfaced by Codex on PR #162.
 
             debouncer = Debouncer(
                 on_emit=lambda item: _dispatch(item[2], cache, configured_roots),

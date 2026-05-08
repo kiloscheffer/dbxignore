@@ -171,31 +171,152 @@ def test_rulecache_still_flags_directory_rule_negation(tmp_path: Path) -> None:
     assert conflicts[0].dropped_pattern == "!build/keep/"
 
 
-def test_rulecache_no_conflict_for_glob_prefix_negation(tmp_path: Path) -> None:
-    """Real-pathspec counterpart to ``test_detect_skips_glob_prefix_negation``.
+def test_rulecache_glob_negation_with_sibling_scope_include_keeps_unignored(
+    tmp_path: Path,
+) -> None:
+    """Codex P1 (fourth iteration on PR #149) reproducer: a directory-
+    marking include in a sibling ``.dropboxignore`` does not apply to
+    paths in the other sibling's scope.
 
-    Negations whose pattern starts with a glob (``**/foo/``, ``foo*/bar/``)
-    have no extractable literal prefix, so the conflict detector
-    short-circuits at ``literal_prefix() == None`` and never enters the
-    post-PR-#108 ``is_directory_negation`` / strict-ancestor branch
-    (``rules_conflicts.py:237-238``). Documented limitation; the negation
-    silently survives in the active rule set despite Dropbox's
-    inheritance making it semantically inert in some cases.
+    Layout:
+        ``a/.dropboxignore``: ``foo/``  (scopes to a/)
+        ``b/.dropboxignore``: ``foo/*\\n!**/foo/bar/`` (scopes to b/)
 
-    This test is the real-pathspec lock-down for that behavior. The
-    existing shim-based test (``test_rules_conflicts.py::test_detect_skips_glob_prefix_negation``)
-    pins the early-exit path, but a future ``literal_prefix()`` refactor
-    that started returning a non-``None`` value for glob-prefix patterns
-    would route this case into the strict-ancestor branch, flag it as
-    a conflict, and break this assertion. Surfaced by the
-    ``pr-test-analyzer`` review of PR #108.
+    The negation in ``b/.dropboxignore`` reaches ``b/<anywhere>/foo/bar/``;
+    the include in ``a/.dropboxignore`` only reaches ``a/<anywhere>/foo/``.
+    Different scopes — the include's inheritance can't make the negation
+    inert. ``foo/*`` in b/ matches ``b/foo/bar`` directly (children-only
+    include doesn't propagate inheritance), and the negation overrides
+    via pathspec last-match-wins. Marker behavior: ``b/foo/bar`` is NOT
+    ignored.
+
+    Pre-fix the strict-ancestor check did a bare suffix-prefix string
+    compare without scope-awareness, treated ``a/foo/`` as a strict
+    ancestor of ``foo/bar/``, dropped the negation, and left
+    ``b/foo/bar`` ignored on disk. Marker-behavior regression guard."""
+    root = tmp_path
+    (root / "a").mkdir()
+    (root / "b" / "foo" / "bar").mkdir(parents=True)
+    (root / "a" / ".dropboxignore").write_text("foo/\n", encoding="utf-8")
+    (root / "b" / ".dropboxignore").write_text("foo/*\n!**/foo/bar/\n", encoding="utf-8")
+    cache = RuleCache()
+    cache.load_root(root)
+
+    assert cache.conflicts() == []
+    assert not cache.match(root / "b" / "foo" / "bar")
+
+
+def test_rulecache_glob_negation_overrides_children_only_include_keeps_unignored(
+    tmp_path: Path,
+) -> None:
+    """Codex P1 (third iteration on PR #149) reproducer: ``build/`` +
+    ``foo/*`` + ``!**/bar/`` should leave ``foo/bar`` not-ignored.
+
+    The negation ``!**/bar/`` overrides ``foo/*`` for ``foo/bar`` via
+    pathspec last-match-wins. The unrelated ``build/`` is not a strict
+    ancestor of the negation's literal-suffix (``bar/`` doesn't start
+    with ``build/``), so the conservative-drop premise (every match of
+    the negation is inheritance-ignored) doesn't apply.
+
+    Pre-fix the conservative drop fired on the mere presence of
+    ``build/`` and silently dropped the negation, leaving ``foo/bar``
+    ignored on disk because ``foo/*`` matched it. Marker-behavior
+    regression guard."""
+    root = tmp_path
+    (root / ".dropboxignore").write_text("build/\nfoo/*\n!**/bar/\n", encoding="utf-8")
+    (root / "foo" / "bar").mkdir(parents=True)
+    cache = RuleCache()
+    cache.load_root(root)
+
+    assert cache.conflicts() == []
+    assert not cache.match(root / "foo" / "bar")
+
+
+def test_rulecache_literal_suffix_glob_negation_keeps_path_unignored(
+    tmp_path: Path,
+) -> None:
+    """Codex P1 (second iteration on PR #149) reproducer: ``bar/`` followed
+    by ``!**/bar/`` should leave ``bar/`` directories not-ignored on disk.
+
+    The include's literal-prefix (``bar/``) equals the negation's
+    literal-suffix (``bar/``), so pathspec last-match-wins resolves the
+    negation as an explicit override. Pre-fix the conservative-drop arm
+    flagged the conflict because the raw strings didn't match exactly,
+    silently dropping the negation and leaving the path ignored —
+    ``_dropped`` filters pre-pathspec inside ``RuleCache.match()``, so
+    the diagnostic-only claim was wrong: this changed marker behavior.
+    Marker-behavior regression guard."""
+    root = tmp_path
+    (root / ".dropboxignore").write_text("bar/\n!**/bar/\n", encoding="utf-8")
+    (root / "bar").mkdir()
+    cache = RuleCache()
+    cache.load_root(root)
+
+    assert cache.conflicts() == []
+    assert not cache.match(root / "bar")
+
+
+def test_rulecache_glob_prefix_same_target_override_keeps_path_unignored(
+    tmp_path: Path,
+) -> None:
+    """Same-target override carve-out (Codex P1 on PR #149).
+
+    ``**/foo/`` followed by ``!**/foo/`` is the explicit last-match-wins
+    case — the user wrote the negation to unignore the same target the
+    earlier include marked. Pre-fix the conservative-drop arm dropped
+    the negation as inert, leaving ``foo/`` directories on disk
+    ignored; ``RuleCache.match()`` consults ``_dropped`` before pathspec
+    so the dropped negation changed marker behavior, not just
+    diagnostics.
+
+    Post-fix the same-target carve-out preserves the negation: no
+    conflict reported, and ``cache.match(root / "foo")`` returns False
+    (path is NOT ignored). Marker-behavior regression guard.
+    """
+    root = tmp_path
+    (root / ".dropboxignore").write_text("**/foo/\n!**/foo/\n", encoding="utf-8")
+    (root / "foo").mkdir()
+    cache = RuleCache()
+    cache.load_root(root)
+
+    assert cache.conflicts() == []
+    assert not cache.match(root / "foo")
+
+
+def test_rulecache_flags_glob_prefix_negation_under_dir_marking_glob_include(
+    tmp_path: Path,
+) -> None:
+    """Real-pathspec counterpart to the post-#76 detector behavior.
+
+    Pre-#76: the conflict detector skipped any negation whose
+    ``literal_prefix()`` returned None — including directory-targeting
+    glob-prefix negations like ``!**/foo/bar/``. The diagnostic surface
+    (``status``, ``explain``, the conflict WARNING) misled users by
+    reporting no conflict even though Dropbox's ancestor inheritance
+    made the negation inert wherever the `**` glob landed under the
+    earlier ``**/foo/`` directory-marking include.
+
+    Post-#76: ``_detect_conflicts`` adds a glob-prefix arm that flags
+    such negations conservatively — any earlier include whose raw text
+    ends in ``/`` triggers the drop. The detector still bypasses the
+    literal-prefix ``is_directory_negation`` / strict-ancestor branch
+    for glob-prefix patterns (``literal_prefix() is None`` early-exit
+    at ``rules_conflicts.py:237-238`` is preserved); the new branch
+    runs alongside it for the directory-targeting case.
+
+    This test is the real-pathspec lock-down for the new behavior; the
+    synthetic-shim counterpart lives at
+    ``test_rules_conflicts.py::test_detect_glob_prefix_negation_under_directory_marking_glob_include``.
     """
     root = tmp_path
     (root / ".dropboxignore").write_text("**/foo/\n!**/foo/bar/\n", encoding="utf-8")
     cache = RuleCache()
     cache.load_root(root)
 
-    assert cache.conflicts() == []
+    conflicts = cache.conflicts()
+    assert len(conflicts) == 1
+    assert conflicts[0].dropped_pattern == "!**/foo/bar/"
+    assert conflicts[0].masking_pattern == "**/foo/"
 
 
 def test_rulecache_flags_descendant_negation_under_children_pattern(tmp_path: Path) -> None:

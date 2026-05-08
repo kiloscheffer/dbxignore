@@ -1915,11 +1915,85 @@ Touches: `src/dbxignore/rules.py` (`load_root`'s rglob loop) for option 1; `src/
 
 ---
 
+## 87. Windows `dbxignore uninstall` doesn't synchronously stop the running task
+
+**Surfaced 2026-05-08 in PR #169 (Codex P2 finding on the Windows manual-test script).**
+
+`install/windows_task.py:125-130` runs only `schtasks /Delete /F` to deactivate the daemon — no `schtasks /End` first, no process-exit poll. The task definition is removed from Task Scheduler immediately, but the running `dbxignored.exe` process can outlive the call by several seconds. By contrast:
+
+- Linux `install/linux_systemd.py` runs `systemctl --user disable --now dbxignore.service`, where `--now` synchronously stops the unit before returning.
+- macOS `install/macos_launchd.py` runs `launchctl bootout gui/<uid>/com.kiloscheffer.dbxignore`, which synchronously tears down the agent.
+
+Two practical consequences:
+
+1. After `dbxignore uninstall`, the orphaned daemon continues writing state.json (end-of-sweep, hourly recovery). Consumers that read state.json's `daemon_pid` and check `state.is_daemon_alive(pid)` see `state=running` for several seconds despite the user having just uninstalled.
+2. `dbxignore uninstall --purge` calls `uninstall_service()` then `_purge_local_state()` to remove state.json. If the daemon survives schtasks long enough to fire a state.write between those two steps, state.json gets recreated *after* the purge — defeating the purge's "no dbxignore-authored artifacts on disk" goal (`CLAUDE.md`, `cli.uninstall --purge`).
+
+PR #169's Windows manual-test script works around this with `Wait-Process -Name dbxignored -Timeout 30 -ErrorAction SilentlyContinue` after each `dbxignore uninstall*` call. The Linux + macOS scripts don't need the wait. The workaround is test-level only — production users still get the asymmetric behavior.
+
+**Fix candidates:**
+
+- **Add `schtasks /End` + process-exit poll to `uninstall_task()`.** Run `schtasks /End /TN dbxignore` first (signals the running task to terminate), then poll for the daemon process to exit (up to ~30s), then `schtasks /Delete /F`. Reading the task's PID directly from schtasks is awkward; reading `state.json`'s `daemon_pid` and checking `psutil.pid_exists(pid)` is cleaner. ~30 LOC + a Windows-only test that verifies process exit before the function returns.
+
+- **Match the Linux/macOS contract via state.json.** Read `daemon_pid` from state.json before calling schtasks; after schtasks returns, poll `state.is_daemon_alive(pid)` with a bounded timeout. Simpler than the schtasks-PID discovery but couples uninstall to state.json existence (a `--purge` from a state-less host would skip the wait).
+
+- **Defer.** Document the asymmetry in CLAUDE.md and leave `Wait-Process` workarounds in user-facing tooling. Cheapest, but pushes the synchronization burden to every consumer.
+
+**Urgency:** medium. The current behavior breaks the implicit "uninstall is synchronous" contract carried over from Linux/macOS, and surfaces as state.json-recreation flakes in test scripts. Bundle with the next `install/windows_task.py` edit.
+
+Touches: `src/dbxignore/install/windows_task.py` (uninstall_task body); `tests/test_install.py` (Windows-only test pinning synchronous shutdown).
+
+---
+
+## 88. Manual-test Windows Phase 6 — pin the stale-state-across-reinstall regression
+
+**Surfaced 2026-05-09 in PR #169's third Codex P2 review of `Test-Uninstall`.**
+
+PR #169 added Windows test-level synchronization for the schtasks fire-and-forget gap (item #87): `Test-Uninstall` reads `state.json`'s `daemon_pid` before each `dbxignore uninstall*` call and waits on the captured PID afterward. Codex's third review pass found a stale-PID race in the post-reinstall polling block: `state.json` is RETAINED by plain uninstall (only `--purge` removes it), so a naive `Test-Path`-then-read returned the OLD daemon's pid before the just-reinstalled task had written its own. `Wait-Process -Id <stale>` then waited on a long-dead pid and returned instantly, while the actual re-installed daemon survived `--purge` and could recreate `state.json` after `_purge_local_state()`.
+
+The fix in commit `fde50c5` polls until `state.json`'s `daemon_pid` is non-null AND different from the pre-uninstall value (`$uninstallPid`). The fix is correct under the conditions Codex described; what's missing is an explicit regression pin. If a future refactor reintroduces the read-first-iteration shape, the test would still pass on a fast host (where the new daemon happens to write `state.json` before the first poll iteration runs) and fail intermittently on slow hosts — exactly the flake mode that's hardest to triage.
+
+**Fix candidates:**
+
+- **Add an explicit `$purgePid -ne $uninstallPid` assertion to `Test-Uninstall`.** ~5 LOC: `if ($purgePid -and $uninstallPid -and ($purgePid -eq $uninstallPid)) { Write-Fail "regression: post-reinstall PID poll returned stale pid" }`. The assertion gracefully degrades when either pid is null (state.json unavailable). Cheapest defensive layer.
+
+- **Extract the polling logic into a helper and unit-test it.** Mock `Get-Content` to return a sequence of state.json contents (stale → fresh) and verify the helper polls past the stale value. Requires the polling block to be a function (currently inlined). Higher cost; better long-term defense; useful if the same shape is needed elsewhere.
+
+- **Defer.** Item #87 will eventually land and remove the entire test-level workaround (PID dance, Wait-Process, polling block — all gone once `uninstall_task()` is synchronous). The regression pin has a self-limiting lifespan tied to #87's resolution.
+
+**Urgency:** low. The fix in `fde50c5` is sound under the conditions Codex described; the regression pin is belt-and-braces against a future refactor. Bundle with the next `manual-test-windows.ps1` edit if convenient. Wait for #87 to land if not.
+
+Touches: `scripts/manual-test-windows.ps1` (`Test-Uninstall` body) for option 1.
+
+---
+
+## 89. Manual-test scripts have no deterministic way to exercise the long-sweep arms
+
+**Surfaced 2026-05-09 in PR #169 (Codex P2 review, second-pass suggestion to "add a Windows manual case with a slow initial sweep").**
+
+PR #169 added Phase 5/6 cases sized for the ~50s sweep window observed on a personal-account `~/Dropbox` tree (~27k dirs): 5a captures `state=starting` while the initial sweep runs, 5f polls up to 180s for `state=running`, 6a absorbs the Windows schtasks fire-and-forget gap, 6b waits for the re-installed daemon to write its own `state.json`. 5f's 180s ceiling is explicitly headroom for ~100k dirs.
+
+The arms exist; what's missing is a deterministic way to exercise them. On a small test tree the initial sweep finishes faster than any timing-sensitive case can observe the transient state — 5a falls through to its `note` path (informational, not failing), 5f converges on iteration 1 with no real test of the long-sweep contract, and 6a/6b's poll loops succeed on iteration 1 too. The arms are correctly written and sized; the manual scripts just don't deterministically reach the long-sweep regime unless the tester happens to have a real ~/Dropbox tree with tens of thousands of dirs.
+
+**Fix candidates:**
+
+- **Daemon-side `DBXIGNORE_TEST_SLOW_SWEEP_S` env var.** Add a guarded `time.sleep(N)` (or per-directory sleep) in `_initial_sweep_worker` when the var is set. Manual-test scripts export the var before `dbxignore install` and observe deterministic long-sweep timing on any tree size. Test-only feature in production code; scope it tightly (off by default, ignored unless `os.environ.get(...)` is set, log a WARNING when honored so it's never silently active). ~10 LOC daemon-side + ~40 LOC per-script for a new "slow-sweep" Phase 5 variant.
+
+- **Synthetic large tree.** Have the manual-test scripts pre-create thousands of empty subdirs under the test root before Phase 5, so the daemon's initial sweep takes the same wall-clock time as a real big Dropbox install. Most faithful but slowest. ~50 LOC of setup + correspondingly slow runtime; cleanup needs care.
+
+- **Defer.** Leave the `note` fall-through as the documented small-tree caveat. Honest about the coverage gap; not closing it. PR #169 lands in this state.
+
+**Urgency:** low. The arms are correct; what's missing is deterministic exercise. Independent of item #87 — Phase 5 timing tests would still benefit from determinism even after #87 retires the Windows-specific 6a/6b PID dance. Bundle with the next manual-test-script edit if convenient.
+
+Touches: `src/dbxignore/daemon.py` (`_initial_sweep_worker`) for option 1; `scripts/manual-test-{ubuntu-vps,macos}.sh` + `scripts/manual-test-windows.ps1` (Phase 5 setup) for both options 1 and 2.
+
+---
+
 ## Status
 
 ### Open
 
-Eleven items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Fourteen items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -1932,6 +2006,9 @@ Eleven items. All passive (no concrete trigger requires action) — bundle each 
 - **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall.
 - **#84** — `actions/checkout` is split @v4 vs @v5 across the workflow files (Claude-bot tier on v4, test/build/CI tier on v5). Visible-but-incidental skew surfaced during item #74's SHA-pin sweep — separate revertability axis from the pin work itself, so deferred. Mechanical fix: bump the laggards once major-version release-notes are reviewed. No observed pain from the split. Surfaced 2026-05-08 in PR #156. (Note: scope reduced after PR #163 retired `codex-followup.yml` — original `setup-uv` v6/v7 split is moot since the v6 holder is gone; only `actions/checkout` v4/v5 across `claude.yml` + `claude-code-review.yml` remains.)
 - **#86** — Initial-sweep shutdown can wait for `RuleCache.load_root` rglob completion when the watched tree has many directories but few `.dropboxignore` files — `rglob`'s internal traversal between yields blocks `stop_event` observation, and the unbounded outer `worker.join()` (the singleton-invariant guard from PR #162's fix #2) then waits for the rglob to finish. Bounded operationally by systemd's `TimeoutStopSec=90s` default. Two fix candidates: reimplement `load_root` as a manual `os.walk` with per-directory checks (~15 LOC), or replace the unbounded outer `worker.join()` with a different singleton-protection mechanism (architectural). Surfaced 2026-05-08 in PR #162's Codex finding #7.
+- **#87** — `install/windows_task.py:uninstall_task` runs only `schtasks /Delete /F` (no `/End` first, no process-exit poll), so `dbxignored.exe` can outlive `dbxignore uninstall` by several seconds — orphaned-daemon state.writes can recreate state.json after `_purge_local_state()`, defeating `--purge`'s "no dbxignore-authored artifacts" goal. Linux's `systemctl --user disable --now` and macOS's `launchctl bootout` are both synchronous. Three fix candidates: add `schtasks /End` + process-exit poll using state.json's `daemon_pid` (~30 LOC), match the contract via state.json directly (simpler but state-coupled), or defer and document. PR #169's Windows manual-test script has a `Wait-Process` test-level workaround. Surfaced 2026-05-08 in PR #169's Codex P2 finding.
+- **#88** — `Test-Uninstall` in `scripts/manual-test-windows.ps1` lacks an explicit regression pin for the post-reinstall stale-PID polling fix shipped in PR #169 (`fde50c5`). If a future refactor regresses to reading state.json's first-iteration value, the test would still pass on a fast host (new daemon writes before first poll iteration) but fail intermittently on slow hosts — the worst flake mode to triage. Three fix candidates: ~5 LOC `$purgePid -ne $uninstallPid` assertion, extract polling helper + unit test, or defer (item #87 will eventually retire the test-level workaround entirely). Surfaced 2026-05-09 in PR #169's third Codex P2 review.
+- **#89** — Manual-test scripts have no deterministic way to exercise the long-sweep arms added in PR #169 (5a `state=starting` capture, 5f 180s poll, 6a/6b polling loops). On small test trees the initial sweep finishes before any timing-sensitive case can observe the transient state; cases fall through to `note`-path coverage (informational, non-failing). Three fix candidates: daemon-side `DBXIGNORE_TEST_SLOW_SWEEP_S` env var with guarded sleep in `_initial_sweep_worker` (~50 LOC across daemon + scripts), synthetic large-tree setup pre-Phase-5 (~50 LOC, slow runtime), or defer. Independent of #87 — sweep-timing determinism is useful regardless. Surfaced 2026-05-09 in PR #169's Codex P2 review.
 
 ### Resolved (reverse chronological)
 

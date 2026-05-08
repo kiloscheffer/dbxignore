@@ -12,16 +12,14 @@ on:
 
 jobs:
   claude-review:
-    # Skip auto-review when the trigger actor is a bot. The codex-followup
-    # workflow pushes auto-fix commits as `claude[bot]`, which fires a
-    # `synchronize` event here. Without this filter the Claude action's
-    # anti-loop guard refuses with "Workflow initiated by non-human actor"
-    # and the check shows red on the PR (mergeStateStatus=UNSTABLE). Bot-
-    # authored pushes are already validated by the workflow that produced
-    # them (codex-followup runs pytest + ruff + scoped mypy before pushing),
-    # so a second auto-review is redundant. The `endsWith` form covers any
-    # bot identity (dependabot[bot], renovate[bot], chatgpt-codex-connector[bot])
-    # without enumeration. Surfaced on PR #152.
+    # Skip auto-review when the trigger actor is a bot. Without this filter
+    # the Claude action's anti-loop guard refuses with "Workflow initiated
+    # by non-human actor" and the check shows red on the PR
+    # (mergeStateStatus=UNSTABLE). The `endsWith` form covers any bot
+    # identity (dependabot[bot], renovate[bot], chatgpt-codex-connector[bot])
+    # without enumeration. Surfaced on PR #152 — originally driven by the
+    # retired codex-followup workflow's claude[bot] auto-fix pushes; still
+    # relevant for Dependabot/Renovate synchronizes.
     if: ${{ !endsWith(github.actor, '[bot]') }}
 
     # Optional alternative filter (not active): only run for specific PR

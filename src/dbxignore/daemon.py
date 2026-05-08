@@ -759,6 +759,10 @@ def _sweep_once(
     else:
         reports = []
 
+    if stop_event is not None and stop_event.is_set():
+        logger.debug("sweep cancelled mid-run; skipping state write")
+        return
+
     total_marked = sum(r.marked for r in reports)
     total_cleared = sum(r.cleared for r in reports)
     total_errors = sum(len(r.errors) for r in reports)

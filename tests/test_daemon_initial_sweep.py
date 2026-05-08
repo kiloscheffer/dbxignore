@@ -209,6 +209,61 @@ def test_worker_failure_shuts_down_daemon(
     )
 
 
+def test_cancelled_sweep_does_not_write_last_sweep(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    write_file: WriteFile,
+) -> None:
+    """Stopping the daemon mid-initial-sweep must leave last_sweep=None in
+    state.json.  A cancelled sweep is partial; recording it as complete
+    would misrepresent how many paths were actually reconciled."""
+    root = tmp_path / "root"
+    write_file(root / ".dropboxignore", "build/\n")
+    (root / "build").mkdir()
+
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(state, "default_path", lambda: state_dir / "state.json")
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(state, "user_log_dir", lambda: state_dir)
+    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [root])  # type: ignore[attr-defined, unused-ignore]
+
+    gate = threading.Event()
+    blocking = _make_blocking_markers(gate)
+    monkeypatch.setattr(reconcile, "markers", blocking)
+    monkeypatch.setattr(cli, "markers", blocking)
+
+    stop = threading.Event()
+    t = threading.Thread(target=daemon.run, args=(stop,), daemon=True)
+    t.start()
+    try:
+        # Wait for the daemon to write the early state.json (last_sweep=None).
+        assert _poll_until(
+            lambda: (state_dir / "state.json").exists(),
+            timeout_s=5.0,
+        ), "daemon never wrote early state.json"
+        s_before = state.read()
+        assert s_before is not None and s_before.last_sweep is None
+
+        # Cancel the daemon while the worker is blocked on the gate, then
+        # open the gate so the worker can observe stop_event and exit.
+        stop.set()
+        gate.set()
+
+        t.join(timeout=10.0)
+        assert not t.is_alive(), "daemon did not exit within 10s after stop_event"
+
+        # last_sweep must still be None — the sweep was never completed.
+        s_after = state.read()
+        assert s_after is not None
+        assert s_after.last_sweep is None, (
+            f"cancelled sweep was recorded as completed: last_sweep={s_after.last_sweep}"
+        )
+    finally:
+        gate.set()
+        stop.set()
+        t.join(timeout=10.0)
+
+
 def test_cooperative_shutdown_during_initial_sweep(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -669,15 +669,30 @@ function Test-Daemon {
     # 5f - post-sweep status surface (PR #162). --summary returns the full
     # state=running field set; human path emits the 'daemon: running' line
     # distinct from the new 'daemon: starting (initial sweep in progress)'
-    # branch. The state=starting observation lives in the watching-roots
-    # poll above (best-effort on small test trees).
+    # branch.
+    #
+    # PR #162 marks the daemon ready (and logs 'watching roots') BEFORE
+    # the initial sweep completes - so the watching-roots poll above is
+    # NOT a sweep-complete sentinel post-#162. On a real Dropbox tree
+    # the sweep can still be running when 5f probes, in which case
+    # --summary correctly emits 'state=starting pid=N' (truncated form).
+    # Poll for state=running for up to 60s to absorb the transition.
     Write-Note "5f - status --summary post-sweep + human 'daemon: running' line (PR #162)"
-    $sumLate = (dbxignore status --summary 2>&1 | Select-Object -First 1)
-    if ($sumLate -match '^state=running pid=\d+ marked=\d+ cleared=\d+ errors=\d+ conflicts=\d+$') {
+    $sumLate = ""
+    $sumPattern = '^state=running pid=\d+ marked=\d+ cleared=\d+ errors=\d+ conflicts=\d+$'
+    for ($i = 0; $i -lt 60; $i++) {
+        $sumLate = (dbxignore status --summary 2>&1 | Select-Object -First 1)
+        if ($sumLate -match $sumPattern) { break }
+        Start-Sleep -Seconds 1
+    }
+    if ($sumLate -match $sumPattern) {
         Write-Pass "5f - --summary post-sweep: $sumLate"
     } else {
-        Write-Fail "5f - --summary post-sweep did not match expected pattern: $sumLate"
+        Write-Fail "5f - --summary did not advance to state=running within 60s (last: $sumLate)"
     }
+    # Once --summary reports state=running, the same state.json drives the
+    # human path: last_sweep is not None, so the 'daemon: running' branch
+    # fires synchronously. Single-shot is safe here.
     $humanOut = ((dbxignore status 2>&1) -join "`n")
     if ($humanOut -match '(?m)^daemon: running \(pid=\d+\)$') {
         Write-Pass "5f - human status reports 'daemon: running'"
@@ -719,14 +734,23 @@ function Test-Uninstall {
     }
 
     # 6a - status --summary returns state=not_running post-uninstall (PR #162).
-    # state.json is retained by plain uninstall; the daemon process is gone,
-    # so daemon_is_running(s) returns False and the state token flips.
+    # state.json is retained by plain uninstall; the daemon process exits and
+    # daemon_is_running(s) flips False. Windows schtasks /Delete /F (in
+    # install/windows_task.py) is fire-and-forget on the running task
+    # instance, so the dbxignored.exe process can outlive uninstall by
+    # several seconds. Poll for the transition for up to 30s.
     Write-Note "6a - status --summary post-uninstall (PR #162)"
-    $sumUninst = (dbxignore status --summary 2>&1 | Select-Object -First 1)
-    if ($sumUninst -match '^state=not_running pid=\d+ marked=\d+ cleared=\d+ errors=\d+ conflicts=\d+$') {
+    $sumUninst = ""
+    $sumUninstPattern = '^state=not_running pid=\d+ marked=\d+ cleared=\d+ errors=\d+ conflicts=\d+$'
+    for ($i = 0; $i -lt 30; $i++) {
+        $sumUninst = (dbxignore status --summary 2>&1 | Select-Object -First 1)
+        if ($sumUninst -match $sumUninstPattern) { break }
+        Start-Sleep -Seconds 1
+    }
+    if ($sumUninst -match $sumUninstPattern) {
         Write-Pass "6a - --summary post-uninstall: $sumUninst"
     } else {
-        Write-Fail "6a - --summary post-uninstall did not match expected pattern: $sumUninst"
+        Write-Fail "6a - --summary did not advance to state=not_running within 30s (last: $sumUninst)"
     }
 
     # re-install briefly, then --purge

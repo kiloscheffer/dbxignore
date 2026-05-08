@@ -578,15 +578,32 @@ phase_daemon() {
     # 5f — post-sweep status surface (PR #162). --summary returns the full
     # state=running field set; human path emits the 'daemon: running' line
     # distinct from the new 'daemon: starting (initial sweep in progress)'
-    # branch. The state=starting observation lives in the watching-roots
-    # poll above (best-effort on small test trees).
+    # branch.
+    #
+    # PR #162 marks the daemon ready (and logs 'watching roots') BEFORE
+    # the initial sweep completes — so the watching-roots poll above is
+    # NOT a sweep-complete sentinel post-#162. On a real ~/Dropbox tree
+    # the sweep can still be running when 5f probes, in which case
+    # --summary correctly emits 'state=starting pid=N' (truncated form).
+    # Poll for state=running for up to 60s to absorb the transition.
     note "5f — status --summary post-sweep + human 'daemon: running' line (PR #162)"
-    local sum_late; sum_late="$(dbxignore status --summary 2>&1 | head -n 1)"
-    if printf '%s\n' "$sum_late" | grep -qE '^state=running pid=[0-9]+ marked=[0-9]+ cleared=[0-9]+ errors=[0-9]+ conflicts=[0-9]+$'; then
+    local sum_late=""
+    local sum_pattern='^state=running pid=[0-9]+ marked=[0-9]+ cleared=[0-9]+ errors=[0-9]+ conflicts=[0-9]+$'
+    for _ in $(seq 1 60); do
+        sum_late="$(dbxignore status --summary 2>&1 | head -n 1)"
+        if printf '%s\n' "$sum_late" | grep -qE "$sum_pattern"; then
+            break
+        fi
+        sleep 1
+    done
+    if printf '%s\n' "$sum_late" | grep -qE "$sum_pattern"; then
         pass "5f — --summary post-sweep: $sum_late"
     else
-        fail "5f — --summary post-sweep did not match expected pattern: $sum_late"
+        fail "5f — --summary did not advance to state=running within 60s (last: $sum_late)"
     fi
+    # Once --summary reports state=running, the same state.json drives the
+    # human path: last_sweep is not None, so the 'daemon: running' branch
+    # fires synchronously. Single-shot is safe here.
     if dbxignore status 2>&1 | grep -qE '^daemon: running \(pid=[0-9]+\)$'; then
         pass "5f — human status reports 'daemon: running'"
     else
@@ -623,14 +640,26 @@ phase_uninstall() {
     [ -f "$T/watch-me.tmp" ] && assert_xattr_set "$T/watch-me.tmp" "uninstall — markers retained on watch-me.tmp"
 
     # 6a — status --summary returns state=not_running post-uninstall (PR #162).
-    # state.json is retained by plain uninstall; the daemon process is gone,
-    # so daemon_is_running(s) returns False and the state token flips.
+    # state.json is retained by plain uninstall; the daemon process exits and
+    # daemon_is_running(s) flips False. systemctl --user disable --now is
+    # synchronous on Linux (the unit is fully stopped before uninstall
+    # returns), but Windows schtasks /Delete /F is fire-and-forget on the
+    # running task instance — poll for the transition for up to 30s so the
+    # case is symmetric across platforms.
     note "6a — status --summary post-uninstall (PR #162)"
-    local sum_uninst; sum_uninst="$(dbxignore status --summary 2>&1 | head -n 1)"
-    if printf '%s\n' "$sum_uninst" | grep -qE '^state=not_running pid=[0-9]+ marked=[0-9]+ cleared=[0-9]+ errors=[0-9]+ conflicts=[0-9]+$'; then
+    local sum_uninst=""
+    local sum_uninst_pattern='^state=not_running pid=[0-9]+ marked=[0-9]+ cleared=[0-9]+ errors=[0-9]+ conflicts=[0-9]+$'
+    for _ in $(seq 1 30); do
+        sum_uninst="$(dbxignore status --summary 2>&1 | head -n 1)"
+        if printf '%s\n' "$sum_uninst" | grep -qE "$sum_uninst_pattern"; then
+            break
+        fi
+        sleep 1
+    done
+    if printf '%s\n' "$sum_uninst" | grep -qE "$sum_uninst_pattern"; then
         pass "6a — --summary post-uninstall: $sum_uninst"
     else
-        fail "6a — --summary post-uninstall did not match expected pattern: $sum_uninst"
+        fail "6a — --summary did not advance to state=not_running within 30s (last: $sum_uninst)"
     fi
 
     # re-install briefly, then --purge

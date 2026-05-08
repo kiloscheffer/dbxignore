@@ -6,6 +6,7 @@ import getpass
 import logging
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -14,6 +15,12 @@ from dbxignore.install._common import detect_invocation as detect_invocation
 logger = logging.getLogger(__name__)
 
 TASK_NAME = "dbxignore"
+
+# How long to wait for the daemon process to exit after `schtasks /End`
+# before falling through to `/Delete` anyway. Mirrors the operational
+# bound of the Linux/macOS synchronous-teardown paths.
+_END_WAIT_TIMEOUT_S = 30.0
+_END_WAIT_POLL_INTERVAL_S = 0.5
 
 
 def build_task_xml(exe_path: Path, arguments: str = "") -> str:
@@ -121,7 +128,56 @@ def install_task() -> None:
 
 
 def uninstall_task() -> None:
-    """Remove the Task Scheduler entry; raises RuntimeError if schtasks fails."""
+    """Remove the Task Scheduler entry; raises RuntimeError if schtasks fails.
+
+    Runs `schtasks /End` first (best-effort), waits for the daemon process
+    recorded in state.json to actually exit, then `schtasks /Delete /F`.
+    Mirrors the synchronous-shutdown contract Linux's `systemctl --user
+    disable --now` and macOS's `launchctl bootout` already provide:
+    when this function returns, the daemon is gone (or the timeout fired
+    and we logged a WARNING). Without /End first, the running task instance
+    survives /Delete, and the orphaned daemon can write state.json after
+    `_purge_local_state()` removes it (item #87).
+    """
+    # Lazy import: state imports psutil lazily inside is_daemon_alive,
+    # which keeps this module's import surface small.
+    from dbxignore import state as state_module
+
+    state_obj = state_module.read()
+    daemon_pid = state_obj.daemon_pid if state_obj else None
+    daemon_create_time = state_obj.daemon_create_time if state_obj else None
+
+    # /End: best-effort. The task may not be running (already crashed,
+    # never started), in which case schtasks returns non-zero — that's
+    # fine, we still want /Delete to clean up the definition.
+    subprocess.run(  # noqa: S603 — hardcoded args, no user data
+        ["schtasks", "/End", "/TN", TASK_NAME],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    # Wait for the daemon process to actually exit. /End signals the task
+    # to stop but doesn't block; the daemon's signal handler runs on its
+    # own clock. is_daemon_alive's name-and-create_time check rejects
+    # PID-reuse cases (a recycled PID claimed by an unrelated process).
+    if daemon_pid is not None:
+        deadline = time.monotonic() + _END_WAIT_TIMEOUT_S
+        while time.monotonic() < deadline:
+            if not state_module.is_daemon_alive(daemon_pid, create_time=daemon_create_time):
+                break
+            time.sleep(_END_WAIT_POLL_INTERVAL_S)
+        else:
+            # Loop exhausted without breaking — daemon is still alive.
+            # Log and proceed anyway: /Delete must always run so the next
+            # `dbxignore install` doesn't fail with "task already exists."
+            logger.warning(
+                "daemon process pid=%s did not exit within %.0fs of schtasks /End; "
+                "continuing with /Delete",
+                daemon_pid,
+                _END_WAIT_TIMEOUT_S,
+            )
+
     result = subprocess.run(  # noqa: S603 — hardcoded args, no user data
         ["schtasks", "/Delete", "/TN", TASK_NAME, "/F"],
         capture_output=True,

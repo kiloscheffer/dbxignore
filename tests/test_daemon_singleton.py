@@ -2,28 +2,17 @@ from __future__ import annotations
 
 import contextlib
 import threading
-import time
 from typing import TYPE_CHECKING
 
 import pytest
 
 from dbxignore import cli, daemon, reconcile, state
-from tests.conftest import BlockingMarkers
+from tests.conftest import BlockingMarkers, _poll_until, setup_daemon_state
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
     from pathlib import Path
 
     from tests.conftest import FakePsutilProcess
-
-
-def _poll_until(fn: Callable[[], bool], timeout_s: float = 5.0, interval_s: float = 0.05) -> bool:
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        if fn():
-            return True
-        time.sleep(interval_s)
-    return False
 
 
 # ---- singleton lock (followup item #78) -------------------------------------
@@ -220,15 +209,11 @@ def test_singleton_lock_not_released_while_worker_alive(
     marks the inner join having timed out; then verify the lock is still
     held before opening the gate.
     """
-    state_dir = tmp_path / "state"
     root = tmp_path / "root"
     root.mkdir()
     (root / ".dropboxignore").write_text("")
 
-    monkeypatch.setattr(state, "default_path", lambda: state_dir / "state.json")
-    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
-    monkeypatch.setattr(state, "user_log_dir", lambda: state_dir)
-    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [root])  # type: ignore[attr-defined]
+    state_dir = setup_daemon_state(monkeypatch, tmp_path, root)
     monkeypatch.setattr(daemon, "_configured_logging", contextlib.nullcontext)
     # Collapse the graceful-exit window so the warning fires in milliseconds.
     monkeypatch.setattr(daemon, "_INITIAL_SWEEP_JOIN_TIMEOUT_S", 0.01)

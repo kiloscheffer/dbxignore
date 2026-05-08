@@ -2,16 +2,50 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Protocol
 from unittest.mock import MagicMock
 
 import pytest
 
-from dbxignore import cli, reconcile
+from dbxignore import cli, daemon, reconcile, state
 
 if TYPE_CHECKING:
     import threading
+    from collections.abc import Callable
     from pathlib import Path
+
+
+def _poll_until(fn: Callable[[], bool], timeout_s: float = 5.0, interval_s: float = 0.05) -> bool:
+    """Poll ``fn`` until it returns True or ``timeout_s`` elapses.
+
+    Returns True if ``fn`` ever returned True before the deadline; False if
+    the timeout fired first. Used by daemon-thread tests that need to wait
+    for an asynchronous condition (state.json appearance, log line, marker
+    write) without resorting to ``time.sleep`` of a fixed duration.
+    """
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if fn():
+            return True
+        time.sleep(interval_s)
+    return False
+
+
+def setup_daemon_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, root: Path) -> Path:
+    """Install the standard daemon-test monkeypatches and return ``state_dir``.
+
+    Most daemon-thread tests redirect ``state.{default_path,user_state_dir,
+    user_log_dir}`` to a per-test directory and replace ``roots_module.discover``
+    with a fixed-roots lambda. Bundling the four ``setattr`` calls behind one
+    helper keeps the per-test setup focused on the behavior under test.
+    """
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(state, "default_path", lambda: state_dir / "state.json")
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(state, "user_log_dir", lambda: state_dir)
+    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [root])  # type: ignore[attr-defined, unused-ignore]
+    return state_dir
 
 
 def stub_event(

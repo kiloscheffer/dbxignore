@@ -1,12 +1,11 @@
 import sys
 import threading
-import time
-from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from dbxignore import daemon, markers
+from tests.conftest import _poll_until
 
 pytestmark = pytest.mark.windows_only
 
@@ -15,15 +14,6 @@ if sys.platform != "win32":
         "Daemon smoke test exercises real NTFS ADS; Windows-only",
         allow_module_level=True,
     )
-
-
-def _poll_until(fn: Callable[[], bool], timeout_s: float = 2.0, interval_s: float = 0.05) -> bool:
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        if fn():
-            return True
-        time.sleep(interval_s)
-    return False
 
 
 def test_daemon_starts_and_responds_to_one_event(

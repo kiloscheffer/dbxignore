@@ -488,9 +488,18 @@ phase_daemon() {
     note "waiting up to 180s for daemon initial sweep to complete and observer to come online..."
     note "  (sweep cost is proportional to ~/Dropbox subdir count: $dir_count)"
     local ready=0
+    # Opportunistic capture of state=starting (PR #162) — only reliably
+    # observable while the initial sweep runs. Small test trees can finish
+    # before the first probe; that's why this is best-effort, with a hard
+    # state=running assertion in 5f after the sweep completes.
+    local saw_starting=0
     for _ in $(seq 1 180); do
         if grep -q 'watching roots' "$HOME/.local/state/dbxignore/daemon.log" 2>/dev/null; then
             ready=1; break
+        fi
+        if [ "$saw_starting" -eq 0 ] && \
+           dbxignore status --summary 2>/dev/null | grep -q '^state=starting pid='; then
+            saw_starting=1
         fi
         sleep 1
     done
@@ -500,6 +509,11 @@ phase_daemon() {
         fail "daemon never logged 'watching roots' within 180s"
         _dump_daemon_diagnostics "$T"
         return
+    fi
+    if [ "$saw_starting" -eq 1 ]; then
+        pass "5a — observed state=starting via --summary during initial sweep (PR #162)"
+    else
+        note "5a — sweep finished before --summary probe caught state=starting (small tree); 5f still pins state=running"
     fi
 
     # 5b — watchdog reacts to a new file (created AFTER observer is live)
@@ -560,6 +574,26 @@ phase_daemon() {
     else
         fail "5e — clear --force did not override the guard"
     fi
+
+    # 5f — post-sweep status surface (PR #162). --summary returns the full
+    # state=running field set; human path emits the 'daemon: running' line
+    # distinct from the new 'daemon: starting (initial sweep in progress)'
+    # branch. The state=starting observation lives in the watching-roots
+    # poll above (best-effort on small test trees).
+    note "5f — status --summary post-sweep + human 'daemon: running' line (PR #162)"
+    local sum_late; sum_late="$(dbxignore status --summary 2>&1 | head -n 1)"
+    if printf '%s\n' "$sum_late" | grep -qE '^state=running pid=[0-9]+ marked=[0-9]+ cleared=[0-9]+ errors=[0-9]+ conflicts=[0-9]+$'; then
+        pass "5f — --summary post-sweep: $sum_late"
+    else
+        fail "5f — --summary post-sweep did not match expected pattern: $sum_late"
+    fi
+    if dbxignore status 2>&1 | grep -qE '^daemon: running \(pid=[0-9]+\)$'; then
+        pass "5f — human status reports 'daemon: running'"
+    else
+        note "    human status output:"
+        dbxignore status 2>&1 | sed 's/^/    /'
+        fail "5f — human status did not report 'daemon: running'"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -588,6 +622,17 @@ phase_uninstall() {
 
     [ -f "$T/watch-me.tmp" ] && assert_xattr_set "$T/watch-me.tmp" "uninstall — markers retained on watch-me.tmp"
 
+    # 6a — status --summary returns state=not_running post-uninstall (PR #162).
+    # state.json is retained by plain uninstall; the daemon process is gone,
+    # so daemon_is_running(s) returns False and the state token flips.
+    note "6a — status --summary post-uninstall (PR #162)"
+    local sum_uninst; sum_uninst="$(dbxignore status --summary 2>&1 | head -n 1)"
+    if printf '%s\n' "$sum_uninst" | grep -qE '^state=not_running pid=[0-9]+ marked=[0-9]+ cleared=[0-9]+ errors=[0-9]+ conflicts=[0-9]+$'; then
+        pass "6a — --summary post-uninstall: $sum_uninst"
+    else
+        fail "6a — --summary post-uninstall did not match expected pattern: $sum_uninst"
+    fi
+
     # re-install briefly, then --purge
     note "re-installing for --purge test..."
     dbxignore install >/dev/null 2>&1 || abort "re-install failed"
@@ -607,6 +652,16 @@ phase_uninstall() {
     else
         fail "purge — state files remain"
         ls -la "$HOME/.local/state/dbxignore/" 2>/dev/null | sed 's/^/    /'
+    fi
+
+    # 6b — status --summary returns state=no_state post-purge (PR #162).
+    # Truncated form: 'state=no_state conflicts=N' with no pid/marked/etc.
+    note "6b — status --summary post-purge (PR #162)"
+    local sum_purge; sum_purge="$(dbxignore status --summary 2>&1 | head -n 1)"
+    if printf '%s\n' "$sum_purge" | grep -qE '^state=no_state conflicts=[0-9]+$'; then
+        pass "6b — --summary post-purge: $sum_purge"
+    else
+        fail "6b — --summary post-purge did not match expected pattern: $sum_purge"
     fi
 }
 

@@ -570,9 +570,20 @@ function Test-Daemon {
     Write-Note "watched root: $script:DropboxDir"
     Write-Note "waiting up to 180s for daemon initial sweep + observer ready..."
     $ready = $false
+    # Opportunistic capture of state=starting (PR #162) - only reliably
+    # observable while the initial sweep runs. Small test trees can finish
+    # before the first probe; that's why this is best-effort, with a hard
+    # state=running assertion in 5f after the sweep completes.
+    $sawStarting = $false
     for ($i = 0; $i -lt 180; $i++) {
         if ((Test-Path $logPath) -and ((Get-Content $logPath -Raw) -match 'watching roots')) {
             $ready = $true; break
+        }
+        if (-not $sawStarting) {
+            $probe = (dbxignore status --summary 2>$null | Select-Object -First 1)
+            if ($probe -and ($probe -match '^state=starting pid=')) {
+                $sawStarting = $true
+            }
         }
         Start-Sleep -Seconds 1
     }
@@ -582,6 +593,11 @@ function Test-Daemon {
         Write-Fail "daemon never logged 'watching roots' within 180s"
         _Dump-DaemonDiagnostics -T $T
         return
+    }
+    if ($sawStarting) {
+        Write-Pass "5a - observed state=starting via --summary during initial sweep (PR #162)"
+    } else {
+        Write-Note "5a - sweep finished before --summary probe caught state=starting (small tree); 5f still pins state=running"
     }
 
     # 5b — watchdog reacts to a new file (created AFTER observer is live)
@@ -649,6 +665,27 @@ function Test-Daemon {
     } else {
         Write-Fail "5e - clear --force did not override the guard"
     }
+
+    # 5f - post-sweep status surface (PR #162). --summary returns the full
+    # state=running field set; human path emits the 'daemon: running' line
+    # distinct from the new 'daemon: starting (initial sweep in progress)'
+    # branch. The state=starting observation lives in the watching-roots
+    # poll above (best-effort on small test trees).
+    Write-Note "5f - status --summary post-sweep + human 'daemon: running' line (PR #162)"
+    $sumLate = (dbxignore status --summary 2>&1 | Select-Object -First 1)
+    if ($sumLate -match '^state=running pid=\d+ marked=\d+ cleared=\d+ errors=\d+ conflicts=\d+$') {
+        Write-Pass "5f - --summary post-sweep: $sumLate"
+    } else {
+        Write-Fail "5f - --summary post-sweep did not match expected pattern: $sumLate"
+    }
+    $humanOut = ((dbxignore status 2>&1) -join "`n")
+    if ($humanOut -match '(?m)^daemon: running \(pid=\d+\)$') {
+        Write-Pass "5f - human status reports 'daemon: running'"
+    } else {
+        Write-Note "    human status output:"
+        $humanOut -split "`r?`n" | ForEach-Object { Write-Note "    $_" }
+        Write-Fail "5f - human status did not report 'daemon: running'"
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -681,6 +718,17 @@ function Test-Uninstall {
         Assert-AdsSet -Path "$T\watch-me.tmp" -Name "uninstall - markers retained on watch-me.tmp"
     }
 
+    # 6a - status --summary returns state=not_running post-uninstall (PR #162).
+    # state.json is retained by plain uninstall; the daemon process is gone,
+    # so daemon_is_running(s) returns False and the state token flips.
+    Write-Note "6a - status --summary post-uninstall (PR #162)"
+    $sumUninst = (dbxignore status --summary 2>&1 | Select-Object -First 1)
+    if ($sumUninst -match '^state=not_running pid=\d+ marked=\d+ cleared=\d+ errors=\d+ conflicts=\d+$') {
+        Write-Pass "6a - --summary post-uninstall: $sumUninst"
+    } else {
+        Write-Fail "6a - --summary post-uninstall did not match expected pattern: $sumUninst"
+    }
+
     # re-install briefly, then --purge
     Write-Note "re-installing for --purge test..."
     dbxignore install 2>$null | Out-Null
@@ -709,6 +757,16 @@ function Test-Uninstall {
         if (Test-Path $stateDir) {
             Get-ChildItem -Force $stateDir | ForEach-Object { Write-Note "    $_" }
         }
+    }
+
+    # 6b - status --summary returns state=no_state post-purge (PR #162).
+    # Truncated form: 'state=no_state conflicts=N' with no pid/marked/etc.
+    Write-Note "6b - status --summary post-purge (PR #162)"
+    $sumPurge = (dbxignore status --summary 2>&1 | Select-Object -First 1)
+    if ($sumPurge -match '^state=no_state conflicts=\d+$') {
+        Write-Pass "6b - --summary post-purge: $sumPurge"
+    } else {
+        Write-Fail "6b - --summary post-purge did not match expected pattern: $sumPurge"
     }
 }
 

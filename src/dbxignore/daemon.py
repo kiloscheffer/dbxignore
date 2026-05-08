@@ -667,6 +667,8 @@ def _sweep_once(
     cache: RuleCache,
     daemon_started: dt.datetime,
     daemon_create_time: float | None = None,
+    *,
+    stop_event: threading.Event | None = None,
 ) -> None:
     sweep_start = time.perf_counter()
 
@@ -680,9 +682,14 @@ def _sweep_once(
     # don't contend. Single-root skips the pool to stay simple.
     if len(roots) > 1:
         with ThreadPoolExecutor(max_workers=len(roots)) as pool:
-            reports = list(pool.map(lambda r: reconcile_subtree(r, r, cache), roots))
+            reports = list(
+                pool.map(
+                    lambda r: reconcile_subtree(r, r, cache, stop_event=stop_event),
+                    roots,
+                )
+            )
     elif roots:
-        reports = [reconcile_subtree(roots[0], roots[0], cache)]
+        reports = [reconcile_subtree(roots[0], roots[0], cache, stop_event=stop_event)]
     else:
         reports = []
 

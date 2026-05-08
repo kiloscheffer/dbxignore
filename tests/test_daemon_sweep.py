@@ -149,3 +149,34 @@ def test_sweep_single_root_still_works(
     daemon._sweep_once([tmp_path], cache, _utc_now())
 
     assert (tmp_path / "build").resolve() in fake_markers._ignored
+
+
+def test_sweep_once_forwards_stop_event_to_reconcile(
+    tmp_path: Path,
+    fake_markers: FakeMarkers,
+    monkeypatch: pytest.MonkeyPatch,
+    write_file: WriteFile,
+) -> None:
+    # When _sweep_once is called with stop_event already set, no path under
+    # any root should have its marker queried beyond the top-level
+    # _reconcile_path call. Confirms the parameter threads through to
+    # reconcile_subtree.
+    import threading
+
+    root = tmp_path / "root"
+    write_file(root / ".dropboxignore", "build/\n")
+    (root / "build").mkdir()
+    (root / "src").mkdir()
+    (root / "src" / "deep").mkdir()
+
+    monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")
+
+    cache = RuleCache()
+    stop = threading.Event()
+    stop.set()
+
+    daemon._sweep_once([root], cache, _utc_now(), stop_event=stop)
+
+    # The deeply-nested directory should NOT have been queried — the walk
+    # broke out before descending.
+    assert (root / "src" / "deep").resolve() not in fake_markers.is_ignored_calls

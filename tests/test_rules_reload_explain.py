@@ -171,6 +171,41 @@ def test_rulecache_still_flags_directory_rule_negation(tmp_path: Path) -> None:
     assert conflicts[0].dropped_pattern == "!build/keep/"
 
 
+def test_rulecache_glob_negation_with_sibling_scope_include_keeps_unignored(
+    tmp_path: Path,
+) -> None:
+    """Codex P1 (fourth iteration on PR #149) reproducer: a directory-
+    marking include in a sibling ``.dropboxignore`` does not apply to
+    paths in the other sibling's scope.
+
+    Layout:
+        ``a/.dropboxignore``: ``foo/``  (scopes to a/)
+        ``b/.dropboxignore``: ``foo/*\\n!**/foo/bar/`` (scopes to b/)
+
+    The negation in ``b/.dropboxignore`` reaches ``b/<anywhere>/foo/bar/``;
+    the include in ``a/.dropboxignore`` only reaches ``a/<anywhere>/foo/``.
+    Different scopes — the include's inheritance can't make the negation
+    inert. ``foo/*`` in b/ matches ``b/foo/bar`` directly (children-only
+    include doesn't propagate inheritance), and the negation overrides
+    via pathspec last-match-wins. Marker behavior: ``b/foo/bar`` is NOT
+    ignored.
+
+    Pre-fix the strict-ancestor check did a bare suffix-prefix string
+    compare without scope-awareness, treated ``a/foo/`` as a strict
+    ancestor of ``foo/bar/``, dropped the negation, and left
+    ``b/foo/bar`` ignored on disk. Marker-behavior regression guard."""
+    root = tmp_path
+    (root / "a").mkdir()
+    (root / "b" / "foo" / "bar").mkdir(parents=True)
+    (root / "a" / ".dropboxignore").write_text("foo/\n", encoding="utf-8")
+    (root / "b" / ".dropboxignore").write_text("foo/*\n!**/foo/bar/\n", encoding="utf-8")
+    cache = RuleCache()
+    cache.load_root(root)
+
+    assert cache.conflicts() == []
+    assert not cache.match(root / "b" / "foo" / "bar")
+
+
 def test_rulecache_glob_negation_overrides_children_only_include_keeps_unignored(
     tmp_path: Path,
 ) -> None:

@@ -344,6 +344,16 @@ def _detect_conflicts(sequence: Sequence[_SequenceEntryLike], *, root: Path) -> 
             for earlier in sequence[:i]:
                 if not earlier.pattern.include:
                     continue
+                # Scope check: the include must apply to paths in the
+                # negation's scope. An include in `a/.dropboxignore` does
+                # not reach paths under `b/.dropboxignore` (sibling
+                # scope), so its inheritance can't make the negation
+                # inert. The include's scope must be an ancestor of (or
+                # equal to) the negation's scope. Surfaced by Codex on
+                # PR #149's fourth iteration — earlier shapes did a bare
+                # suffix-prefix string-compare and missed cross-scope.
+                if not entry.ancestor_dir.is_relative_to(earlier.ancestor_dir):
+                    continue
                 include_target = _include_directory_target(earlier)
                 if include_target is None:
                     continue

@@ -171,10 +171,12 @@ jobs:
                sets/clears markers based on `match()`, this is a real on-disk marker change,
                not a diagnostic-only one.
                - Reply with the technical reasoning, no code change.
-               - Then send a SEPARATE follow-up reply with literally `@codex review` so the
-                 bot weighs in on the pushback. Codex may agree (resolving the thread) or
-                 surface a new angle — either is a valid loop continuation. Without the
-                 re-summon, the bot's last comment stands unaddressed visually.
+               - **Do NOT send `@codex review`** in the pushback path. The branch hasn't
+                 changed, so re-summoning lets Codex re-emit the same finding against the
+                 same diff — and since the auto-fix-commit budget only counts state-changing
+                 commits, this could loop indefinitely. The thread sits with Claude's
+                 reasoning visible; if the maintainer wants a second opinion they can
+                 manually re-summon. Surfaced by Codex on PR #150's fifth review round (P2).
 
             3. **Escalate** — finding requires architectural judgment OR you've hit the 3-fix-commit
                budget OR you're uncertain. Reply with a comment that includes `@kiloscheffer needs

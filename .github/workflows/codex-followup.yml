@@ -7,7 +7,7 @@
 #
 # Sibling to `claude.yml` (which fires only when a comment contains `@claude`)
 # and `claude-code-review.yml` (which fires on PR open/update). This workflow
-# is the auto-summoning variant for Codex's Codex's review-comment cadence —
+# is the auto-summoning variant for Codex's review-comment cadence —
 # the maintainer no longer has to manually paste "new comment" to relay each
 # finding.
 #

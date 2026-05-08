@@ -112,3 +112,32 @@ def test_does_not_descend_into_marked_subtree(
     assert report.marked == 0
     assert report.cleared == 0
     assert report.errors == []
+
+
+def test_reconcile_subtree_honors_stop_event(
+    tmp_path: Path, fake_markers: FakeMarkers, write_file: WriteFile
+) -> None:
+    # Cooperative cancellation contract (item #53): when stop_event is set
+    # before reconcile_subtree starts, the walk must break out without
+    # processing additional directories. Convergence guarantees the next
+    # sweep finishes the rest.
+    import threading
+
+    write_file(tmp_path / ".dropboxignore", "build/\n")
+    (tmp_path / "build").mkdir()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "deep").mkdir()
+
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+
+    stop = threading.Event()
+    stop.set()  # Already cancelled before reconcile starts.
+
+    report = reconcile.reconcile_subtree(tmp_path, tmp_path, cache, stop_event=stop)
+
+    # The top-level _reconcile_path(subdir, ...) call still ran (it's the
+    # pre-walk path; cheap, single syscall). The os.walk loop never began.
+    # No descendant directories were visited.
+    assert (tmp_path / "src" / "deep").resolve() not in fake_markers.is_ignored_calls
+    assert report.errors == []

@@ -676,11 +676,15 @@ function Test-Daemon {
     # NOT a sweep-complete sentinel post-#162. On a real Dropbox tree
     # the sweep can still be running when 5f probes, in which case
     # --summary correctly emits 'state=starting pid=N' (truncated form).
-    # Poll for state=running for up to 60s to absorb the transition.
+    # Poll for state=running for up to 180s to absorb the transition -
+    # matches the watching-roots-wait headroom above. Each iteration also
+    # spawns dbxignore.exe (~300-500ms shim startup on Windows), so the
+    # actual wall-clock window can extend past 180s; acceptable for a
+    # manual smoke test.
     Write-Note "5f - status --summary post-sweep + human 'daemon: running' line (PR #162)"
     $sumLate = ""
     $sumPattern = '^state=running pid=\d+ marked=\d+ cleared=\d+ errors=\d+ conflicts=\d+$'
-    for ($i = 0; $i -lt 60; $i++) {
+    for ($i = 0; $i -lt 180; $i++) {
         $sumLate = (dbxignore status --summary 2>&1 | Select-Object -First 1)
         if ($sumLate -match $sumPattern) { break }
         Start-Sleep -Seconds 1
@@ -688,7 +692,7 @@ function Test-Daemon {
     if ($sumLate -match $sumPattern) {
         Write-Pass "5f - --summary post-sweep: $sumLate"
     } else {
-        Write-Fail "5f - --summary did not advance to state=running within 60s (last: $sumLate)"
+        Write-Fail "5f - --summary did not advance to state=running within 180s (last: $sumLate)"
     }
     # Once --summary reports state=running, the same state.json drives the
     # human path: last_sweep is not None, so the 'daemon: running' branch

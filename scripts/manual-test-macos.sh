@@ -505,14 +505,18 @@ phase_daemon() {
     #
     # PR #162 marks the daemon ready (and logs 'watching roots') BEFORE
     # the initial sweep completes — so the watching-roots poll above is
-    # NOT a sweep-complete sentinel post-#162. On a real ~/Dropbox tree
+    # NOT a sweep-complete sentinel post-#162. On a real Dropbox tree
+    # (legacy ~/Dropbox or File Provider ~/Library/CloudStorage/Dropbox)
     # the sweep can still be running when 5f probes, in which case
     # --summary correctly emits 'state=starting pid=N' (truncated form).
-    # Poll for state=running for up to 60s to absorb the transition.
+    # Poll for state=running for up to 180s to absorb the transition —
+    # matches the watching-roots-wait headroom above. Each iteration also
+    # pays one --summary subprocess invocation, so wall-clock can drift
+    # somewhat past 180s on slow hosts; acceptable for a manual smoke test.
     note "5f — status --summary post-sweep + human 'daemon: running' line (PR #162)"
     local sum_late=""
     local sum_pattern='^state=running pid=[0-9]+ marked=[0-9]+ cleared=[0-9]+ errors=[0-9]+ conflicts=[0-9]+$'
-    for _ in $(seq 1 60); do
+    for _ in $(seq 1 180); do
         sum_late="$(dbxignore status --summary 2>&1 | head -n 1)"
         if printf '%s\n' "$sum_late" | grep -qE "$sum_pattern"; then
             break
@@ -522,7 +526,7 @@ phase_daemon() {
     if printf '%s\n' "$sum_late" | grep -qE "$sum_pattern"; then
         pass "5f — --summary post-sweep: $sum_late"
     else
-        fail "5f — --summary did not advance to state=running within 60s (last: $sum_late)"
+        fail "5f — --summary did not advance to state=running within 180s (last: $sum_late)"
     fi
     # Once --summary reports state=running, the same state.json drives the
     # human path: last_sweep is not None, so the 'daemon: running' branch

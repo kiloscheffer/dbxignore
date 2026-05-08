@@ -1,0 +1,26 @@
+# Keep the SHA-pinned GitHub Actions in `.github/workflows/` fresh.
+#
+# Workflows are pinned to 40-char commit SHAs (per backlog item #74) with a
+# trailing `# v<X>` comment naming the tag the SHA was resolved from.
+# Dependabot updates both the SHA and the comment when a new release is
+# published, so the pin stays current without losing the tracked-tag label.
+
+version: 2
+
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      # Conventional Commits per cchk.toml's allow_commit_types. Without an
+      # explicit prefix Dependabot's default ("Bump <action> from X to Y")
+      # fails commit-check at the type-prefix grammar.
+      prefix: "ci"
+      include: "scope"
+    groups:
+      # Bundle minor + patch bumps into a single weekly PR. Major bumps stay
+      # in their own PRs because an action's major-version may carry breaking
+      # changes that warrant individual review.
+      actions-minor-patch:
+        update-types: ["minor", "patch"]

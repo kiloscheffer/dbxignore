@@ -570,20 +570,9 @@ function Test-Daemon {
     Write-Note "watched root: $script:DropboxDir"
     Write-Note "waiting up to 180s for daemon initial sweep + observer ready..."
     $ready = $false
-    # Opportunistic capture of state=starting (PR #162) - only reliably
-    # observable while the initial sweep runs. Small test trees can finish
-    # before the first probe; that's why this is best-effort, with a hard
-    # state=running assertion in 5f after the sweep completes.
-    $sawStarting = $false
     for ($i = 0; $i -lt 180; $i++) {
         if ((Test-Path $logPath) -and ((Get-Content $logPath -Raw) -match 'watching roots')) {
             $ready = $true; break
-        }
-        if (-not $sawStarting) {
-            $probe = (dbxignore status --summary 2>$null | Select-Object -First 1)
-            if ($probe -and ($probe -match '^state=starting pid=')) {
-                $sawStarting = $true
-            }
         }
         Start-Sleep -Seconds 1
     }
@@ -594,10 +583,27 @@ function Test-Daemon {
         _Dump-DaemonDiagnostics -T $T
         return
     }
+
+    # 5a - opportunistic state=starting capture (PR #162). Probed AFTER
+    # the watching-roots break: daemon.run logs 'watching roots' BEFORE
+    # writing the early state.json (daemon.py:663 then :678), so an
+    # in-loop probe races state.write and almost always misses. Post-
+    # readiness, state.json appears within microseconds; on a real
+    # Dropbox tree state=starting is observable for the ~50s sweep
+    # window. On a small test tree the worker can finish before we
+    # probe - that's the small-tree caveat the note path covers.
+    $sawStarting = $false
+    for ($i = 0; $i -lt 5; $i++) {
+        $probe = (dbxignore status --summary 2>$null | Select-Object -First 1)
+        if ($probe -and ($probe -match '^state=starting pid=')) {
+            $sawStarting = $true; break
+        }
+        Start-Sleep -Seconds 1
+    }
     if ($sawStarting) {
-        Write-Pass "5a - observed state=starting via --summary during initial sweep (PR #162)"
+        Write-Pass "5a - observed state=starting via --summary post-readiness (PR #162)"
     } else {
-        Write-Note "5a - sweep finished before --summary probe caught state=starting (small tree); 5f still pins state=running"
+        Write-Note "5a - state=starting not observed within 5s post-readiness (small tree where sweep finished, or state.json not yet written); 5f still pins state=running"
     }
 
     # 5b — watchdog reacts to a new file (created AFTER observer is live)
@@ -726,6 +732,14 @@ function Test-Uninstall {
         Get-Content $uninstOut | ForEach-Object { Write-Note "    $_" }
     }
 
+    # install/windows_task.py runs only `schtasks /Delete /F` (no /End
+    # first), so the running dbxignored.exe can outlive `dbxignore
+    # uninstall` by several seconds. Wait for it to actually exit
+    # before probing 6a so the daemon can't write state.json mid-test.
+    # Linux systemctl --user disable --now and macOS launchctl bootout
+    # are synchronous, so the bash scripts don't need this wait.
+    Wait-Process -Name dbxignored -Timeout 30 -ErrorAction SilentlyContinue
+
     schtasks /Query /TN dbxignore 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) {
         Write-Fail "scheduled task still present after uninstall"
@@ -771,6 +785,13 @@ function Test-Uninstall {
         Write-Fail "dbxignore uninstall --purge"
         Get-Content $purgeOut | ForEach-Object { Write-Note "    $_" }
     }
+
+    # Same fire-and-forget caveat as the plain-uninstall block above:
+    # wait for the dbxignored.exe re-installed daemon to exit so it
+    # can't write state.json after _purge_local_state() removed it
+    # (which would defeat both the state-files-removed assertion and
+    # the 6b state=no_state probe).
+    Wait-Process -Name dbxignored -Timeout 30 -ErrorAction SilentlyContinue
 
     if (Test-Path "$T\watch-me.tmp") { Assert-AdsUnset -Path "$T\watch-me.tmp" -Name "purge - watch-me.tmp marker cleared" }
     if (Test-Path "$T\cache")        { Assert-AdsUnset -Path "$T\cache"        -Name "purge - cache/ marker cleared" }

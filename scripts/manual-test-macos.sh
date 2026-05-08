@@ -403,18 +403,9 @@ phase_daemon() {
     note "watched subtree: $dir_count dirs in $DROPBOX_DIR"
     note "waiting up to 180s for daemon initial sweep + observer ready..."
     local ready=0
-    # Opportunistic capture of state=starting (PR #162) — only reliably
-    # observable while the initial sweep runs. Small test trees can finish
-    # before the first probe; that's why this is best-effort, with a hard
-    # state=running assertion in 5f after the sweep completes.
-    local saw_starting=0
     for _ in $(seq 1 180); do
         if grep -q 'watching roots' "$HOME/Library/Logs/dbxignore/daemon.log" 2>/dev/null; then
             ready=1; break
-        fi
-        if [ "$saw_starting" -eq 0 ] && \
-           dbxignore status --summary 2>/dev/null | grep -q '^state=starting pid='; then
-            saw_starting=1
         fi
         sleep 1
     done
@@ -425,10 +416,26 @@ phase_daemon() {
         _dump_daemon_diagnostics "$T"
         return
     fi
+
+    # 5a — opportunistic state=starting capture (PR #162). Probed AFTER
+    # the watching-roots break: daemon.run logs 'watching roots' BEFORE
+    # writing the early state.json (daemon.py:663 then :678), so an
+    # in-loop probe races state.write and almost always misses. Post-
+    # readiness, state.json appears within microseconds; on a real
+    # Dropbox tree state=starting is observable for the ~50s sweep
+    # window. On a small test tree the worker can finish before we
+    # probe — that's the small-tree caveat the note path covers.
+    local saw_starting=0
+    for _ in 1 2 3 4 5; do
+        if dbxignore status --summary 2>/dev/null | grep -q '^state=starting pid='; then
+            saw_starting=1; break
+        fi
+        sleep 1
+    done
     if [ "$saw_starting" -eq 1 ]; then
-        pass "5a — observed state=starting via --summary during initial sweep (PR #162)"
+        pass "5a — observed state=starting via --summary post-readiness (PR #162)"
     else
-        note "5a — sweep finished before --summary probe caught state=starting (small tree); 5f still pins state=running"
+        note "5a — state=starting not observed within 5s post-readiness (small tree where sweep finished, or state.json not yet written); 5f still pins state=running"
     fi
 
     # Item 37 — verify the daemon also logged the sync mode at startup.

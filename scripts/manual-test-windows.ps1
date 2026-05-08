@@ -721,8 +721,27 @@ function Test-Uninstall {
     Write-Phase "Phase 6 - uninstall"
 
     $T = Join-Path $script:DropboxDir $TestSubdir
+    $stateDir = Join-Path $env:LOCALAPPDATA "dbxignore"
+    $stateFile = Join-Path $stateDir "state.json"
 
     # plain uninstall: scheduled task removed, markers retained
+    # Capture the daemon's PID from state.json BEFORE uninstall so we
+    # can wait on it specifically. The daemon's process name varies by
+    # install path: `dbxignored.exe` only for the frozen PyInstaller
+    # binary; `pythonw.exe` for the standard `uv tool install` path
+    # the manual scripts use (per install/_common.py - non-frozen
+    # Windows returns `pythonw -m dbxignore daemon`). Wait-Process
+    # -Name dbxignored therefore silently no-ops in the common case;
+    # waiting on PID handles both shapes.
+    $uninstallPid = $null
+    if (Test-Path $stateFile) {
+        try {
+            $uninstallPid = (Get-Content $stateFile -Raw | ConvertFrom-Json).daemon_pid
+        } catch {
+            Write-Note "    (state.json unreadable; skipping pre-uninstall PID capture)"
+        }
+    }
+
     $uninstOut = "$env:TEMP\dbxignore-uninst.out"
     dbxignore uninstall *> $uninstOut
     if ($LASTEXITCODE -eq 0) {
@@ -733,12 +752,14 @@ function Test-Uninstall {
     }
 
     # install/windows_task.py runs only `schtasks /Delete /F` (no /End
-    # first), so the running dbxignored.exe can outlive `dbxignore
-    # uninstall` by several seconds. Wait for it to actually exit
-    # before probing 6a so the daemon can't write state.json mid-test.
-    # Linux systemctl --user disable --now and macOS launchctl bootout
+    # first), so the running daemon process can outlive `dbxignore
+    # uninstall` by several seconds. Wait by PID before probing 6a so
+    # the daemon can't write state.json mid-test. Linux's
+    # `systemctl --user disable --now` and macOS's `launchctl bootout`
     # are synchronous, so the bash scripts don't need this wait.
-    Wait-Process -Name dbxignored -Timeout 30 -ErrorAction SilentlyContinue
+    if ($uninstallPid) {
+        Wait-Process -Id $uninstallPid -Timeout 30 -ErrorAction SilentlyContinue
+    }
 
     schtasks /Query /TN dbxignore 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) {
@@ -775,7 +796,25 @@ function Test-Uninstall {
     Write-Note "re-installing for --purge test..."
     dbxignore install 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) { Stop-Abort "re-install failed" }
-    Start-Sleep -Seconds 2
+
+    # Wait for the new daemon to write state.json so we can capture its
+    # PID before --purge removes the file. Poll for up to 10s; on a slow
+    # host the 2s sleep used previously was sometimes too tight.
+    $purgePid = $null
+    for ($i = 0; $i -lt 10; $i++) {
+        if (Test-Path $stateFile) {
+            try {
+                $purgePid = (Get-Content $stateFile -Raw | ConvertFrom-Json).daemon_pid
+                if ($purgePid) { break }
+            } catch {
+                # keep polling
+            }
+        }
+        Start-Sleep -Seconds 1
+    }
+    if (-not $purgePid) {
+        Write-Note "    (state.json daemon_pid unavailable post-reinstall; skipping pre-purge PID capture)"
+    }
 
     $purgeOut = "$env:TEMP\dbxignore-purge.out"
     dbxignore uninstall --purge *> $purgeOut
@@ -787,18 +826,18 @@ function Test-Uninstall {
     }
 
     # Same fire-and-forget caveat as the plain-uninstall block above:
-    # wait for the dbxignored.exe re-installed daemon to exit so it
-    # can't write state.json after _purge_local_state() removed it
-    # (which would defeat both the state-files-removed assertion and
-    # the 6b state=no_state probe).
-    Wait-Process -Name dbxignored -Timeout 30 -ErrorAction SilentlyContinue
+    # wait by PID for the re-installed daemon to exit so it can't write
+    # state.json after _purge_local_state() removed it (which would
+    # defeat both the state-files-removed assertion and the 6b
+    # state=no_state probe).
+    if ($purgePid) {
+        Wait-Process -Id $purgePid -Timeout 30 -ErrorAction SilentlyContinue
+    }
 
     if (Test-Path "$T\watch-me.tmp") { Assert-AdsUnset -Path "$T\watch-me.tmp" -Name "purge - watch-me.tmp marker cleared" }
     if (Test-Path "$T\cache")        { Assert-AdsUnset -Path "$T\cache"        -Name "purge - cache/ marker cleared" }
 
-    $stateDir = Join-Path $env:LOCALAPPDATA "dbxignore"
-    $stateFile = Join-Path $stateDir "state.json"
-    $logFile   = Join-Path $stateDir "daemon.log"
+    $logFile = Join-Path $stateDir "daemon.log"
     if (-not (Test-Path $stateFile) -and -not (Test-Path $logFile)) {
         Write-Pass "purge - state.json + daemon.log removed"
     } else {

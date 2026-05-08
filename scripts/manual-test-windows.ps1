@@ -584,6 +584,28 @@ function Test-Daemon {
         return
     }
 
+    # 5a - opportunistic state=starting capture (PR #162). Probed AFTER
+    # the watching-roots break: daemon.run logs 'watching roots' BEFORE
+    # writing the early state.json (daemon.py:663 then :678), so an
+    # in-loop probe races state.write and almost always misses. Post-
+    # readiness, state.json appears within microseconds; on a real
+    # Dropbox tree state=starting is observable for the ~50s sweep
+    # window. On a small test tree the worker can finish before we
+    # probe - that's the small-tree caveat the note path covers.
+    $sawStarting = $false
+    for ($i = 0; $i -lt 5; $i++) {
+        $probe = (dbxignore status --summary 2>$null | Select-Object -First 1)
+        if ($probe -and ($probe -match '^state=starting pid=')) {
+            $sawStarting = $true; break
+        }
+        Start-Sleep -Seconds 1
+    }
+    if ($sawStarting) {
+        Write-Pass "5a - observed state=starting via --summary post-readiness (PR #162)"
+    } else {
+        Write-Note "5a - state=starting not observed within 5s post-readiness (small tree where sweep finished, or state.json not yet written); 5f still pins state=running"
+    }
+
     # 5b — watchdog reacts to a new file (created AFTER observer is live)
     Write-Note "5b - watchdog reacts to new file"
     New-Item -ItemType File -Path "$T\watch-me.tmp" -Force | Out-Null
@@ -649,6 +671,46 @@ function Test-Daemon {
     } else {
         Write-Fail "5e - clear --force did not override the guard"
     }
+
+    # 5f - post-sweep status surface (PR #162). --summary returns the full
+    # state=running field set; human path emits the 'daemon: running' line
+    # distinct from the new 'daemon: starting (initial sweep in progress)'
+    # branch.
+    #
+    # PR #162 marks the daemon ready (and logs 'watching roots') BEFORE
+    # the initial sweep completes - so the watching-roots poll above is
+    # NOT a sweep-complete sentinel post-#162. On a real Dropbox tree
+    # the sweep can still be running when 5f probes, in which case
+    # --summary correctly emits 'state=starting pid=N' (truncated form).
+    # Poll for state=running for up to 180s to absorb the transition -
+    # matches the watching-roots-wait headroom above. Each iteration also
+    # spawns dbxignore.exe (~300-500ms shim startup on Windows), so the
+    # actual wall-clock window can extend past 180s; acceptable for a
+    # manual smoke test.
+    Write-Note "5f - status --summary post-sweep + human 'daemon: running' line (PR #162)"
+    $sumLate = ""
+    $sumPattern = '^state=running pid=\d+ marked=\d+ cleared=\d+ errors=\d+ conflicts=\d+$'
+    for ($i = 0; $i -lt 180; $i++) {
+        $sumLate = (dbxignore status --summary 2>&1 | Select-Object -First 1)
+        if ($sumLate -match $sumPattern) { break }
+        Start-Sleep -Seconds 1
+    }
+    if ($sumLate -match $sumPattern) {
+        Write-Pass "5f - --summary post-sweep: $sumLate"
+    } else {
+        Write-Fail "5f - --summary did not advance to state=running within 180s (last: $sumLate)"
+    }
+    # Once --summary reports state=running, the same state.json drives the
+    # human path: last_sweep is not None, so the 'daemon: running' branch
+    # fires synchronously. Single-shot is safe here.
+    $humanOut = ((dbxignore status 2>&1) -join "`n")
+    if ($humanOut -match '(?m)^daemon: running \(pid=\d+\)$') {
+        Write-Pass "5f - human status reports 'daemon: running'"
+    } else {
+        Write-Note "    human status output:"
+        $humanOut -split "`r?`n" | ForEach-Object { Write-Note "    $_" }
+        Write-Fail "5f - human status did not report 'daemon: running'"
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -659,8 +721,27 @@ function Test-Uninstall {
     Write-Phase "Phase 6 - uninstall"
 
     $T = Join-Path $script:DropboxDir $TestSubdir
+    $stateDir = Join-Path $env:LOCALAPPDATA "dbxignore"
+    $stateFile = Join-Path $stateDir "state.json"
 
     # plain uninstall: scheduled task removed, markers retained
+    # Capture the daemon's PID from state.json BEFORE uninstall so we
+    # can wait on it specifically. The daemon's process name varies by
+    # install path: `dbxignored.exe` only for the frozen PyInstaller
+    # binary; `pythonw.exe` for the standard `uv tool install` path
+    # the manual scripts use (per install/_common.py - non-frozen
+    # Windows returns `pythonw -m dbxignore daemon`). Wait-Process
+    # -Name dbxignored therefore silently no-ops in the common case;
+    # waiting on PID handles both shapes.
+    $uninstallPid = $null
+    if (Test-Path $stateFile) {
+        try {
+            $uninstallPid = (Get-Content $stateFile -Raw | ConvertFrom-Json).daemon_pid
+        } catch {
+            Write-Note "    (state.json unreadable; skipping pre-uninstall PID capture)"
+        }
+    }
+
     $uninstOut = "$env:TEMP\dbxignore-uninst.out"
     dbxignore uninstall *> $uninstOut
     if ($LASTEXITCODE -eq 0) {
@@ -668,6 +749,16 @@ function Test-Uninstall {
     } else {
         Write-Fail "dbxignore uninstall"
         Get-Content $uninstOut | ForEach-Object { Write-Note "    $_" }
+    }
+
+    # install/windows_task.py runs only `schtasks /Delete /F` (no /End
+    # first), so the running daemon process can outlive `dbxignore
+    # uninstall` by several seconds. Wait by PID before probing 6a so
+    # the daemon can't write state.json mid-test. Linux's
+    # `systemctl --user disable --now` and macOS's `launchctl bootout`
+    # are synchronous, so the bash scripts don't need this wait.
+    if ($uninstallPid) {
+        Wait-Process -Id $uninstallPid -Timeout 30 -ErrorAction SilentlyContinue
     }
 
     schtasks /Query /TN dbxignore 2>$null | Out-Null
@@ -681,11 +772,57 @@ function Test-Uninstall {
         Assert-AdsSet -Path "$T\watch-me.tmp" -Name "uninstall - markers retained on watch-me.tmp"
     }
 
+    # 6a - status --summary returns state=not_running post-uninstall (PR #162).
+    # state.json is retained by plain uninstall; the daemon process exits and
+    # daemon_is_running(s) flips False. Windows schtasks /Delete /F (in
+    # install/windows_task.py) is fire-and-forget on the running task
+    # instance, so the dbxignored.exe process can outlive uninstall by
+    # several seconds. Poll for the transition for up to 30s.
+    Write-Note "6a - status --summary post-uninstall (PR #162)"
+    $sumUninst = ""
+    $sumUninstPattern = '^state=not_running pid=\d+ marked=\d+ cleared=\d+ errors=\d+ conflicts=\d+$'
+    for ($i = 0; $i -lt 30; $i++) {
+        $sumUninst = (dbxignore status --summary 2>&1 | Select-Object -First 1)
+        if ($sumUninst -match $sumUninstPattern) { break }
+        Start-Sleep -Seconds 1
+    }
+    if ($sumUninst -match $sumUninstPattern) {
+        Write-Pass "6a - --summary post-uninstall: $sumUninst"
+    } else {
+        Write-Fail "6a - --summary did not advance to state=not_running within 30s (last: $sumUninst)"
+    }
+
     # re-install briefly, then --purge
     Write-Note "re-installing for --purge test..."
     dbxignore install 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) { Stop-Abort "re-install failed" }
-    Start-Sleep -Seconds 2
+
+    # Wait for the new daemon to write a state.json whose daemon_pid is
+    # DIFFERENT from the pre-reinstall value. State.json is retained by
+    # plain uninstall (only --purge removes it), so a naive Test-Path-
+    # then-read returns the stale pre-uninstall PID — Wait-Process would
+    # then wait on a long-dead PID and return instantly, leaving the
+    # re-installed daemon to recreate state.json after --purge. Polling
+    # until daemon_pid != $uninstallPid pins the comparison to the new
+    # process. PID reuse in a 10s window is vanishingly rare on Windows.
+    $purgePid = $null
+    for ($i = 0; $i -lt 10; $i++) {
+        if (Test-Path $stateFile) {
+            try {
+                $candidatePid = (Get-Content $stateFile -Raw | ConvertFrom-Json).daemon_pid
+                if ($candidatePid -and ($candidatePid -ne $uninstallPid)) {
+                    $purgePid = $candidatePid
+                    break
+                }
+            } catch {
+                # keep polling
+            }
+        }
+        Start-Sleep -Seconds 1
+    }
+    if (-not $purgePid) {
+        Write-Note "    (state.json daemon_pid did not advance from old=$uninstallPid within 10s post-reinstall; skipping pre-purge PID capture)"
+    }
 
     $purgeOut = "$env:TEMP\dbxignore-purge.out"
     dbxignore uninstall --purge *> $purgeOut
@@ -696,12 +833,19 @@ function Test-Uninstall {
         Get-Content $purgeOut | ForEach-Object { Write-Note "    $_" }
     }
 
+    # Same fire-and-forget caveat as the plain-uninstall block above:
+    # wait by PID for the re-installed daemon to exit so it can't write
+    # state.json after _purge_local_state() removed it (which would
+    # defeat both the state-files-removed assertion and the 6b
+    # state=no_state probe).
+    if ($purgePid) {
+        Wait-Process -Id $purgePid -Timeout 30 -ErrorAction SilentlyContinue
+    }
+
     if (Test-Path "$T\watch-me.tmp") { Assert-AdsUnset -Path "$T\watch-me.tmp" -Name "purge - watch-me.tmp marker cleared" }
     if (Test-Path "$T\cache")        { Assert-AdsUnset -Path "$T\cache"        -Name "purge - cache/ marker cleared" }
 
-    $stateDir = Join-Path $env:LOCALAPPDATA "dbxignore"
-    $stateFile = Join-Path $stateDir "state.json"
-    $logFile   = Join-Path $stateDir "daemon.log"
+    $logFile = Join-Path $stateDir "daemon.log"
     if (-not (Test-Path $stateFile) -and -not (Test-Path $logFile)) {
         Write-Pass "purge - state.json + daemon.log removed"
     } else {
@@ -709,6 +853,16 @@ function Test-Uninstall {
         if (Test-Path $stateDir) {
             Get-ChildItem -Force $stateDir | ForEach-Object { Write-Note "    $_" }
         }
+    }
+
+    # 6b - status --summary returns state=no_state post-purge (PR #162).
+    # Truncated form: 'state=no_state conflicts=N' with no pid/marked/etc.
+    Write-Note "6b - status --summary post-purge (PR #162)"
+    $sumPurge = (dbxignore status --summary 2>&1 | Select-Object -First 1)
+    if ($sumPurge -match '^state=no_state conflicts=\d+$') {
+        Write-Pass "6b - --summary post-purge: $sumPurge"
+    } else {
+        Write-Fail "6b - --summary post-purge did not match expected pattern: $sumPurge"
     }
 }
 

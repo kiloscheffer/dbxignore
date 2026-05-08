@@ -417,6 +417,27 @@ phase_daemon() {
         return
     fi
 
+    # 5a — opportunistic state=starting capture (PR #162). Probed AFTER
+    # the watching-roots break: daemon.run logs 'watching roots' BEFORE
+    # writing the early state.json (daemon.py:663 then :678), so an
+    # in-loop probe races state.write and almost always misses. Post-
+    # readiness, state.json appears within microseconds; on a real
+    # Dropbox tree state=starting is observable for the ~50s sweep
+    # window. On a small test tree the worker can finish before we
+    # probe — that's the small-tree caveat the note path covers.
+    local saw_starting=0
+    for _ in 1 2 3 4 5; do
+        if dbxignore status --summary 2>/dev/null | grep -q '^state=starting pid='; then
+            saw_starting=1; break
+        fi
+        sleep 1
+    done
+    if [ "$saw_starting" -eq 1 ]; then
+        pass "5a — observed state=starting via --summary post-readiness (PR #162)"
+    else
+        note "5a — state=starting not observed within 5s post-readiness (small tree where sweep finished, or state.json not yet written); 5f still pins state=running"
+    fi
+
     # Item 37 — verify the daemon also logged the sync mode at startup.
     if grep -qE 'sync mode detection: (legacy|file_provider|both):' "$HOME/Library/Logs/dbxignore/daemon.log"; then
         local log_line; log_line="$(grep -E 'sync mode detection:' "$HOME/Library/Logs/dbxignore/daemon.log" | head -1)"
@@ -483,6 +504,47 @@ phase_daemon() {
     else
         fail "5e — clear --force did not override the guard"
     fi
+
+    # 5f — post-sweep status surface (PR #162). --summary returns the full
+    # state=running field set; human path emits the 'daemon: running' line
+    # distinct from the new 'daemon: starting (initial sweep in progress)'
+    # branch.
+    #
+    # PR #162 marks the daemon ready (and logs 'watching roots') BEFORE
+    # the initial sweep completes — so the watching-roots poll above is
+    # NOT a sweep-complete sentinel post-#162. On a real Dropbox tree
+    # (legacy ~/Dropbox or File Provider ~/Library/CloudStorage/Dropbox)
+    # the sweep can still be running when 5f probes, in which case
+    # --summary correctly emits 'state=starting pid=N' (truncated form).
+    # Poll for state=running for up to 180s to absorb the transition —
+    # matches the watching-roots-wait headroom above. Each iteration also
+    # pays one --summary subprocess invocation, so wall-clock can drift
+    # somewhat past 180s on slow hosts; acceptable for a manual smoke test.
+    note "5f — status --summary post-sweep + human 'daemon: running' line (PR #162)"
+    local sum_late=""
+    local sum_pattern='^state=running pid=[0-9]+ marked=[0-9]+ cleared=[0-9]+ errors=[0-9]+ conflicts=[0-9]+$'
+    for _ in $(seq 1 180); do
+        sum_late="$(dbxignore status --summary 2>&1 | head -n 1)"
+        if printf '%s\n' "$sum_late" | grep -qE "$sum_pattern"; then
+            break
+        fi
+        sleep 1
+    done
+    if printf '%s\n' "$sum_late" | grep -qE "$sum_pattern"; then
+        pass "5f — --summary post-sweep: $sum_late"
+    else
+        fail "5f — --summary did not advance to state=running within 180s (last: $sum_late)"
+    fi
+    # Once --summary reports state=running, the same state.json drives the
+    # human path: last_sweep is not None, so the 'daemon: running' branch
+    # fires synchronously. Single-shot is safe here.
+    if dbxignore status 2>&1 | grep -qE '^daemon: running \(pid=[0-9]+\)$'; then
+        pass "5f — human status reports 'daemon: running'"
+    else
+        note "    human status output:"
+        dbxignore status 2>&1 | sed 's/^/    /'
+        fail "5f — human status did not report 'daemon: running'"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -512,6 +574,29 @@ phase_uninstall() {
 
     [ -f "$T/watch-me.tmp" ] && assert_xattr_set "$T/watch-me.tmp" "uninstall — markers retained on watch-me.tmp"
 
+    # 6a — status --summary returns state=not_running post-uninstall (PR #162).
+    # state.json is retained by plain uninstall; the daemon process exits and
+    # daemon_is_running(s) flips False. launchctl bootout is synchronous on
+    # macOS (the agent is fully torn down before uninstall returns), but
+    # Windows schtasks /Delete /F is fire-and-forget on the running task
+    # instance — poll for the transition for up to 30s so the case is
+    # symmetric across platforms.
+    note "6a — status --summary post-uninstall (PR #162)"
+    local sum_uninst=""
+    local sum_uninst_pattern='^state=not_running pid=[0-9]+ marked=[0-9]+ cleared=[0-9]+ errors=[0-9]+ conflicts=[0-9]+$'
+    for _ in $(seq 1 30); do
+        sum_uninst="$(dbxignore status --summary 2>&1 | head -n 1)"
+        if printf '%s\n' "$sum_uninst" | grep -qE "$sum_uninst_pattern"; then
+            break
+        fi
+        sleep 1
+    done
+    if printf '%s\n' "$sum_uninst" | grep -qE "$sum_uninst_pattern"; then
+        pass "6a — --summary post-uninstall: $sum_uninst"
+    else
+        fail "6a — --summary did not advance to state=not_running within 30s (last: $sum_uninst)"
+    fi
+
     # re-install briefly, then --purge
     note "re-installing for --purge test..."
     dbxignore install >/dev/null 2>&1 || abort "re-install failed"
@@ -536,6 +621,16 @@ phase_uninstall() {
         fail "purge — state files remain"
         ls -la "$state_dir/" 2>/dev/null | sed 's/^/    /'
         ls -la "$log_dir/" 2>/dev/null | sed 's/^/    /'
+    fi
+
+    # 6b — status --summary returns state=no_state post-purge (PR #162).
+    # Truncated form: 'state=no_state conflicts=N' with no pid/marked/etc.
+    note "6b — status --summary post-purge (PR #162)"
+    local sum_purge; sum_purge="$(dbxignore status --summary 2>&1 | head -n 1)"
+    if printf '%s\n' "$sum_purge" | grep -qE '^state=no_state conflicts=[0-9]+$'; then
+        pass "6b — --summary post-purge: $sum_purge"
+    else
+        fail "6b — --summary post-purge did not match expected pattern: $sum_purge"
     fi
 }
 

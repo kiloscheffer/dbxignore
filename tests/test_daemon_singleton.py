@@ -5,14 +5,14 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
+import pytest
+
 from dbxignore import cli, daemon, reconcile, state
 from tests.conftest import BlockingMarkers
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
-
-    import pytest
 
     from tests.conftest import FakePsutilProcess
 
@@ -198,6 +198,7 @@ def test_run_refuses_when_legacy_daemon_alive_without_lock(
     fh.close()
 
 
+@pytest.mark.timeout(30)
 def test_singleton_lock_not_released_while_worker_alive(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -252,9 +253,14 @@ def test_singleton_lock_not_released_while_worker_alive(
     stop.set()
 
     # The inner join(0.01s) should time out quickly; wait for the warning.
+    # Generous timeout because observer.stop() + observer.join() on the
+    # path between stop.set() and the warning can be slower on macOS
+    # FSEvents than on Linux inotify or Windows ReadDirectoryChangesW —
+    # observed at >5s on a macos-latest CI runner. 15s leaves headroom
+    # without masking a real "monkeypatch didn't fire" bug.
     assert _poll_until(
         lambda: any("did not exit" in r.message for r in caplog.records),
-        timeout_s=5.0,
+        timeout_s=15.0,
     ), "inner join never timed out — monkeypatch may not have taken effect"
 
     # The outer finally is now blocking on worker.join() — lock must still

@@ -92,7 +92,7 @@ jobs:
           # Claude needs; the runner is a fresh CI VM with no persistent
           # state, so the blast radius is bounded.
           claude_args: >-
-            --allowed-tools
+            --allowedTools
             "Bash(uv:*)
             Bash(git:*)
             Bash(gh:*)

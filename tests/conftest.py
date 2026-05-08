@@ -62,8 +62,13 @@ class FakeMarkers:
         self._ignored: set[Path] = set()
         self.set_calls: list[Path] = []
         self.clear_calls: list[Path] = []
+        # Records every is_ignored() query so pruning-contract tests can
+        # assert that grandchildren of an already-marked subtree are NEVER
+        # queried — see test_reconcile_basic.py:test_does_not_descend_into_marked_subtree.
+        self.is_ignored_calls: list[Path] = []
 
     def is_ignored(self, path: Path) -> bool:
+        self.is_ignored_calls.append(path.resolve())
         return path.resolve() in self._ignored
 
     def set_ignored(self, path: Path) -> None:

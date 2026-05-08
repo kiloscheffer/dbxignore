@@ -1,11 +1,30 @@
+from __future__ import annotations
+
 import contextlib
 import threading
-from pathlib import Path
+import time
+from typing import TYPE_CHECKING
 
 import pytest
 
-from dbxignore import daemon, state
-from tests.conftest import FakePsutilProcess
+from dbxignore import cli, daemon, reconcile, state
+from tests.conftest import BlockingMarkers
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
+    from tests.conftest import FakePsutilProcess
+
+
+def _poll_until(fn: Callable[[], bool], timeout_s: float = 5.0, interval_s: float = 0.05) -> bool:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if fn():
+            return True
+        time.sleep(interval_s)
+    return False
+
 
 # ---- singleton lock (followup item #78) -------------------------------------
 
@@ -177,3 +196,104 @@ def test_run_refuses_when_legacy_daemon_alive_without_lock(
     fh = daemon._acquire_singleton_lock()
     assert fh is not None, "lock must be released after legacy-daemon refusal"
     fh.close()
+
+
+@pytest.mark.timeout(30)
+def test_singleton_lock_not_released_while_worker_alive(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Singleton lock must not be released until the initial-sweep worker has
+    actually exited — even when the graceful-exit join times out first.
+
+    Regression guard for the path where:
+    1. Inner finally's bounded join times out (worker still alive).
+    2. Before the fix, singleton_lock.close() ran immediately after —
+       a second daemon could acquire the lock and run concurrently.
+    3. After the fix, the outer finally joins the worker first (no
+       timeout) so the lock is released only once the worker is gone.
+
+    Mechanics: monkeypatch ``_INITIAL_SWEEP_JOIN_TIMEOUT_S`` to near-zero
+    so the inner join fires quickly; use ``BlockingMarkers`` to keep the
+    worker alive; set stop_event; poll for the "did not exit" warning that
+    marks the inner join having timed out; then verify the lock is still
+    held before opening the gate.
+    """
+    state_dir = tmp_path / "state"
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / ".dropboxignore").write_text("")
+
+    monkeypatch.setattr(state, "default_path", lambda: state_dir / "state.json")
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(state, "user_log_dir", lambda: state_dir)
+    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [root])  # type: ignore[attr-defined]
+    monkeypatch.setattr(daemon, "_configured_logging", contextlib.nullcontext)
+    # Collapse the graceful-exit window so the warning fires in milliseconds.
+    monkeypatch.setattr(daemon, "_INITIAL_SWEEP_JOIN_TIMEOUT_S", 0.01)
+
+    # Stub Observer so this test is independent of FSEvents/inotify semantics.
+    # On macOS, FSEvents can emit synthetic "created" events for the existing
+    # .dropboxignore at observer-start time. Those events queue in the
+    # debouncer, fire `_dispatch` → `reconcile_subtree` → `markers.is_ignored`
+    # which blocks on the gate. Then `debouncer.stop()` (no timeout) hangs
+    # waiting for that in-flight emit to finish, and the test's "did not exit"
+    # WARNING never fires. The contract under test is the daemon's lock
+    # release ordering, not watchdog event delivery — stubbing Observer
+    # isolates the architectural assertion from platform watcher quirks.
+    class _NoOpObserver:
+        def schedule(self, *args: object, **kwargs: object) -> None: ...
+        def start(self) -> None: ...
+        def stop(self) -> None: ...
+        def join(self) -> None: ...
+
+    monkeypatch.setattr(daemon, "Observer", _NoOpObserver)
+
+    gate = threading.Event()
+    blocking = BlockingMarkers(gate)
+    monkeypatch.setattr(reconcile, "markers", blocking)
+    monkeypatch.setattr(cli, "markers", blocking)
+
+    caplog.set_level("WARNING", logger="dbxignore.daemon")
+    stop = threading.Event()
+    t = threading.Thread(target=daemon.run, args=(stop,), daemon=True)
+    t.start()
+
+    # Wait for the daemon to reach state=starting (early state.json written).
+    assert _poll_until(
+        lambda: (state_dir / "state.json").exists(),
+        timeout_s=5.0,
+    ), "daemon never wrote early state.json"
+
+    # Signal shutdown while the worker is still blocked on the gate.
+    stop.set()
+
+    # The inner join(0.01s) should time out quickly; wait for the warning.
+    # Generous timeout because observer.stop() + observer.join() on the
+    # path between stop.set() and the warning can be slower on macOS
+    # FSEvents than on Linux inotify or Windows ReadDirectoryChangesW —
+    # observed at >5s on a macos-latest CI runner. 15s leaves headroom
+    # without masking a real "monkeypatch didn't fire" bug.
+    assert _poll_until(
+        lambda: any("did not exit" in r.message for r in caplog.records),
+        timeout_s=15.0,
+    ), "inner join never timed out — monkeypatch may not have taken effect"
+
+    # The outer finally is now blocking on worker.join() — lock must still
+    # be held; a second acquire must fail.
+    second = daemon._acquire_singleton_lock()
+    assert second is None, (
+        "singleton lock was released while the initial-sweep worker was still "
+        "alive — outer finally must join the worker before closing the lock"
+    )
+
+    # Open the gate so the worker can exit, unblocking the outer join.
+    gate.set()
+    t.join(timeout=10.0)
+    assert not t.is_alive(), "daemon thread should have exited after gate opened"
+
+    # Lock must now be acquirable.
+    third = daemon._acquire_singleton_lock()
+    assert third is not None, "singleton lock must be released after worker exits"
+    third.close()

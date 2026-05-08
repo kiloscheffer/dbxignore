@@ -238,6 +238,7 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
 
 
 SWEEP_INTERVAL_S = 3600
+_INITIAL_SWEEP_JOIN_TIMEOUT_S = 60.0
 
 DEFAULT_TIMEOUTS_MS = {
     EventKind.RULES: 100,
@@ -570,6 +571,12 @@ def run(stop_event: threading.Event | None = None) -> None:
         # tests that bring the daemon up and down within a single process.
         # Without the wide try/finally the empty-configured_roots return
         # below would silently leak the handle for the rest of the process.
+        #
+        # ``worker`` is bound here (before the try) so the outer finally
+        # can join it before releasing the lock — a live worker mutating
+        # markers after lock release would let a second daemon start and
+        # run concurrently with it (PR #162 / Codex P2).
+        worker: threading.Thread | None = None
         try:
             # Defense-in-depth for the migration window: a legacy
             # (pre-#78) daemon wrote state.json but never created
@@ -628,10 +635,18 @@ def run(stop_event: threading.Event | None = None) -> None:
                 logger.info("sync mode detection: %s", summary)
 
             cache = RuleCache()
-            for r in configured_roots:
-                cache.load_root(r)
-
-            _sweep_once(configured_roots, cache, daemon_started, daemon_create_time)
+            # `cache.load_root` is NOT called here on purpose. The worker
+            # thread's `_sweep_once` does it (and its own reconcile pass)
+            # so the main thread's early `state.write` below isn't blocked
+            # by a slow `rglob('**/.dropboxignore')` on large trees. The
+            # cost the BACKLOG #53 fix is meant to remove was the synchronous
+            # initial sweep, but a similar argument applies to the rule scan
+            # — both belong on the worker side. Watchdog events arriving
+            # before the worker populates the cache are still dispatched;
+            # `_dispatch` calls `cache.reload_file` for RULES events, and
+            # OTHER/DIR_CREATE events on an empty cache simply produce
+            # `match()=False` (no markers set) until the worker's sweep
+            # converges the state. Surfaced by Codex on PR #162.
 
             debouncer = Debouncer(
                 on_emit=lambda item: _dispatch(item[2], cache, configured_roots),
@@ -646,19 +661,91 @@ def run(stop_event: threading.Event | None = None) -> None:
             try:
                 _start_observer_or_exit(observer)
                 logger.info("watching roots: %s", [str(r) for r in configured_roots])
+
+                # Early state.write: signal "daemon alive, sweep pending"
+                # to consumers. last_sweep=None is the canonical
+                # state=starting marker (item #53). On disk-write failure
+                # log WARNING and continue — the worker will retry the
+                # write at end of initial sweep.
+                early_state = state_module.State(
+                    daemon_pid=os.getpid(),
+                    daemon_create_time=daemon_create_time,
+                    daemon_started=daemon_started,
+                    last_sweep=None,
+                    watched_roots=configured_roots,
+                )
+                try:
+                    state_module.write(early_state)
+                except OSError as exc:
+                    logger.warning("could not write early state file: %s", exc)
+
+                # Initial sweep moves to a worker thread so the observer
+                # is responsive and state.json reflects daemon-alive
+                # immediately, even on large trees where the sweep takes
+                # ~50s. On worker failure, the worker logs the exception
+                # and sets stop_event, triggering the same shutdown path
+                # signal handlers use.
+                worker = threading.Thread(
+                    target=_initial_sweep_worker,
+                    args=(
+                        configured_roots,
+                        cache,
+                        daemon_started,
+                        daemon_create_time,
+                        stop_event,
+                    ),
+                    daemon=False,
+                    name="dbxignored-initial-sweep",
+                )
+                worker.start()
+
                 try:
                     while not stop_event.is_set():
                         woke = stop_event.wait(SWEEP_INTERVAL_S)
                         if woke:
                             break
-                        _sweep_once(configured_roots, cache, daemon_started, daemon_create_time)
+                        # Skip this tick if the initial-sweep worker is still
+                        # running. Trigger is extreme — initial sweep > 1h —
+                        # but the alternative is two full-tree traversals
+                        # racing on the same paths. Operations are idempotent
+                        # (same RuleCache, same xattr values, same paths) so
+                        # it isn't a correctness issue, but the wasted work
+                        # is bounded by skipping the tick. The next tick
+                        # runs normally once the worker exits. Surfaced by
+                        # Codex on PR #162.
+                        if worker.is_alive():
+                            continue
+                        _sweep_once(
+                            configured_roots,
+                            cache,
+                            daemon_started,
+                            daemon_create_time,
+                            stop_event=stop_event,
+                        )
                 finally:
                     observer.stop()
                     observer.join()
             finally:
                 debouncer.stop()
+                # Graceful-exit window: give the worker a bounded time to
+                # honor stop_event. reconcile_subtree checks stop_event at
+                # every directory boundary, so under normal conditions the
+                # join completes in ~one directory's time. The timeout guards
+                # against pathological blocked-syscall cases; if it fires the
+                # outer finally will still hold the lock until the worker
+                # actually exits.
+                if worker is not None:
+                    worker.join(timeout=_INITIAL_SWEEP_JOIN_TIMEOUT_S)
+                    if worker.is_alive():
+                        logger.warning("initial-sweep worker did not exit within 60s of stop_event")
                 logger.info("daemon stopped")
         finally:
+            # The graceful-exit join above has a timeout; if it expired the
+            # worker is still alive. Joining here (no timeout) before
+            # releasing the lock ensures a second daemon cannot acquire the
+            # lock and start running concurrently with a live worker thread.
+            if worker is not None and worker.is_alive():
+                worker.join()
             singleton_lock.close()
 
 
@@ -667,24 +754,42 @@ def _sweep_once(
     cache: RuleCache,
     daemon_started: dt.datetime,
     daemon_create_time: float | None = None,
+    *,
+    stop_event: threading.Event | None = None,
 ) -> None:
     sweep_start = time.perf_counter()
 
     # Phase 1: refresh the rule cache. Sequential — load_root mutates the
     # shared _rules dict and is cheap (only stats .dropboxignore files).
+    # `stop_event` threads through to load_root's rglob so SIGTERM during
+    # the rule scan is observed without waiting for the full traversal;
+    # the between-roots check covers multi-root configurations where one
+    # root's full scan completes before the next would start.
     for r in roots:
-        cache.load_root(r)
+        if stop_event is not None and stop_event.is_set():
+            logger.debug("sweep cancelled in phase 1; skipping remaining roots")
+            return
+        cache.load_root(r, stop_event=stop_event)
 
     # Phase 2: reconcile each root. Reads cache (no writes) and writes
     # per-file ADS markers on disjoint paths, so threads across roots
     # don't contend. Single-root skips the pool to stay simple.
     if len(roots) > 1:
         with ThreadPoolExecutor(max_workers=len(roots)) as pool:
-            reports = list(pool.map(lambda r: reconcile_subtree(r, r, cache), roots))
+            reports = list(
+                pool.map(
+                    lambda r: reconcile_subtree(r, r, cache, stop_event=stop_event),
+                    roots,
+                )
+            )
     elif roots:
-        reports = [reconcile_subtree(roots[0], roots[0], cache)]
+        reports = [reconcile_subtree(roots[0], roots[0], cache, stop_event=stop_event)]
     else:
         reports = []
+
+    if stop_event is not None and stop_event.is_set():
+        logger.debug("sweep cancelled mid-run; skipping state write")
+        return
 
     total_marked = sum(r.marked for r in reports)
     total_cleared = sum(r.cleared for r in reports)
@@ -732,3 +837,30 @@ def _sweep_once(
         state_module.write(s)
     except OSError as exc:
         logger.warning("could not write state file: %s", exc)
+
+
+def _initial_sweep_worker(
+    roots: list[Path],
+    cache: RuleCache,
+    daemon_started: dt.datetime,
+    daemon_create_time: float | None,
+    stop_event: threading.Event,
+) -> None:
+    """Run the initial sweep in a worker thread (item #53).
+
+    Catches all non-system exceptions, logs with traceback, and sets
+    ``stop_event`` so the main thread shuts the daemon down via the same
+    code path SIGTERM uses. ``BaseException`` (KeyboardInterrupt, SystemExit)
+    propagates normally — those go through the signal handler.
+    """
+    try:
+        _sweep_once(
+            roots,
+            cache,
+            daemon_started,
+            daemon_create_time,
+            stop_event=stop_event,
+        )
+    except Exception:
+        logger.exception("initial sweep worker failed; shutting daemon down")
+        stop_event.set()

@@ -10,6 +10,7 @@ import pytest
 from dbxignore import cli, reconcile
 
 if TYPE_CHECKING:
+    import threading
     from pathlib import Path
 
 
@@ -80,6 +81,27 @@ class FakeMarkers:
         p = path.resolve()
         self._ignored.discard(p)
         self.clear_calls.append(p)
+
+
+class BlockingMarkers(FakeMarkers):
+    """``FakeMarkers`` whose ``is_ignored`` waits on a caller-controlled gate.
+
+    Used by `tests/test_daemon_initial_sweep.py` to deterministically pause
+    the daemon's worker thread mid-sweep so tests can observe the
+    ``state=starting`` window. The 10-second timeout on ``gate.wait()``
+    bounds the failure mode: if a test forgets to open the gate, the
+    daemon thread hangs but the wait returns False after 10s, the worker
+    proceeds, and the test fails fast with a meaningful assertion error
+    rather than blocking the full pytest timeout.
+    """
+
+    def __init__(self, gate: threading.Event) -> None:
+        super().__init__()
+        self._gate = gate
+
+    def is_ignored(self, path: Path) -> bool:
+        self._gate.wait(timeout=10.0)
+        return super().is_ignored(path)
 
 
 @pytest.fixture

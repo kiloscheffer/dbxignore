@@ -283,6 +283,9 @@ State tokens:
 - `running` — `state.json` present and the recorded PID corresponds to a live dbxignore daemon process.
 - `not_running` — `state.json` present but the recorded PID is no longer a live daemon (cleanly stopped, or stale state).
 - `no_state` — no `state.json` (daemon never ran). Only `state` and `conflicts` are emitted in this case.
+- `starting` — daemon is alive but the initial sweep has not yet completed.
+
+**`state=starting`** is emitted when the daemon is alive but the initial sweep has not yet completed. During this window, the summary contains only `state` and `pid` — `marked`, `cleared`, `errors`, and `conflicts` are omitted because they would all be 0 and would falsely imply the daemon swept and found nothing. The transition to `state=running` happens when the initial sweep completes (a fresh install of a 27,000-directory Dropbox tree took ~50s in testing).
 
 `pid=N` is omitted when no PID was recorded (rare partial-write case). The remaining fields (`marked`, `cleared`, `errors`) are present whenever a `state.json` exists, even if the daemon never finished a sweep — they default to zero.
 

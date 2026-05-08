@@ -432,19 +432,32 @@ def _format_summary(state_obj: state.State | None, alive: bool, conflicts_count:
 
     Format is part of the public API per SemVer (see README §"Status-bar
     integration"). Field additions are non-breaking; removals or renames
-    bump MINOR pre-1.0 / MAJOR post-1.0.
+    bump MINOR pre-1.0 / MAJOR post-1.0. Adding a new VALUE for an
+    existing field (the `state=starting` token added in item #53) is
+    technically a breaking change for consumers branching on
+    `state == "running"` exhaustively — README documents the addition.
 
+        state=starting pid=12345
         state=running pid=12345 marked=7 cleared=1 errors=0 conflicts=0
         state=not_running pid=12345 marked=7 cleared=1 errors=0 conflicts=0
         state=no_state conflicts=0
 
-    State token is `running` (state.json present + daemon process alive),
-    `not_running` (state.json present, no live daemon — pid may be stale),
-    or `no_state` (no state.json — daemon never ran).
+    State token is `starting` (state.json present + daemon alive + initial
+    sweep not yet complete: `last_sweep is None`), `running` (state.json
+    present + daemon alive + at least one sweep complete), `not_running`
+    (state.json present, no live daemon — pid may be stale), or `no_state`
+    (no state.json — daemon never ran).
     """
     if state_obj is None:
         return f"state=no_state conflicts={conflicts_count}"
     pid = state_obj.daemon_pid
+    if pid is not None and alive and state_obj.last_sweep is None:
+        # Alive but initial sweep hasn't completed yet. Emit the truncated
+        # form: omit marked/cleared/errors/conflicts because they're all 0
+        # and would falsely imply "swept and found nothing." Consumers
+        # branching on the token need to handle 'starting' as distinct
+        # from 'running'.
+        return f"state=starting pid={pid}"
     state_token = "running" if (pid is not None and alive) else "not_running"
     parts = [f"state={state_token}"]
     if pid is not None:
@@ -490,7 +503,10 @@ def status(summary: bool) -> None:
         if s.daemon_pid is None:
             click.echo("daemon: not running (no pid recorded)")
         elif state.daemon_is_running(s):
-            click.echo(f"daemon: running (pid={s.daemon_pid})")
+            if s.last_sweep is None:
+                click.echo(f"daemon: starting (initial sweep in progress) (pid={s.daemon_pid})")
+            else:
+                click.echo(f"daemon: running (pid={s.daemon_pid})")
         else:
             click.echo(f"daemon: not running (last pid={s.daemon_pid} — state.json may be stale)")
         if s.daemon_started:

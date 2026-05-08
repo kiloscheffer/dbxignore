@@ -797,15 +797,23 @@ function Test-Uninstall {
     dbxignore install 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) { Stop-Abort "re-install failed" }
 
-    # Wait for the new daemon to write state.json so we can capture its
-    # PID before --purge removes the file. Poll for up to 10s; on a slow
-    # host the 2s sleep used previously was sometimes too tight.
+    # Wait for the new daemon to write a state.json whose daemon_pid is
+    # DIFFERENT from the pre-reinstall value. State.json is retained by
+    # plain uninstall (only --purge removes it), so a naive Test-Path-
+    # then-read returns the stale pre-uninstall PID — Wait-Process would
+    # then wait on a long-dead PID and return instantly, leaving the
+    # re-installed daemon to recreate state.json after --purge. Polling
+    # until daemon_pid != $uninstallPid pins the comparison to the new
+    # process. PID reuse in a 10s window is vanishingly rare on Windows.
     $purgePid = $null
     for ($i = 0; $i -lt 10; $i++) {
         if (Test-Path $stateFile) {
             try {
-                $purgePid = (Get-Content $stateFile -Raw | ConvertFrom-Json).daemon_pid
-                if ($purgePid) { break }
+                $candidatePid = (Get-Content $stateFile -Raw | ConvertFrom-Json).daemon_pid
+                if ($candidatePid -and ($candidatePid -ne $uninstallPid)) {
+                    $purgePid = $candidatePid
+                    break
+                }
             } catch {
                 # keep polling
             }
@@ -813,7 +821,7 @@ function Test-Uninstall {
         Start-Sleep -Seconds 1
     }
     if (-not $purgePid) {
-        Write-Note "    (state.json daemon_pid unavailable post-reinstall; skipping pre-purge PID capture)"
+        Write-Note "    (state.json daemon_pid did not advance from old=$uninstallPid within 10s post-reinstall; skipping pre-purge PID capture)"
     }
 
     $purgeOut = "$env:TEMP\dbxignore-purge.out"

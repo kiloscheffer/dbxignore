@@ -77,6 +77,14 @@ def test_uninstall_task_raises_on_schtasks_failure(monkeypatch: pytest.MonkeyPat
     """schtasks /Delete's non-zero exit must surface as a RuntimeError so the
     CLI stops claiming "Uninstalled scheduled task" when the task still
     exists (e.g. missing elevation, task already gone, locale quirks)."""
+    from dbxignore import state as state_module
+
+    # No state.json -> uninstall_task skips the post-/End wait. Without
+    # this mock the test would read whatever state.json exists on the
+    # host (a real daemon_pid on a developer Windows machine) and hang
+    # in the wait loop until the per-test pytest-timeout fires.
+    monkeypatch.setattr(state_module, "read", lambda: None)
+
     fake_result = subprocess.CompletedProcess(
         args=[],
         returncode=1,
@@ -90,9 +98,232 @@ def test_uninstall_task_raises_on_schtasks_failure(monkeypatch: pytest.MonkeyPat
 
 
 def test_uninstall_task_succeeds_silently_on_zero_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dbxignore import state as state_module
+
+    monkeypatch.setattr(state_module, "read", lambda: None)
+
     fake_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
     monkeypatch.setattr(install.subprocess, "run", lambda *a, **kw: fake_result)  # type: ignore[attr-defined]
     install.uninstall_task()  # must not raise
+
+
+def test_uninstall_task_ends_task_before_deleting_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Per item #87: uninstall_task must signal the running task to end
+    BEFORE removing the task definition. schtasks /Delete /F is fire-and-
+    forget on the running instance, so the daemon process can outlive
+    `dbxignore uninstall` by several seconds — long enough to write
+    state.json after _purge_local_state() removes it. /End first lets
+    the daemon exit cleanly; the subsequent wait pins the exit before
+    /Delete fires.
+
+    Mirrors the Linux/macOS synchronous-shutdown contract that
+    `systemctl --user disable --now` and `launchctl bootout` already
+    provide.
+    """
+    from dbxignore import state as state_module
+
+    monkeypatch.setattr(
+        state_module,
+        "read",
+        lambda: state_module.State(daemon_pid=12345),
+    )
+    # Daemon "already gone" by the time we poll — no real wait.
+    monkeypatch.setattr(
+        state_module,
+        "is_daemon_alive",
+        lambda pid, create_time=None: False,
+    )
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(install.subprocess, "run", fake_run)  # type: ignore[attr-defined]
+
+    install.uninstall_task()
+
+    assert calls == [
+        ["schtasks", "/End", "/TN", install.TASK_NAME],
+        ["schtasks", "/Delete", "/TN", install.TASK_NAME, "/F"],
+    ], calls
+
+
+def test_uninstall_task_polls_is_daemon_alive_until_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pin the synchronization invariant: between /End and /Delete,
+    uninstall_task polls is_daemon_alive() until the recorded daemon
+    process has actually exited. daemon_create_time is forwarded so
+    PID reuse cases (a recycled PID claimed by an unrelated process)
+    are rejected. Without this wait, /Delete fires while the daemon
+    is still alive — the orphaned daemon then writes state.json after
+    a subsequent --purge has removed it.
+    """
+    from dbxignore import state as state_module
+
+    monkeypatch.setattr(
+        state_module,
+        "read",
+        lambda: state_module.State(daemon_pid=12345, daemon_create_time=1234567.89),
+    )
+    alive_states = [True, True, False]
+    is_alive_calls: list[tuple[int, float | None]] = []
+
+    def fake_is_alive(pid: int, create_time: float | None = None) -> bool:
+        is_alive_calls.append((pid, create_time))
+        return alive_states.pop(0)
+
+    monkeypatch.setattr(state_module, "is_daemon_alive", fake_is_alive)
+    monkeypatch.setattr(install.time, "sleep", lambda _: None)  # type: ignore[attr-defined]
+
+    schtasks_calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        schtasks_calls.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(install.subprocess, "run", fake_run)  # type: ignore[attr-defined]
+
+    install.uninstall_task()
+
+    # daemon_create_time is forwarded on every poll so PID-reuse is rejected.
+    assert is_alive_calls == [
+        (12345, 1234567.89),
+        (12345, 1234567.89),
+        (12345, 1234567.89),
+    ]
+    # /Delete fires only after the wait drains.
+    assert schtasks_calls == [
+        ["schtasks", "/End", "/TN", install.TASK_NAME],
+        ["schtasks", "/Delete", "/TN", install.TASK_NAME, "/F"],
+    ]
+
+
+def test_uninstall_task_logs_warning_and_still_deletes_on_timeout(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """If the daemon never exits within the wait window, log WARNING and
+    still proceed with /Delete. /Delete failing to run would leave the
+    next `dbxignore install` blocked by 'task already exists' — so the
+    timeout path explicitly trades the synchronization guarantee for
+    forward progress.
+    """
+    import logging
+
+    from dbxignore import state as state_module
+
+    monkeypatch.setattr(
+        state_module,
+        "read",
+        lambda: state_module.State(daemon_pid=12345),
+    )
+    monkeypatch.setattr(state_module, "is_daemon_alive", lambda *a, **kw: True)
+    monkeypatch.setattr(install.time, "sleep", lambda _: None)  # type: ignore[attr-defined]
+    # monotonic ticks: deadline calc, loop check 1 (in window), loop check 2 (past).
+    ticks = iter([0.0, 0.0, 100.0])
+    monkeypatch.setattr(install.time, "monotonic", lambda: next(ticks))  # type: ignore[attr-defined]
+
+    schtasks_calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        schtasks_calls.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(install.subprocess, "run", fake_run)  # type: ignore[attr-defined]
+
+    with caplog.at_level(logging.WARNING, logger="dbxignore.install.windows_task"):
+        install.uninstall_task()
+
+    assert any(
+        "did not exit within" in rec.message and "pid=12345" in rec.message
+        for rec in caplog.records
+    ), [rec.message for rec in caplog.records]
+    assert schtasks_calls[-1] == ["schtasks", "/Delete", "/TN", install.TASK_NAME, "/F"]
+
+
+def test_uninstall_task_skips_wait_when_end_fails_and_daemon_pid_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """schtasks /End "Stops only the instances of a program started by a
+    scheduled task" (Microsoft docs), so a non-zero /End cannot make
+    a non-task-instance daemon exit — e.g. a manually-launched
+    `dbxignored` or a stale state.json from a different install. The
+    wait must be gated on /End succeeding; otherwise uninstall hangs
+    for the full _END_WAIT_TIMEOUT_S window with no benefit.
+
+    pytest-timeout (10s default) would force-fail if the wait engaged,
+    so this test is self-protective even without mocking time.sleep.
+    """
+    from dbxignore import state as state_module
+
+    monkeypatch.setattr(
+        state_module,
+        "read",
+        lambda: state_module.State(daemon_pid=12345),
+    )
+    # Daemon stays alive — would block the wait loop indefinitely if
+    # the gating logic regressed.
+    is_alive_calls: list[int] = []
+
+    def fake_is_alive(pid: int, create_time: float | None = None) -> bool:
+        is_alive_calls.append(pid)
+        return True
+
+    monkeypatch.setattr(state_module, "is_daemon_alive", fake_is_alive)
+
+    schtasks_calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        schtasks_calls.append(cmd)
+        if cmd[1] == "/End":
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=1,
+                stdout="",
+                stderr="ERROR: The system cannot find the path specified.\r\n",
+            )
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(install.subprocess, "run", fake_run)  # type: ignore[attr-defined]
+
+    install.uninstall_task()  # must not hang
+
+    # Wait skipped: is_daemon_alive never called despite daemon_pid being set.
+    assert is_alive_calls == []
+    # /Delete still ran.
+    assert [cmd[1] for cmd in schtasks_calls] == ["/End", "/Delete"]
+
+
+def test_uninstall_task_tolerates_end_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """schtasks /End returning non-zero is non-fatal — typical failure
+    modes (target task isn't running, locale quirks) are operationally
+    benign and shouldn't prevent /Delete from cleaning up the task
+    definition. Compare /Delete's failure, which DOES raise (covered by
+    test_uninstall_task_raises_on_schtasks_failure)."""
+    from dbxignore import state as state_module
+
+    monkeypatch.setattr(state_module, "read", lambda: None)
+
+    schtasks_calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        schtasks_calls.append(cmd)
+        if cmd[1] == "/End":
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=1,
+                stdout="",
+                stderr="ERROR: The system cannot find the path specified.\r\n",
+            )
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(install.subprocess, "run", fake_run)  # type: ignore[attr-defined]
+
+    install.uninstall_task()  # must not raise
+
+    assert [cmd[1] for cmd in schtasks_calls] == ["/End", "/Delete"]
 
 
 def test_install_task_runs_schtasks_create_then_run(

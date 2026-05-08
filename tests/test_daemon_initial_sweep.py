@@ -316,3 +316,75 @@ def test_cooperative_shutdown_during_initial_sweep(
         f"shutdown took {shutdown_duration:.2f}s — cooperative cancellation likely "
         "not honored at reconcile_subtree boundaries"
     )
+
+
+def test_periodic_sweep_skipped_while_initial_worker_alive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    write_file: WriteFile,
+) -> None:
+    """Periodic sweep loop must skip ticks while the initial-sweep worker
+    is still running. Without this guard, an initial sweep that runs
+    longer than ``SWEEP_INTERVAL_S`` would race against a periodic sweep
+    on the same paths — operations are idempotent (Codex P2 #4 on PR #162's
+    escalation reply documents the safety analysis), but skipping the tick
+    avoids the wasted concurrent traversal."""
+    root = tmp_path / "root"
+    write_file(root / ".dropboxignore", "build/\n")
+    (root / "build").mkdir()
+
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(state, "default_path", lambda: state_dir / "state.json")
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(state, "user_log_dir", lambda: state_dir)
+    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [root])  # type: ignore[attr-defined, unused-ignore]
+
+    # Shorten SWEEP_INTERVAL_S so the periodic loop ticks within the test
+    # window. The default 3600s would never fire during a 2-second test.
+    monkeypatch.setattr(daemon, "SWEEP_INTERVAL_S", 0.3)
+
+    # Count _sweep_once calls. Without the fix, a periodic tick would call
+    # _sweep_once a second time (count=2) while the worker's _sweep_once
+    # is still blocked on the gate. With the fix, the periodic tick sees
+    # worker.is_alive() and skips, leaving count=1.
+    sweep_calls: list[float] = []
+    real_sweep_once = daemon._sweep_once
+
+    def counting_sweep_once(*args: object, **kwargs: object) -> None:
+        sweep_calls.append(time.time())
+        real_sweep_once(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(daemon, "_sweep_once", counting_sweep_once)
+
+    gate = threading.Event()
+    blocking = _make_blocking_markers(gate)
+    monkeypatch.setattr(reconcile, "markers", blocking)
+    monkeypatch.setattr(cli, "markers", blocking)
+
+    stop = threading.Event()
+    t = threading.Thread(target=daemon.run, args=(stop,), daemon=True)
+    t.start()
+    try:
+        # Wait for daemon to reach the starting window (state.json exists)
+        # so we know the worker has called _sweep_once at least once.
+        assert _poll_until(
+            lambda: (state_dir / "state.json").exists(),
+            timeout_s=5.0,
+        ), "daemon never wrote early state.json"
+
+        # Let the periodic loop tick a few times while the worker is still
+        # blocked on the gate. SWEEP_INTERVAL_S=0.3 means roughly 4 ticks
+        # in 1.2 seconds. Without the fix, sweep_calls grows; with the fix,
+        # it stays at 1.
+        time.sleep(1.2)
+
+        # The worker called _sweep_once exactly once. The periodic loop
+        # ticked but skipped each time because worker.is_alive() was True.
+        assert len(sweep_calls) == 1, (
+            f"periodic sweep ran while initial worker was alive: "
+            f"{len(sweep_calls)} _sweep_once calls in 1.2s"
+        )
+    finally:
+        gate.set()
+        stop.set()
+        t.join(timeout=10.0)

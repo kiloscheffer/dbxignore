@@ -694,6 +694,17 @@ def run(stop_event: threading.Event | None = None) -> None:
                         woke = stop_event.wait(SWEEP_INTERVAL_S)
                         if woke:
                             break
+                        # Skip this tick if the initial-sweep worker is still
+                        # running. Trigger is extreme — initial sweep > 1h —
+                        # but the alternative is two full-tree traversals
+                        # racing on the same paths. Operations are idempotent
+                        # (same RuleCache, same xattr values, same paths) so
+                        # it isn't a correctness issue, but the wasted work
+                        # is bounded by skipping the tick. The next tick
+                        # runs normally once the worker exits. Surfaced by
+                        # Codex on PR #162.
+                        if worker.is_alive():
+                            continue
                         _sweep_once(
                             configured_roots,
                             cache,

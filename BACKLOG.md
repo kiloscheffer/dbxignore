@@ -1810,21 +1810,29 @@ done
 
 In practice on Windows Git Bash the loop reports `exit=1` for every iteration with the same error message regardless of which subject is being checked — `commit-check -m /dev/stdin` appears to consume the whole pipeline's stdin on the first iteration and reuse a stale buffer for subsequent ones. The visible symptom in PR #144's pre-push session: one over-72-char commit subject reached CI undetected because the loop output looked like every commit was failing identically (the loop's per-iteration output was the same long banner, easy to scroll past as "loop noise").
 
-The single-shot variant works fine:
+The single-shot variant via `/dev/stdin` is **also affected**:
 
 ```bash
 echo "<subject>" | commit-check -m /dev/stdin
 ```
 
-So the loop's stdin redirection is the issue, not commit-check itself.
+This reproduced during PR #149's amend cycle: the new subject was piped to commit-check, but the tool reported success/failure on a stale subject from earlier in the session. The body's original claim that single-shot works was incorrect.
+
+The reliable workaround is a **temp-file** read:
+
+```bash
+echo "<subject>" | tee /tmp/subj.txt > /dev/null
+commit-check -m /tmp/subj.txt
+```
+
+Or directly: `echo "<subject>" > /tmp/subj.txt && commit-check -m /tmp/subj.txt`. This reads from a real file rather than `/dev/stdin`, sidestepping whatever buffering / fd-reuse the tool does internally on Git Bash.
 
 **Fix candidates:**
 
-- **Use single-shot pre-flight only.** Document the loop as buggy on Windows; recommend per-commit invocation. ~1 line of CLAUDE.md gotcha update. Lowest-effort, doesn't fix the loop.
-- **Wrap the per-iteration redirection differently.** Try `commit-check -m <(git log -1 --format='%B' $sha)` (process substitution) or write each subject to a temp file inside the loop. Restores the loop ergonomics; needs Windows verification.
+- **Document the temp-file form as the canonical pre-flight.** Update CLAUDE.md's `--no-verify` gotcha to recommend the temp-file form for both single-shot and loop usage. Lowest-effort.
 - **Replace with a Python one-liner** that imports `commit_check` directly and feeds each subject programmatically — avoids the shell's stdin handling entirely. Heaviest but most portable.
 
-**Urgency:** low — bounded annoyance during heavy stack-rewrite cycles. Bundle with the next CLAUDE.md gotcha-section touch, or fix when the loop fails again on a multi-commit subject sweep.
+**Urgency:** low-medium — has caused over-72-char subject CI failures on PR #144 (initial), PR #145 (cascade), and PR #149 (post-amend). Each costs a force-push round. Worth fixing the next time the workflow wraps a multi-commit sweep.
 
 Touches: `CLAUDE.md` Gotchas section (the existing `--no-verify` bullet documents the loop shape).
 
@@ -1846,7 +1854,7 @@ Eleven items. All passive (no concrete trigger requires action) — bundle each 
 - **#54** — Watchdog observer's recursive watch schedules one inotify watch per directory under `~/Dropbox`, including marked-ignored subtrees. Architectural fix (per-directory watches with mark/unmark lifecycle) is ~200 LOC of race-condition-prone state-machine work; deferred until a beta tester hits the watch ceiling on a system with limits already raised.
 - **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall.
 - **#74** — GitHub Actions pinned to mutable major-version tags (`@v4`, `@v1`, `@v2.6.0`, `@release/v1`) rather than 40-char SHAs across all workflow files. Speculative security hardening — switching to SHAs would be a project-wide convention shift requiring a Dependabot maintenance practice. Surfaced 2026-05-05 in `code-reviewer` review of PR #111. No observed incident or specific pressure.
-- **#83** — Pre-flight `commit-check` loop on Windows Git Bash buffers stdin: the CLAUDE.md-recommended `for sha in ...; do ... | commit-check -m /dev/stdin; done` produces identical per-iteration output regardless of which subject is being checked, hiding which one actually fails. Single-shot `echo "<subject>" | commit-check -m /dev/stdin` works. Three fix candidates filed (document-as-buggy / process-substitution-or-tmpfile / Python one-liner). Surfaced 2026-05-08 during PR #144 + #145 stack-rewrite cycles.
+- **#83** — Pre-flight `commit-check -m /dev/stdin` is unreliable on Windows Git Bash (in both the loop AND single-shot forms): commit-check reports success/failure on a stale subject from earlier in the session rather than the freshly-piped one. The reliable workaround is a temp file: `echo "<subject>" > /tmp/subj.txt && commit-check -m /tmp/subj.txt`. Has caused over-72-char subject CI failures on PRs #144, #145, and #149 — each costing a force-push round. Two fix candidates filed (document temp-file as canonical / Python one-liner). Surfaced 2026-05-08.
 
 ### Resolved (reverse chronological)
 

@@ -149,6 +149,7 @@ def test_format_summary_running_includes_pid_and_counts() -> None:
     """state.json + alive PID → `state=running pid=N marked=N cleared=N errors=N conflicts=N`."""
     s = state.State(
         daemon_pid=12345,
+        last_sweep=dt.datetime(2026, 1, 1, tzinfo=dt.UTC),
         last_sweep_marked=7,
         last_sweep_cleared=1,
         last_sweep_errors=0,
@@ -180,6 +181,25 @@ def test_format_summary_no_pid_omits_pid_field() -> None:
     assert cli._format_summary(s, alive=False, conflicts_count=0) == (
         "state=not_running marked=0 cleared=0 errors=0 conflicts=0"
     )
+
+
+def test_format_summary_starting_token_when_last_sweep_is_none() -> None:
+    # state=starting contract (item #53): when daemon is alive but the
+    # initial sweep hasn't completed (last_sweep is None), --summary emits
+    # only `state=starting` + `pid=<N>` — no marked/cleared/errors/conflicts
+    # fields, which would mislead consumers into reading "swept and found
+    # nothing." Public API addition; documented in README.
+    s = state.State(
+        daemon_pid=12345,
+        daemon_started=None,
+        last_sweep=None,
+        last_sweep_marked=0,
+        last_sweep_cleared=0,
+        last_sweep_errors=0,
+        last_sweep_conflicts=0,
+    )
+    output = cli._format_summary(s, alive=True, conflicts_count=0)
+    assert output == "state=starting pid=12345"
 
 
 def test_status_summary_flag_emits_single_line(

@@ -724,21 +724,28 @@ function Test-Uninstall {
     $stateDir = Join-Path $env:LOCALAPPDATA "dbxignore"
     $stateFile = Join-Path $stateDir "state.json"
 
-    # plain uninstall: scheduled task removed, markers retained
-    # Capture the daemon's PID from state.json BEFORE uninstall so we
-    # can wait on it specifically. The daemon's process name varies by
-    # install path: `dbxignored.exe` only for the frozen PyInstaller
-    # binary; `pythonw.exe` for the standard `uv tool install` path
-    # the manual scripts use (per install/_common.py - non-frozen
-    # Windows returns `pythonw -m dbxignore daemon`). Wait-Process
-    # -Name dbxignored therefore silently no-ops in the common case;
-    # waiting on PID handles both shapes.
-    $uninstallPid = $null
+    # plain uninstall: scheduled task removed, markers retained.
+    # Post-#87, install/windows_task.py:uninstall_task runs schtasks
+    # /End + waits for the daemon to exit + schtasks /Delete /F. By
+    # the time `dbxignore uninstall` returns, the daemon process is
+    # gone — same synchronous-shutdown contract as Linux's
+    # `systemctl --user disable --now` and macOS's `launchctl bootout`.
+    # The PR #169 Wait-Process workarounds previously here are no
+    # longer needed; single-shot probes for 6a/6b are sufficient.
+    #
+    # Capture the pre-uninstall daemon_pid so the post-reinstall poll
+    # below can wait for state.json to advance to the NEW daemon's pid
+    # before --purge fires. Without that gate, --purge reads the stale
+    # daemon_pid from state.json (retained by plain uninstall), routes
+    # uninstall_task's synchronous wait at the long-dead pid, and
+    # /Delete reverts to fire-and-forget against the live re-installed
+    # daemon — exactly the race #87 was meant to close.
+    $oldPid = $null
     if (Test-Path $stateFile) {
         try {
-            $uninstallPid = (Get-Content $stateFile -Raw | ConvertFrom-Json).daemon_pid
+            $oldPid = (Get-Content $stateFile -Raw | ConvertFrom-Json).daemon_pid
         } catch {
-            Write-Note "    (state.json unreadable; skipping pre-uninstall PID capture)"
+            # leave $oldPid as $null — best-effort
         }
     }
 
@@ -749,16 +756,6 @@ function Test-Uninstall {
     } else {
         Write-Fail "dbxignore uninstall"
         Get-Content $uninstOut | ForEach-Object { Write-Note "    $_" }
-    }
-
-    # install/windows_task.py runs only `schtasks /Delete /F` (no /End
-    # first), so the running daemon process can outlive `dbxignore
-    # uninstall` by several seconds. Wait by PID before probing 6a so
-    # the daemon can't write state.json mid-test. Linux's
-    # `systemctl --user disable --now` and macOS's `launchctl bootout`
-    # are synchronous, so the bash scripts don't need this wait.
-    if ($uninstallPid) {
-        Wait-Process -Id $uninstallPid -Timeout 30 -ErrorAction SilentlyContinue
     }
 
     schtasks /Query /TN dbxignore 2>$null | Out-Null
@@ -773,23 +770,15 @@ function Test-Uninstall {
     }
 
     # 6a - status --summary returns state=not_running post-uninstall (PR #162).
-    # state.json is retained by plain uninstall; the daemon process exits and
-    # daemon_is_running(s) flips False. Windows schtasks /Delete /F (in
-    # install/windows_task.py) is fire-and-forget on the running task
-    # instance, so the dbxignored.exe process can outlive uninstall by
-    # several seconds. Poll for the transition for up to 30s.
-    Write-Note "6a - status --summary post-uninstall (PR #162)"
-    $sumUninst = ""
-    $sumUninstPattern = '^state=not_running pid=\d+ marked=\d+ cleared=\d+ errors=\d+ conflicts=\d+$'
-    for ($i = 0; $i -lt 30; $i++) {
-        $sumUninst = (dbxignore status --summary 2>&1 | Select-Object -First 1)
-        if ($sumUninst -match $sumUninstPattern) { break }
-        Start-Sleep -Seconds 1
-    }
-    if ($sumUninst -match $sumUninstPattern) {
+    # state.json is retained by plain uninstall; the daemon process is
+    # gone (synchronous teardown per #87), so daemon_is_running(s) is
+    # False on the first probe. Single-shot.
+    Write-Note "6a - status --summary post-uninstall (PR #162, simplified post-#87)"
+    $sumUninst = (dbxignore status --summary 2>&1 | Select-Object -First 1)
+    if ($sumUninst -match '^state=not_running pid=\d+ marked=\d+ cleared=\d+ errors=\d+ conflicts=\d+$') {
         Write-Pass "6a - --summary post-uninstall: $sumUninst"
     } else {
-        Write-Fail "6a - --summary did not advance to state=not_running within 30s (last: $sumUninst)"
+        Write-Fail "6a - --summary post-uninstall did not match expected pattern: $sumUninst"
     }
 
     # re-install briefly, then --purge
@@ -797,21 +786,23 @@ function Test-Uninstall {
     dbxignore install 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) { Stop-Abort "re-install failed" }
 
-    # Wait for the new daemon to write a state.json whose daemon_pid is
-    # DIFFERENT from the pre-reinstall value. State.json is retained by
-    # plain uninstall (only --purge removes it), so a naive Test-Path-
-    # then-read returns the stale pre-uninstall PID — Wait-Process would
-    # then wait on a long-dead PID and return instantly, leaving the
-    # re-installed daemon to recreate state.json after --purge. Polling
-    # until daemon_pid != $uninstallPid pins the comparison to the new
-    # process. PID reuse in a 10s window is vanishingly rare on Windows.
-    $purgePid = $null
+    # Wait for state.json's daemon_pid to ADVANCE from the pre-uninstall
+    # value to the new daemon's pid. state.json is retained by plain
+    # uninstall, so a Test-Path-only check passes on the stale file
+    # immediately and --purge ends up reading the dead pre-uninstall
+    # daemon_pid — uninstall_task's synchronous wait would then target a
+    # long-dead pid and /Delete would revert to fire-and-forget against
+    # the actually-live re-installed daemon. Polling for daemon_pid !=
+    # $oldPid pins the test to the realistic "purge against a running
+    # daemon" race that #87 closes. PID reuse in a 10s window is
+    # vanishingly rare on Windows.
+    $reinstallPid = $null
     for ($i = 0; $i -lt 10; $i++) {
         if (Test-Path $stateFile) {
             try {
                 $candidatePid = (Get-Content $stateFile -Raw | ConvertFrom-Json).daemon_pid
-                if ($candidatePid -and ($candidatePid -ne $uninstallPid)) {
-                    $purgePid = $candidatePid
+                if ($candidatePid -and ($candidatePid -ne $oldPid)) {
+                    $reinstallPid = $candidatePid
                     break
                 }
             } catch {
@@ -820,8 +811,10 @@ function Test-Uninstall {
         }
         Start-Sleep -Seconds 1
     }
-    if (-not $purgePid) {
-        Write-Note "    (state.json daemon_pid did not advance from old=$uninstallPid within 10s post-reinstall; skipping pre-purge PID capture)"
+    if ($reinstallPid) {
+        Write-Pass "post-reinstall state.json advanced to new daemon pid=$reinstallPid (was $oldPid)"
+    } else {
+        Write-Fail "state.json daemon_pid did not advance from old=$oldPid within 10s post-reinstall — --purge below would test against stale state and miss the race"
     }
 
     $purgeOut = "$env:TEMP\dbxignore-purge.out"
@@ -831,15 +824,6 @@ function Test-Uninstall {
     } else {
         Write-Fail "dbxignore uninstall --purge"
         Get-Content $purgeOut | ForEach-Object { Write-Note "    $_" }
-    }
-
-    # Same fire-and-forget caveat as the plain-uninstall block above:
-    # wait by PID for the re-installed daemon to exit so it can't write
-    # state.json after _purge_local_state() removed it (which would
-    # defeat both the state-files-removed assertion and the 6b
-    # state=no_state probe).
-    if ($purgePid) {
-        Wait-Process -Id $purgePid -Timeout 30 -ErrorAction SilentlyContinue
     }
 
     if (Test-Path "$T\watch-me.tmp") { Assert-AdsUnset -Path "$T\watch-me.tmp" -Name "purge - watch-me.tmp marker cleared" }

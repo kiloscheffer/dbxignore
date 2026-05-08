@@ -238,6 +238,7 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
 
 
 SWEEP_INTERVAL_S = 3600
+_INITIAL_SWEEP_JOIN_TIMEOUT_S = 60.0
 
 DEFAULT_TIMEOUTS_MS = {
     EventKind.RULES: 100,
@@ -570,6 +571,12 @@ def run(stop_event: threading.Event | None = None) -> None:
         # tests that bring the daemon up and down within a single process.
         # Without the wide try/finally the empty-configured_roots return
         # below would silently leak the handle for the rest of the process.
+        #
+        # ``worker`` is bound here (before the try) so the outer finally
+        # can join it before releasing the lock — a live worker mutating
+        # markers after lock release would let a second daemon start and
+        # run concurrently with it (PR #162 / Codex P2).
+        worker: threading.Thread | None = None
         try:
             # Defense-in-depth for the migration window: a legacy
             # (pre-#78) daemon wrote state.json but never created
@@ -640,13 +647,6 @@ def run(stop_event: threading.Event | None = None) -> None:
             for r in configured_roots:
                 observer.schedule(handler, str(r), recursive=True)
 
-            # ``worker`` is bound to None pre-observer-start so the outer
-            # ``finally`` can detect "observer never started; no worker to
-            # join" cases (e.g. ``_start_observer_or_exit`` calling
-            # ``sys.exit(75)`` on inotify ENOSPC/EMFILE). Once the observer
-            # is up and the worker is launched, the variable is rebound to
-            # the live ``Thread`` and the finally drives the join.
-            worker: threading.Thread | None = None
             debouncer.start()
             try:
                 _start_observer_or_exit(observer)
@@ -706,19 +706,25 @@ def run(stop_event: threading.Event | None = None) -> None:
                     observer.join()
             finally:
                 debouncer.stop()
-                # Wait for the initial-sweep worker to honor stop_event and
-                # exit cleanly. The worker's reconcile_subtree checks
-                # stop_event at every directory and file boundary, so the
-                # join is bounded by ~one directory's reconcile time. The
-                # 60s timeout guards against pathological cases. ``worker``
-                # is None when the observer failed to start (sys.exit before
-                # the worker spawn) — nothing to join in that case.
+                # Graceful-exit window: give the worker a bounded time to
+                # honor stop_event. reconcile_subtree checks stop_event at
+                # every directory boundary, so under normal conditions the
+                # join completes in ~one directory's time. The timeout guards
+                # against pathological blocked-syscall cases; if it fires the
+                # outer finally will still hold the lock until the worker
+                # actually exits.
                 if worker is not None:
-                    worker.join(timeout=60.0)
+                    worker.join(timeout=_INITIAL_SWEEP_JOIN_TIMEOUT_S)
                     if worker.is_alive():
                         logger.warning("initial-sweep worker did not exit within 60s of stop_event")
                 logger.info("daemon stopped")
         finally:
+            # The graceful-exit join above has a timeout; if it expired the
+            # worker is still alive. Joining here (no timeout) before
+            # releasing the lock ensures a second daemon cannot acquire the
+            # lock and start running concurrently with a live worker thread.
+            if worker is not None and worker.is_alive():
+                worker.join()
             singleton_lock.close()
 
 

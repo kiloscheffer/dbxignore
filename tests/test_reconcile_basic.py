@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from dbxignore import reconcile
 from dbxignore.rules import RuleCache
 from tests.conftest import FakeMarkers, WriteFile
@@ -141,3 +143,38 @@ def test_reconcile_subtree_honors_stop_event(
     # No descendant directories were visited.
     assert (tmp_path / "src" / "deep").resolve() not in fake_markers.is_ignored_calls
     assert report.errors == []
+
+
+def test_reconcile_subtree_stops_mid_dirnames_on_stop_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write_file: WriteFile
+) -> None:
+    # Regression for the dirnames list-comprehension window: the pre-fix code
+    # checked stop_event only at os.walk iteration boundaries, so all sibling
+    # directories in one level were processed before the next check could fire.
+    import threading
+
+    write_file(tmp_path / ".dropboxignore", "")
+    for i in range(5):
+        (tmp_path / f"dir_{i}").mkdir()
+
+    stop = threading.Event()
+    queries: list[Path] = []
+
+    class StopOnSecondQueryMarkers(FakeMarkers):
+        def is_ignored(self, path: Path) -> bool:
+            queries.append(path.resolve())
+            if len(queries) == 2:  # root is call 1; first subdir is call 2
+                stop.set()
+            return super().is_ignored(path)
+
+    monkeypatch.setattr(reconcile, "markers", StopOnSecondQueryMarkers())
+
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+    reconcile.reconcile_subtree(tmp_path, tmp_path, cache, stop_event=stop)
+
+    # Only 2 is_ignored calls should occur: root + 1 subdir (which set the
+    # event). The remaining 4 siblings must be skipped.
+    assert len(queries) == 2, (
+        f"expected 2 is_ignored calls (root + 1 subdir), got {len(queries)}: {queries}"
+    )

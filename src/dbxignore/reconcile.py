@@ -96,11 +96,20 @@ def reconcile_subtree(
         current_path = Path(current)
         # Reconcile each subdirectory; if it ends up ignored, prune it from
         # the walk (os.walk honors in-place modification of dirnames).
-        dirnames[:] = [
-            name
-            for name in dirnames
-            if not _reconcile_path(current_path / name, cache, report, dry_run=dry_run)
-        ]
+        # Use a loop rather than a comprehension so stop_event can interrupt
+        # mid-list — a flat directory with thousands of children would otherwise
+        # process every sibling before the next os.walk iteration check fired.
+        keep: list[str] = []
+        _dir_stopped = False
+        for name in dirnames:
+            if stop_event is not None and stop_event.is_set():
+                _dir_stopped = True
+                break
+            if not _reconcile_path(current_path / name, cache, report, dry_run=dry_run):
+                keep.append(name)
+        dirnames[:] = keep
+        if _dir_stopped:
+            break
         for name in filenames:
             if stop_event is not None and stop_event.is_set():
                 break

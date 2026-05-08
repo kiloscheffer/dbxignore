@@ -5,7 +5,7 @@ Cross-platform Python utility: keeps Dropbox ignore markers (NTFS alternate data
 ## Commands
 
 - `uv sync --all-extras` — install
-- `uv run pytest` — full suite; Windows adds a few ADS-integration tests via `@pytest.mark.windows_only`. If you hit `error: uv trampoline failed to canonicalize script path` or a silent `ModuleNotFoundError`, use `uv run python -m pytest` instead (see Gotchas).
+- `uv run python -m pytest` — full suite (canonical form, also listed under "How to run checks"). Plain `uv run pytest` works on a fresh `uv sync` but can fail with `ModuleNotFoundError` or `uv trampoline failed to canonicalize` on stale environments — see Gotchas. Windows adds a few ADS-integration tests via `@pytest.mark.windows_only`.
 - `uv run pytest -m "not windows_only"` — portable subset (what Ubuntu CI runs)
 - `uv run pytest -W error::DeprecationWarning` — local strict mode (not enforced in CI)
 - `uv run ruff check` — lint; rule families per `pyproject.toml` `[tool.ruff.lint] select` (don't restate the list here — pyproject is the source of truth); line length 100
@@ -37,7 +37,7 @@ The daemon prevents concurrent instances via `daemon._acquire_singleton_lock` �
 
 Destructive CLI verbs that race the daemon's reconcile loop (today: `cli.clear`) refuse-to-run when `state.is_daemon_alive(s.daemon_pid)` is True — the daemon's rule-reload reconcile fires within seconds of a `.dropboxignore` save, and the hourly recovery sweep reapplies markers wholesale, so a client-side mutation gets silently undone within an hour at worst. Pattern: `--force` overrides the daemon-alive guard for known short-window tests, `--yes` skips the confirmation prompt for scripted use, `--dry-run` previews. Both directions are destructive and both warrant a confirmation guard: `clear` triggers Dropbox to upload previously-ignored paths (potentially gigabytes for a `node_modules`-class subtree); `apply` (and any rule edit that flows through the daemon) causes Dropbox to delete previously-synced paths from the cloud and propagate the deletion to every linked device. The mental model that "ignored = stop syncing on this device" is wrong — Dropbox treats the marker as authoritative and removes the cloud copy, leaving the local copy as the only surviving copy until the marker is cleared. Both `clear` and `apply` carry the `--yes`/confirmation ceremony for that reason; the daemon-alive guard, by contrast, only applies to `clear` — the daemon performs `apply`'s operation continuously, so racing it is normal usage rather than a footgun.
 
-CLI fatal-error exits use `sys.exit(2)` project-wide (~26 callsites in `cli.py`). The verdict-driven commands `explain` / `check-ignore` (PR #127) use `0` (ignored) / `1` (not ignored) for the verdict surface AND `2` for fatal (no Dropbox roots, etc.) — preserving the project convention rather than git's `128`. New CLI commands should follow the `2`-for-fatal pattern; full git-parity (`128`) would be a separate exit-code modernization PR.
+CLI fatal-error exits use `sys.exit(2)` project-wide. The verdict-driven commands `explain` / `check-ignore` (PR #127) use `0` (ignored) / `1` (not ignored) for the verdict surface AND `2` for fatal (no Dropbox roots, etc.) — preserving the project convention rather than git's `128`. New CLI commands should follow the `2`-for-fatal pattern; full git-parity (`128`) would be a separate exit-code modernization PR.
 
 ## Gotchas
 

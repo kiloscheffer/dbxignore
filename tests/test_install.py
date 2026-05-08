@@ -243,6 +243,59 @@ def test_uninstall_task_logs_warning_and_still_deletes_on_timeout(
     assert schtasks_calls[-1] == ["schtasks", "/Delete", "/TN", install.TASK_NAME, "/F"]
 
 
+def test_uninstall_task_skips_wait_when_end_fails_and_daemon_pid_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """schtasks /End "Stops only the instances of a program started by a
+    scheduled task" (Microsoft docs), so a non-zero /End cannot make
+    a non-task-instance daemon exit — e.g. a manually-launched
+    `dbxignored` or a stale state.json from a different install. The
+    wait must be gated on /End succeeding; otherwise uninstall hangs
+    for the full _END_WAIT_TIMEOUT_S window with no benefit.
+
+    pytest-timeout (10s default) would force-fail if the wait engaged,
+    so this test is self-protective even without mocking time.sleep.
+    """
+    from dbxignore import state as state_module
+
+    monkeypatch.setattr(
+        state_module,
+        "read",
+        lambda: state_module.State(daemon_pid=12345),
+    )
+    # Daemon stays alive — would block the wait loop indefinitely if
+    # the gating logic regressed.
+    is_alive_calls: list[int] = []
+
+    def fake_is_alive(pid: int, create_time: float | None = None) -> bool:
+        is_alive_calls.append(pid)
+        return True
+
+    monkeypatch.setattr(state_module, "is_daemon_alive", fake_is_alive)
+
+    schtasks_calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        schtasks_calls.append(cmd)
+        if cmd[1] == "/End":
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=1,
+                stdout="",
+                stderr="ERROR: The system cannot find the path specified.\r\n",
+            )
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(install.subprocess, "run", fake_run)  # type: ignore[attr-defined]
+
+    install.uninstall_task()  # must not hang
+
+    # Wait skipped: is_daemon_alive never called despite daemon_pid being set.
+    assert is_alive_calls == []
+    # /Delete still ran.
+    assert [cmd[1] for cmd in schtasks_calls] == ["/End", "/Delete"]
+
+
 def test_uninstall_task_tolerates_end_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """schtasks /End returning non-zero is non-fatal — typical failure
     modes (target task isn't running, locale quirks) are operationally

@@ -171,6 +171,30 @@ def test_rulecache_still_flags_directory_rule_negation(tmp_path: Path) -> None:
     assert conflicts[0].dropped_pattern == "!build/keep/"
 
 
+def test_rulecache_literal_suffix_glob_negation_keeps_path_unignored(
+    tmp_path: Path,
+) -> None:
+    """Codex P1 (second iteration on PR #149) reproducer: ``bar/`` followed
+    by ``!**/bar/`` should leave ``bar/`` directories not-ignored on disk.
+
+    The include's literal-prefix (``bar/``) equals the negation's
+    literal-suffix (``bar/``), so pathspec last-match-wins resolves the
+    negation as an explicit override. Pre-fix the conservative-drop arm
+    flagged the conflict because the raw strings didn't match exactly,
+    silently dropping the negation and leaving the path ignored —
+    ``_dropped`` filters pre-pathspec inside ``RuleCache.match()``, so
+    the diagnostic-only claim was wrong: this changed marker behavior.
+    Marker-behavior regression guard."""
+    root = tmp_path
+    (root / ".dropboxignore").write_text("bar/\n!**/bar/\n", encoding="utf-8")
+    (root / "bar").mkdir()
+    cache = RuleCache()
+    cache.load_root(root)
+
+    assert cache.conflicts() == []
+    assert not cache.match(root / "bar")
+
+
 def test_rulecache_glob_prefix_same_target_override_keeps_path_unignored(
     tmp_path: Path,
 ) -> None:

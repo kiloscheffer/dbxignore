@@ -211,6 +211,77 @@ def _find_masking_include(
     return None
 
 
+def _literal_suffix(pattern: str) -> str | None:
+    """Return the literal suffix after the last glob metacharacter.
+
+    Mirror of ``literal_prefix`` for the trailing side of a pattern. Used by
+    the glob-prefix-negation arm of ``_detect_conflicts`` to extract the
+    "what does this negation actually target" path string. Examples:
+
+    - ``**/bar/`` → ``bar/`` (the `**` matches anywhere; the negation's
+      explicit target is bar/ at any depth).
+    - ``**/foo/bar/`` → ``foo/bar/`` (multi-segment literal suffix).
+    - ``foo*/baz/`` → ``baz/`` (suffix after the last glob in the first
+      segment).
+    - ``**`` → ``None`` (no literal portion).
+    - ``[a-z]/`` → ``None`` (charset glob with nothing literal after).
+
+    A leading ``/`` is stripped so the result composes against an
+    ancestor-relative path comparison.
+    """
+    p = pattern.lstrip("/")
+    if not p:
+        return None
+    last_glob = -1
+    for i, c in enumerate(p):
+        if c in "*?[":
+            last_glob = i
+    if last_glob == -1:
+        # No glob — caller should have handled via literal_prefix, but
+        # be defensive: the whole pattern is the literal suffix.
+        return p
+    rest = p[last_glob + 1 :]
+    if "/" not in rest:
+        return None
+    next_sep = rest.find("/")
+    suffix = rest[next_sep + 1 :]
+    if not suffix:
+        return None
+    return suffix
+
+
+def _is_same_target_override(
+    negation_raw_stripped: str,
+    negation_suffix: str,
+    earlier_include: _SequenceEntryLike,
+) -> bool:
+    """True if ``earlier_include`` is a same-target override of the negation.
+
+    Two equivalence cases are recognized:
+
+    1. **Exact raw match**: ``**/foo/`` followed by ``!**/foo/`` — the
+       user wrote the negation immediately after the include to unignore
+       the same target.
+    2. **Literal-prefix include matches the negation's literal-suffix**:
+       e.g. ``bar/`` + ``!**/bar/`` — the include's literal-prefix
+       (``bar/``) equals the negation's literal-suffix (``bar/``), so
+       pathspec last-match-wins resolves the negation as an explicit
+       override for the include's target paths. Surfaced by Codex P1
+       on PR #149's first iteration.
+
+    Either case means the negation produces real marker effect on at
+    least the directly-overridden target, so it is not fully inert and
+    must not be dropped — that would change marker behavior, not just
+    diagnostics, since ``RuleCache.match()`` filters entries listed in
+    ``_dropped`` before consulting pathspec.
+    """
+    include_raw = earlier_include.raw.strip()
+    if include_raw == negation_raw_stripped:
+        return True
+    include_prefix = literal_prefix(include_raw)
+    return include_prefix is not None and include_prefix == negation_suffix
+
+
 def _find_masking_directory_include(
     earlier_entries: Sequence[_SequenceEntryLike],
 ) -> _SequenceEntryLike | None:
@@ -279,20 +350,21 @@ def _detect_conflicts(sequence: Sequence[_SequenceEntryLike], *, root: Path) -> 
             # the safe call.
             if not raw.rstrip().endswith("/"):
                 continue
-            # Same-target override carve-out: if any earlier include's
-            # raw text matches the negation's exact pattern (e.g.
-            # `**/foo/` followed by `!**/foo/`), the user explicitly
-            # wanted to override that include and pathspec's last-match-
-            # wins handles it correctly. The negation produces real
-            # marker effect on at least the directly-overridden target,
-            # so it is not fully inert and must not be dropped — that
-            # would change marker behavior, not just diagnostics, since
-            # `RuleCache.match()` filters entries listed in `_dropped`
-            # before consulting pathspec. Surfaced by Codex review on
-            # PR #149.
+            # Same-target override carve-out: if any earlier include
+            # targets the same path the negation explicitly covers,
+            # pathspec last-match-wins handles the override and
+            # dropping the negation would change marker behavior
+            # (`RuleCache.match()` filters `_dropped` entries before
+            # consulting pathspec). `_is_same_target_override` recognizes
+            # both exact-raw matches (`**/foo/` + `!**/foo/`) and
+            # literal-prefix-matches-glob-suffix (`bar/` + `!**/bar/`).
+            # Surfaced by Codex on PR #149's first iteration; the second
+            # iteration broadened from raw-string equality to also
+            # include the literal-prefix-vs-suffix equivalence.
             negation_target = raw.rstrip()
-            if any(
-                e.pattern.include and e.raw.strip() == negation_target
+            negation_suffix = _literal_suffix(negation_target)
+            if negation_suffix is not None and any(
+                e.pattern.include and _is_same_target_override(negation_target, negation_suffix, e)
                 for e in sequence[:i]
             ):
                 continue

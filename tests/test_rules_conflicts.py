@@ -254,6 +254,28 @@ def test_detect_glob_prefix_same_target_override_no_flag(tmp_path: Path) -> None
     assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
 
 
+def test_detect_glob_prefix_literal_suffix_matches_literal_include_no_flag(
+    tmp_path: Path,
+) -> None:
+    """Literal-prefix include + glob-prefix negation with matching target.
+
+    ``bar/`` followed by ``!**/bar/`` is a same-target override even
+    though the raw strings don't match: the include's literal-prefix
+    (``bar/``) equals the negation's literal-suffix (``bar/``), and
+    pathspec last-match-wins resolves the negation as an explicit
+    override for ``bar/`` at the root. Dropping the negation would
+    leave ``bar/`` ignored on disk because ``_dropped`` filters
+    pre-pathspec; the same-target carve-out's literal-prefix-vs-suffix
+    arm prevents that. Surfaced by Codex P1 (second iteration) on PR
+    #149."""
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "bar/", str(root)),
+        _entry(str(root / ".dropboxignore"), 2, "!**/bar/", str(root)),
+    ]
+    assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
+
+
 def test_detect_glob_prefix_same_target_override_with_other_dir_include_no_flag(
     tmp_path: Path,
 ) -> None:

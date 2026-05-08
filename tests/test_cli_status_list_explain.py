@@ -577,3 +577,32 @@ def test_check_ignore_help_distinguishes_from_explain() -> None:
     assert check_ignore_help.exit_code == 0
     assert "Alias of `explain`" in check_ignore_help.output
     assert "Alias of `explain`" not in explain_help.output
+
+
+def test_status_human_path_shows_starting_when_initial_sweep_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Human-readable status output (no --summary flag): when last_sweep is
+    # None and daemon is alive, output should mark the daemon as "starting"
+    # so users know the initial sweep is still in progress, not that the
+    # daemon is fully ready.
+    state_path = tmp_path / "state.json"
+    monkeypatch.setattr(state, "default_path", lambda: state_path)
+    monkeypatch.setattr(state, "is_daemon_alive", lambda pid, create_time=None: True)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+
+    # Write a state.json with last_sweep=None — the new "starting" shape.
+    s = state.State(
+        daemon_pid=12345,
+        daemon_started=dt.datetime.now(dt.UTC),
+        last_sweep=None,
+    )
+    state.write(s, path=state_path)
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["status"])
+
+    assert result.exit_code == 0
+    assert "starting" in result.output
+    assert "initial sweep" in result.output

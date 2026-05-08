@@ -503,7 +503,10 @@ def status(summary: bool) -> None:
         if s.daemon_pid is None:
             click.echo("daemon: not running (no pid recorded)")
         elif state.daemon_is_running(s):
-            click.echo(f"daemon: running (pid={s.daemon_pid})")
+            if s.last_sweep is None:
+                click.echo(f"daemon: starting (initial sweep in progress) (pid={s.daemon_pid})")
+            else:
+                click.echo(f"daemon: running (pid={s.daemon_pid})")
         else:
             click.echo(f"daemon: not running (last pid={s.daemon_pid} — state.json may be stale)")
         if s.daemon_started:

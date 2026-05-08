@@ -1869,13 +1869,33 @@ The skew is incidental — the `claude*.yml` workflows were added at different t
 
 Touches: `.github/workflows/claude.yml`, `claude-code-review.yml`, `codex-followup.yml` (the v4/v5 split); `.github/workflows/codex-followup.yml` (the v6/v7 split).
 
+## 85. codex-followup wastes a fix-and-push attempt on workflow-file findings
+
+**Surfaced 2026-05-08 in PR #160.**
+
+The `codex-followup.yml` workflow attempts fix-and-push when Codex flags an issue. For findings whose target file lives under `.github/workflows/`, the push step fails because GitHub requires `workflows: write` on the GitHub App's token before any workflow-file modification can be pushed; today the workflow grants `contents: write` but NOT `workflows: write`. The result: Claude bot stages a correct fix, attempts the push, gets `refusing to allow a GitHub App to update workflow without "workflows" permission`, and posts a comment explaining the maintainer needs to push it.
+
+Concretely observed on PR #160: Codex flagged the message-validation gap on `commit-check.yml`; codex-followup ran (~$0.45/run); Claude bot diagnosed the issue correctly, staged commit `d31aa01` (a two-jobs variant of the eventual fix), attempted the push, hit the permission error, and posted `@kiloscheffer needs decision`. The maintainer (in a separate Claude session) then wrote the equivalent fix as commit `03cfd34` (two-steps variant) and pushed under their own identity. The bot's diagnosis was good but its fix-attempt cost was wasted.
+
+**Fix candidates:**
+
+- **Teach the prompt to route workflow-file findings to push-back-with-reasoning.** When the codex comment's `path` field starts with `.github/workflows/`, Claude should skip the fix-and-push branch entirely and post a substantive analysis pointing the maintainer at the right fix. Saves the wasted-fix-attempt cost and avoids the "I can't push" coda. ~10-line addition to the prompt's "Your job" section in `codex-followup.yml`. Lowest blast radius; preserves the maintainer-in-the-loop guardrail for workflow changes.
+
+- **Grant `workflows: write` to the codex-followup workflow.** Eliminates the limitation entirely; Claude bot autopilots workflow regressions. Security-boundary expansion: a malicious PR with a poisoned codex comment could escalate via the bot to modify CI/CD. Defensible if the maintainer values the autonomy more than the guardrail; the choice should be documented inline in the workflow if taken.
+
+- **Defer.** The current outcome — bot diagnoses, maintainer pushes — works. Workflow-file Codex findings are uncommon (one observed occurrence so far). The ~$0.45/occurrence cost is bounded.
+
+**Urgency:** low. Single observed occurrence so far (PR #160). Bundle with the next `codex-followup.yml` edit; until then, the maintainer-in-the-loop path covers the gap correctly. If this case reproduces 2-3 more times in a month, revisit and pick option 1 (the trade-off is unambiguously favorable at that frequency).
+
+Touches: `.github/workflows/codex-followup.yml` — the `prompt:` block under "Your job" if option 1; the `permissions:` block if option 2.
+
 ---
 
 ## Status
 
 ### Open
 
-Ten items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Eleven items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -1887,6 +1907,7 @@ Ten items. All passive (no concrete trigger requires action) — bundle each wit
 - **#54** — Watchdog observer's recursive watch schedules one inotify watch per directory under `~/Dropbox`, including marked-ignored subtrees. Architectural fix (per-directory watches with mark/unmark lifecycle) is ~200 LOC of race-condition-prone state-machine work; deferred until a beta tester hits the watch ceiling on a system with limits already raised.
 - **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall.
 - **#84** — `actions/checkout` is split @v4 vs @v5 across the six workflow files (Claude-bot tier on v4, test/build/CI tier on v5); `astral-sh/setup-uv` is split @v6 vs @v7 (`codex-followup.yml` lags). Visible-but-incidental skew surfaced during item #74's SHA-pin sweep — separate revertability axis from the pin work itself, so deferred. Mechanical fix: bump the laggards once major-version release-notes are reviewed. No observed pain from the split. Surfaced 2026-05-08 in PR #156.
+- **#85** — `codex-followup.yml` lacks `workflows: write` permission, so when Codex flags a `.github/workflows/**` finding the bot stages a correct fix but the push fails. The fix-attempt cost (~$0.45/run) is wasted; the maintainer ends up pushing the equivalent fix manually. Lowest-blast-radius fix is a ~10-line prompt addition routing workflow-file findings to push-back-with-reasoning instead of fix-and-push. Surfaced 2026-05-08 in PR #160.
 
 ### Resolved (reverse chronological)
 
@@ -2020,4 +2041,5 @@ How items entered this tracker:
 - **Items 66-67** added 2026-05-04 from a `/code-review` pass over PR #94 itself. Five parallel reviewer agents (CLAUDE.md adherence, shallow bug scan, git-history regressions, prior PR comments, code-comment-vs-code consistency) → 8 findings → 8 parallel scoring agents → both items came in at score 75, one shy of the ≥80 ship-bar but verified-real, filed for backlog. Same shape as the items 41-48 batch from 2026-05-02. Both are one-line behavioral consistency tweaks; bundle with the next CLI-touching change.
 - **Item 68** added 2026-05-04 from a `/simplify` review pass over PRs #95-#103 (the full session arc). Three parallel reviewer agents (reuse, quality, efficiency); the efficiency agent surfaced the conflict-walk-on-every-poll concern as the only finding above the noise floor. Three reuse/quality findings (the same `/simplify` pass) were small enough to fix inline in the same PR — see the chore commit's diff. Filed at low urgency; speculative perf concern, no user report yet.
 - **Item 84** added 2026-05-08 from PR #156's SHA-pin sweep — the version skew between Claude-bot tier (`@v4`/`@v6`) and test/build tier (`@v5`/`@v7`) was visible while running `gh api ...` to resolve each tag, but bumping major versions is a separate revertability axis from pinning to SHAs (per CLAUDE.md's split-along-revertability-lines rule). Filed for a future workflow-touching PR to absorb. The Dependabot config landed alongside #74 will already nudge both tiers forward over time, so this item may eventually self-resolve without an explicit modernization PR.
+- **Item 85** added 2026-05-08 from observing the codex-followup workflow's run on PR #160 — the bot diagnosed correctly and staged a fix, but `git push` failed with "refusing to allow a GitHub App to update workflow without 'workflows' permission". One observed occurrence; filed at low urgency to bundle with the next `codex-followup.yml` edit. The trade is between expanding the bot's permission scope (more autonomy) vs. teaching the prompt to skip workflow-file fixes (preserves the maintainer-in-the-loop guardrail).
 - **Item 53 reframe note** added 2026-05-08 in PR #157 — the original framing (filed 2026-05-03) proposed a "marker-present + match-still-positive" pruning fix; tracing `reconcile.py:81-85` + `_reconcile_path`'s `return currently_ignored` tail revealed the proposed behavior was already implemented. PR #157 added `tests/test_reconcile_basic.py::test_does_not_descend_into_marked_subtree` to pin the contract and reframed the body around the actual remaining concern: the *initial* sweep on a fresh tree without markers, where pruning can't help by definition. Three new fix candidates filed (ready-before-sweep, persisted hint, finer-grained parallelism). Reframe-in-place rather than close-and-refile because the underlying perf pain is still real and the item-number identity is useful — same shape as item #33's validation-note pattern.

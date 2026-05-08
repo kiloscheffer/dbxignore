@@ -102,7 +102,12 @@ jobs:
                - Run `uv run mypy <touched-files>` (project convention is scoped mypy; full-tree
                  has documented pre-existing `[attr-defined]` errors per CLAUDE.md gotcha).
                - Commit (subject ≤72 chars; description MUST NOT start with `#` after `: ` —
-                 use `item #N` not `#N`). Pre-flight via the **temp-file form** per BACKLOG #83:
+                 use `item #N` not `#N`). The commit message body MUST end with the literal
+                 footer line ``Codex-followup: yes`` (separate paragraph at the end, not in
+                 the subject). The Loop budget section uses this marker to count prior auto-fix
+                 attempts; without the footer the budget either over-counts (gating normal
+                 feature PRs) or under-counts (allowing runaway iteration).
+                 Pre-flight via the **temp-file form** per BACKLOG #83:
                  `git log -1 --format='%s' > /tmp/subj.txt && commit-check -m /tmp/subj.txt`.
                  Do NOT use `commit-check -m /dev/stdin` — it returns stale-buffered results on
                  Git Bash / MSYS2.
@@ -140,10 +145,22 @@ jobs:
 
             ## Loop budget
 
-            Run `git log origin/main..HEAD --oneline | wc -l` after checkout. If the count is ≥ 4
-            (i.e. 4+ commits already on this branch beyond main), prefer escalation over a 4th fix —
-            convergence is asymptotic past three rounds. The exception: if the bot's finding is a
-            simple typo / one-character fix, just do it.
+            **Count only prior auto-fix commits**, not the PR's normal feature commits. Otherwise
+            a 4-commit feature PR would hit the budget on the very first Codex finding, which is
+            wrong (the budget is meant to prevent runaway iteration cycles, not to gate normal PRs).
+
+            **Marker convention**: every commit you make in the **Fix-and-push** action MUST
+            include the literal footer line ``Codex-followup: yes`` in its commit message body
+            (separate paragraph at the end, not in the subject). Then count via:
+
+                git log --grep='^Codex-followup: yes$' origin/main..HEAD --oneline | wc -l
+
+            If that count is ≥ 3, prefer escalation over a 4th auto-fix — convergence is asymptotic
+            past three rounds (PR #149 demonstrated five Codex P1s; the fifth was wrong).
+
+            **Exceptions**: a simple typo / one-character / docstring fix is cheap enough to
+            implement even at the budget — the cost is bounded and the alternative (escalation
+            for a typo) wastes the maintainer's attention.
 
             ## Project conventions (from CLAUDE.md)
 

@@ -74,3 +74,41 @@ def test_matches_files_not_just_directories(
     assert (tmp_path / "a.log").resolve() in fake_markers._ignored
     assert (tmp_path / "b.txt").resolve() not in fake_markers._ignored
     assert report.marked == 1
+
+
+def test_does_not_descend_into_marked_subtree(
+    tmp_path: Path, fake_markers: FakeMarkers, write_file: WriteFile
+) -> None:
+    # Steady-state pruning contract (backlog item #53): when a child directory
+    # is already marked AND match() still confirms it should be ignored,
+    # _reconcile_path returns currently_ignored=True and the dirnames[:] filter
+    # drops it from the walk. Descendants are NEVER queried.
+    #
+    # If a future refactor breaks this contract, the per-tick cost of the
+    # hourly recovery sweep regresses from O(unmarked dirs) to O(all dirs).
+    write_file(tmp_path / ".dropboxignore", "big_dir/\n")
+    big_dir = tmp_path / "big_dir"
+    grand_a = big_dir / "grand_a"
+    grand_b = big_dir / "grand_b"
+    grand_a.mkdir(parents=True)
+    grand_b.mkdir()
+    deep_file = grand_a / "deep.txt"
+    deep_file.touch()
+    fake_markers.set_ignored(big_dir)
+    fake_markers.set_calls.clear()  # Pre-seed shouldn't count as a sweep mutation.
+
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+
+    report = reconcile.reconcile_subtree(tmp_path, tmp_path, cache)
+
+    queried = set(fake_markers.is_ignored_calls)
+    assert big_dir.resolve() in queried, "subtree root must be queried"
+    assert grand_a.resolve() not in queried, "grandchild directory must be pruned"
+    assert grand_b.resolve() not in queried, "grandchild directory must be pruned"
+    assert deep_file.resolve() not in queried, "great-grandchild file must be pruned"
+    assert fake_markers.set_calls == [], "no new markers should be written"
+    assert fake_markers.clear_calls == [], "marker on big_dir must NOT be cleared"
+    assert report.marked == 0
+    assert report.cleared == 0
+    assert report.errors == []

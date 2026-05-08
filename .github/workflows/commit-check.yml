@@ -10,6 +10,16 @@ permissions:
 
 jobs:
   check:
+    # Skip on bot-authored PRs. Dependabot opens branches named
+    # `dependabot/github_actions/<group>` (and similar for other ecosystems);
+    # those don't match `cchk.toml`'s `allow_branch_types`, so `branch: true`
+    # below would fail every Dependabot PR. Mirrors the same `[bot]` actor
+    # filter used in `claude-code-review.yml`. Conventional Commits validation
+    # for the *commit message* is still enforced for bot PRs by Dependabot's
+    # own `commit-message.prefix` config in `.github/dependabot.yml`, which
+    # produces `ci(deps): bump …` subjects out of the box. Surfaced by Codex
+    # on PR #156.
+    if: ${{ !endsWith(github.actor, '[bot]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5

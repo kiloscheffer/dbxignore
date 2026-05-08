@@ -8,6 +8,10 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import threading
 
 from dbxignore import markers
 from dbxignore._logging import timed_debug
@@ -32,7 +36,12 @@ class Report:
 
 
 def reconcile_subtree(
-    root: Path, subdir: Path, cache: RuleCache, *, dry_run: bool = False
+    root: Path,
+    subdir: Path,
+    cache: RuleCache,
+    *,
+    dry_run: bool = False,
+    stop_event: threading.Event | None = None,
 ) -> Report:
     """Reconcile ``subdir`` under ``root`` with the current rule set.
 
@@ -49,6 +58,13 @@ def reconcile_subtree(
     (``report.marked`` / ``report.cleared``) reflect *would-have-been*
     mutations; per-path detail lives in ``report.would_mark`` /
     ``report.would_clear`` for CLI consumption.
+
+    When ``stop_event`` is supplied and gets set during the walk, the walk
+    breaks out at the next directory or file boundary. The ``Report``
+    returned has accurate counts for what completed before the break;
+    convergence (next sweep over the same paths) finishes the rest. Used
+    by the daemon's initial-sweep worker to support cooperative
+    cancellation on SIGTERM (item #53).
     """
     start = time.perf_counter()
     report = Report()
@@ -75,15 +91,28 @@ def reconcile_subtree(
         return report
 
     for current, dirnames, filenames in os.walk(subdir, followlinks=False):
+        if stop_event is not None and stop_event.is_set():
+            break
         current_path = Path(current)
         # Reconcile each subdirectory; if it ends up ignored, prune it from
         # the walk (os.walk honors in-place modification of dirnames).
-        dirnames[:] = [
-            name
-            for name in dirnames
-            if not _reconcile_path(current_path / name, cache, report, dry_run=dry_run)
-        ]
+        # Use a loop rather than a comprehension so stop_event can interrupt
+        # mid-list — a flat directory with thousands of children would otherwise
+        # process every sibling before the next os.walk iteration check fired.
+        keep: list[str] = []
+        _dir_stopped = False
+        for name in dirnames:
+            if stop_event is not None and stop_event.is_set():
+                _dir_stopped = True
+                break
+            if not _reconcile_path(current_path / name, cache, report, dry_run=dry_run):
+                keep.append(name)
+        dirnames[:] = keep
+        if _dir_stopped:
+            break
         for name in filenames:
+            if stop_event is not None and stop_event.is_set():
+                break
             _reconcile_path(current_path / name, cache, report, dry_run=dry_run)
 
     report.duration_s = time.perf_counter() - start

@@ -43,6 +43,18 @@ jobs:
     if: |
       github.event.comment.user.login == 'chatgpt-codex-connector[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository
+    # Serialize per-PR: when Codex posts multiple findings on the same PR
+    # in quick succession, GitHub emits one event per comment and we'd
+    # otherwise start multiple Claude agents racing on the same branch
+    # (each checking out HEAD, editing, committing, then `git push`-ing
+    # and hitting non-fast-forward failures or losing fixes). Keyed on
+    # PR number so different PRs still process in parallel.
+    # `cancel-in-progress: false` queues subsequent comments rather than
+    # cancelling earlier ones — half-applied fixes are worse than queued
+    # delay. Surfaced by Codex on PR #150's third review round (P2).
+    concurrency:
+      group: codex-followup-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: write        # push fix commits to the PR branch
@@ -91,19 +103,15 @@ jobs:
           # PR #150's first review round (P2). Patterns scoped to exact tools
           # Claude needs; the runner is a fresh CI VM with no persistent
           # state, so the blast radius is bounded.
+          # The action's parser splits this single quoted string on
+          # commas to recover individual tool entries. Whitespace-
+          # separated form (which I had initially) collapses into one
+          # bogus "Bash(uv:*) Bash(git:*) ..." tool name that the
+          # parser rejects, leaving Claude with no tools at all.
+          # Surfaced by Codex on PR #150's third review round (P1).
           claude_args: >-
             --allowedTools
-            "Bash(uv:*)
-            Bash(git:*)
-            Bash(gh:*)
-            Bash(commit-check:*)
-            Bash(echo:*)
-            Bash(cat:*)
-            Bash(wc:*)
-            Bash(test:*)
-            Bash(grep:*)
-            Bash(jq:*)
-            Read Write Edit Glob Grep"
+            "Bash(uv:*),Bash(git:*),Bash(gh:*),Bash(commit-check:*),Bash(echo:*),Bash(cat:*),Bash(wc:*),Bash(test:*),Bash(grep:*),Bash(jq:*),Read,Write,Edit,Glob,Grep"
           prompt: |
             A Codex bot review comment was posted on PR #${{ github.event.pull_request.number }}
             (${{ github.server_url }}/${{ github.repository }}/pull/${{ github.event.pull_request.number }}).

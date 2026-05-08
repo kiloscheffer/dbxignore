@@ -730,8 +730,25 @@ function Test-Uninstall {
     # the time `dbxignore uninstall` returns, the daemon process is
     # gone — same synchronous-shutdown contract as Linux's
     # `systemctl --user disable --now` and macOS's `launchctl bootout`.
-    # The PR #169 PID-dance + Wait-Process workarounds previously here
-    # are no longer needed; single-shot probes for 6a/6b are sufficient.
+    # The PR #169 Wait-Process workarounds previously here are no
+    # longer needed; single-shot probes for 6a/6b are sufficient.
+    #
+    # Capture the pre-uninstall daemon_pid so the post-reinstall poll
+    # below can wait for state.json to advance to the NEW daemon's pid
+    # before --purge fires. Without that gate, --purge reads the stale
+    # daemon_pid from state.json (retained by plain uninstall), routes
+    # uninstall_task's synchronous wait at the long-dead pid, and
+    # /Delete reverts to fire-and-forget against the live re-installed
+    # daemon — exactly the race #87 was meant to close.
+    $oldPid = $null
+    if (Test-Path $stateFile) {
+        try {
+            $oldPid = (Get-Content $stateFile -Raw | ConvertFrom-Json).daemon_pid
+        } catch {
+            # leave $oldPid as $null — best-effort
+        }
+    }
+
     $uninstOut = "$env:TEMP\dbxignore-uninst.out"
     dbxignore uninstall *> $uninstOut
     if ($LASTEXITCODE -eq 0) {
@@ -769,16 +786,35 @@ function Test-Uninstall {
     dbxignore install 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) { Stop-Abort "re-install failed" }
 
-    # Wait for the new daemon to write its early state.json so --purge
-    # exercises the realistic "purge against a running daemon" scenario
-    # rather than "purge an empty install." Daemon's early state.write
-    # fires within milliseconds of process startup; 10s is generous.
-    # Post-#87 there is no PID-comparison race to dodge here — uninstall
-    # is synchronous, so any daemon that wrote state.json is dead before
-    # _purge_local_state runs.
+    # Wait for state.json's daemon_pid to ADVANCE from the pre-uninstall
+    # value to the new daemon's pid. state.json is retained by plain
+    # uninstall, so a Test-Path-only check passes on the stale file
+    # immediately and --purge ends up reading the dead pre-uninstall
+    # daemon_pid — uninstall_task's synchronous wait would then target a
+    # long-dead pid and /Delete would revert to fire-and-forget against
+    # the actually-live re-installed daemon. Polling for daemon_pid !=
+    # $oldPid pins the test to the realistic "purge against a running
+    # daemon" race that #87 closes. PID reuse in a 10s window is
+    # vanishingly rare on Windows.
+    $reinstallPid = $null
     for ($i = 0; $i -lt 10; $i++) {
-        if (Test-Path $stateFile) { break }
+        if (Test-Path $stateFile) {
+            try {
+                $candidatePid = (Get-Content $stateFile -Raw | ConvertFrom-Json).daemon_pid
+                if ($candidatePid -and ($candidatePid -ne $oldPid)) {
+                    $reinstallPid = $candidatePid
+                    break
+                }
+            } catch {
+                # keep polling
+            }
+        }
         Start-Sleep -Seconds 1
+    }
+    if ($reinstallPid) {
+        Write-Pass "post-reinstall state.json advanced to new daemon pid=$reinstallPid (was $oldPid)"
+    } else {
+        Write-Fail "state.json daemon_pid did not advance from old=$oldPid within 10s post-reinstall — --purge below would test against stale state and miss the race"
     }
 
     $purgeOut = "$env:TEMP\dbxignore-purge.out"

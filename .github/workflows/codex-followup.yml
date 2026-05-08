@@ -102,12 +102,21 @@ jobs:
                - Run `uv run mypy <touched-files>` (project convention is scoped mypy; full-tree
                  has documented pre-existing `[attr-defined]` errors per CLAUDE.md gotcha).
                - Commit (subject ≤72 chars; description MUST NOT start with `#` after `: ` —
-                 use `item #N` not `#N`). Pre-flight via `echo "<subject>" | commit-check -m /dev/stdin`.
+                 use `item #N` not `#N`). Pre-flight via the **temp-file form** per BACKLOG #83:
+                 `git log -1 --format='%s' > /tmp/subj.txt && commit-check -m /tmp/subj.txt`.
+                 Do NOT use `commit-check -m /dev/stdin` — it returns stale-buffered results on
+                 Git Bash / MSYS2.
                - Push.
-               - Reply to the bot via:
+               - Reply to the bot with the substantive answer:
                  `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments \`
                  `   -F in_reply_to=${{ github.event.comment.id }} \`
-                 `   -f body="<your reply>"`
+                 `   -f body="<your reply describing what you fixed and why>"`
+               - Then send a SEPARATE follow-up reply with literally `@codex review` to
+                 re-summon the bot for verification on the new state. Without this, Codex
+                 won't re-evaluate after your push and the iteration loop dies prematurely:
+                 `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments \`
+                 `   -F in_reply_to=${{ github.event.comment.id }} \`
+                 `   -f body="@codex review"`
 
             2. **Push-back-with-reasoning** — the suggestion would cause a regression. The
                common shape in this project: the bot asks to drop a negation as inert via
@@ -117,11 +126,17 @@ jobs:
                unignoring (because pathspec last-match-wins put the negation last) become
                ignored again at the `match()` level — and since `reconcile._reconcile_path`
                sets/clears markers based on `match()`, this is a real on-disk marker change,
-               not a diagnostic-only one. Reply with the technical reasoning, no code change.
+               not a diagnostic-only one.
+               - Reply with the technical reasoning, no code change.
+               - Then send a SEPARATE follow-up reply with literally `@codex review` so the
+                 bot weighs in on the pushback. Codex may agree (resolving the thread) or
+                 surface a new angle — either is a valid loop continuation. Without the
+                 re-summon, the bot's last comment stands unaddressed visually.
 
             3. **Escalate** — finding requires architectural judgment OR you've hit the 3-fix-commit
                budget OR you're uncertain. Reply with a comment that includes `@kiloscheffer needs
-               decision` and a 1-paragraph summary. Stop on this PR.
+               decision` and a 1-paragraph summary. Stop on this PR — do NOT send `@codex review`
+               in escalation cases (the maintainer should make the call, not another bot round).
 
             ## Loop budget
 

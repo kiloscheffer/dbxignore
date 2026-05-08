@@ -1617,6 +1617,8 @@ The current convention is consistent (tags everywhere) — switching to SHAs wou
 
 Touches: every file in `.github/workflows/` that uses third-party actions (currently `release.yml`, `test.yml`, `commit-check.yml`, plus the new `claude.yml` and `claude-code-review.yml` from PR #111); new `.github/dependabot.yml` for option 1.
 
+**Status: RESOLVED 2026-05-08 (PR #156).** Took fix candidate (option 1): all 22 third-party action references across the six `.github/workflows/*.yml` files pinned to 40-char commit SHAs with trailing `# v<X>`-style comments naming the resolved tag. New `.github/dependabot.yml` with `package-ecosystem: github-actions`, weekly schedule, `prefix: "ci"` + `include: "scope"` so auto-PRs satisfy `cchk.toml`'s Conventional Commits gate (`ci(deps): bump …`), and an `actions-minor-patch` group bundling minor+patch bumps into one weekly PR (major bumps stay individual for review). Two version-skew inconsistencies surfaced during the sweep (`actions/checkout` v4 vs v5, `astral-sh/setup-uv` v6 vs v7) — filed as item #84 rather than bundled here, per CLAUDE.md's revertability-axis split rule.
+
 ## 75. Cross-script Phase 4.5 extraction in manual-test-{ubuntu-vps,macos}.sh
 
 **Surfaced 2026-05-05 in `/simplify` review of PRs #114 + #115 (confidence 45).**
@@ -1838,6 +1840,27 @@ Touches: `CLAUDE.md` Gotchas section (the existing `--no-verify` bullet document
 
 **Status: RESOLVED 2026-05-08 (PR #151).** Fix candidate (A) — document the temp-file form as the canonical pre-flight — landed in PR #151's CLAUDE.md edit (commit `a1fdded`); the `--no-verify` gotcha now reads "Use the temp-file form, NOT `/dev/stdin`" with the reliable loop shape spelled out. Candidate (B) (Python one-liner) declined as overkill — (A) addressed the CI-visible failure mode. The BACKLOG-update arm of PR #151 corrected this item's body framing but missed the close-bookkeeping; backfilled here in PR #155 per the item #42 precedent.
 
+## 84. Workflow major-version skew: actions/checkout v4 vs v5, setup-uv v6 vs v7
+
+**Surfaced 2026-05-08 in PR #156 (item #74's SHA-pin sweep).**
+
+While SHA-pinning all third-party actions in `.github/workflows/`, two version-split inconsistencies became visible across the six workflow files:
+
+1. `actions/checkout` is at `@v5` in `release.yml`, `commit-check.yml`, `test.yml` (the test/build/CI tier) but at `@v4` in `claude.yml`, `codex-followup.yml`, `claude-code-review.yml` (the Claude-bot tier).
+2. `astral-sh/setup-uv` is at `@v7` in `release.yml` and `test.yml` but at `@v6` in `codex-followup.yml`.
+
+The skew is incidental — the `claude*.yml` workflows were added at different times and inherited the then-current major versions, while the test/build workflows were updated later. Functionally everything works today; the split shows as minor diff-noise during workflow review and as a small confusion-tax for anyone copy-pasting between the workflows.
+
+**Fix candidates:**
+
+- **Bump the laggards to align majors.** `actions/checkout@v4 → @v5` in three Claude-bot workflows; `astral-sh/setup-uv@v6 → @v7` in `codex-followup.yml`. Verify each major bump's release notes for breaking changes that affect this project's usage. Mechanical but warrants its own revertability axis.
+- **Align downward.** Pin the test/build workflows at v4 to match the Claude-bot tier. Strictly worse — postpones the upgrade.
+- **Defer.** No observed pain from the split. Dependabot (added in PR #156) will surface bumps individually as they release; the skew naturally compresses over time as both tiers move forward.
+
+**Urgency:** low. Polish surfaced from #74's pin sweep. Bundle with the next workflow-touching change, or run as a standalone hygiene PR. The Dependabot config landed in PR #156 will already nudge both tiers forward over time, so this item may eventually self-resolve.
+
+Touches: `.github/workflows/claude.yml`, `claude-code-review.yml`, `codex-followup.yml` (the v4/v5 split); `.github/workflows/codex-followup.yml` (the v6/v7 split).
+
 ---
 
 ## Status
@@ -1855,11 +1878,13 @@ Ten items. All passive (no concrete trigger requires action) — bundle each wit
 - **#53** — `_sweep_once` walks every directory regardless of marker state — measured 49.62s on a 27k-dir tree. Skip-on-(marker-present + match-still-positive) collapses descent into already-ignored subtrees; rule-mutation events already force a re-walk, so the steady-state invariant holds. ~50 LOC. Bundle with the next daemon-touching change.
 - **#54** — Watchdog observer's recursive watch schedules one inotify watch per directory under `~/Dropbox`, including marked-ignored subtrees. Architectural fix (per-directory watches with mark/unmark lifecycle) is ~200 LOC of race-condition-prone state-machine work; deferred until a beta tester hits the watch ceiling on a system with limits already raised.
 - **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall.
-- **#74** — GitHub Actions pinned to mutable major-version tags (`@v4`, `@v1`, `@v2.6.0`, `@release/v1`) rather than 40-char SHAs across all workflow files. Speculative security hardening — switching to SHAs would be a project-wide convention shift requiring a Dependabot maintenance practice. Surfaced 2026-05-05 in `code-reviewer` review of PR #111. No observed incident or specific pressure.
+- **#84** — `actions/checkout` is split @v4 vs @v5 across the six workflow files (Claude-bot tier on v4, test/build/CI tier on v5); `astral-sh/setup-uv` is split @v6 vs @v7 (`codex-followup.yml` lags). Visible-but-incidental skew surfaced during item #74's SHA-pin sweep — separate revertability axis from the pin work itself, so deferred. Mechanical fix: bump the laggards once major-version release-notes are reviewed. No observed pain from the split. Surfaced 2026-05-08 in PR #156.
 
 ### Resolved (reverse chronological)
 
 #### 2026-05-08
+
+- **#74** in PR #156 — pinned all 22 GitHub Action references across the six `.github/workflows/*.yml` files to 40-char commit SHAs with trailing `# v<X>`-style comments naming the resolved tag. New `.github/dependabot.yml` with `package-ecosystem: github-actions`, weekly schedule, Conventional Commits prefix `ci(deps)` to satisfy `cchk.toml`, and an `actions-minor-patch` group bundling minor+patch bumps. Took fix candidate (option 1) — sweep all actions, not just release-critical. Two version-skew inconsistencies (`actions/checkout` v4 vs v5, `astral-sh/setup-uv` v6 vs v7) filed as item #84 for a separate version-modernization PR rather than bundled here, per CLAUDE.md's revertability-axis split rule. CLAUDE.md's `## Release` section gained a new bullet documenting the SHA-pin convention so future workflow additions don't degrade the trust posture. **Codex P2 follow-up** in the same PR: added `if: ${{ !endsWith(github.actor, '[bot]') }}` to `commit-check.yml` so Dependabot's `dependabot/github_actions/...` branch names don't trip `cchk.toml`'s `allow_branch_types` enforcement; matches the existing skip-for-bot-actors pattern in `claude-code-review.yml:25`. Conventional Commits validation for the *message* is still enforced for bot PRs via Dependabot's own `commit-message.prefix: "ci"` + `include: "scope"` config, which produces `ci(deps): bump …` subjects out of the box.
 
 - **#83** in PR #151 (commit `a1fdded`) — backfill close. Fix candidate (A) — document the temp-file form as the canonical pre-flight — landed silently in PR #151's CLAUDE.md edit; the `--no-verify` gotcha now reads "Use the temp-file form, NOT `/dev/stdin`" with the reliable loop shape spelled out. The BACKLOG-update arm of PR #151 corrected the item body's framing but missed the close-bookkeeping; backfilled in PR #155 per the item #42 precedent. Candidate (B) (Python one-liner) declined as overkill — (A) addressed the CI-visible failure mode (over-72-char subject regressions on PRs #144, #145, #149).
 
@@ -1986,3 +2011,4 @@ How items entered this tracker:
 - **Items 55-65** added 2026-05-04 from a design-review pass over the daemon, CLI, install, rules, and macOS-backend layers. Eleven items spanning defensive-coding gaps (#55, #58), ergonomic feature gaps (#56, #59-#64), one perf optimization companion to item #53 (#62), and one Windows UX feature (#65). All filed at low or low-medium urgency — no fired triggers; bundle each with the next code-touch in its respective layer.
 - **Items 66-67** added 2026-05-04 from a `/code-review` pass over PR #94 itself. Five parallel reviewer agents (CLAUDE.md adherence, shallow bug scan, git-history regressions, prior PR comments, code-comment-vs-code consistency) → 8 findings → 8 parallel scoring agents → both items came in at score 75, one shy of the ≥80 ship-bar but verified-real, filed for backlog. Same shape as the items 41-48 batch from 2026-05-02. Both are one-line behavioral consistency tweaks; bundle with the next CLI-touching change.
 - **Item 68** added 2026-05-04 from a `/simplify` review pass over PRs #95-#103 (the full session arc). Three parallel reviewer agents (reuse, quality, efficiency); the efficiency agent surfaced the conflict-walk-on-every-poll concern as the only finding above the noise floor. Three reuse/quality findings (the same `/simplify` pass) were small enough to fix inline in the same PR — see the chore commit's diff. Filed at low urgency; speculative perf concern, no user report yet.
+- **Item 84** added 2026-05-08 from PR #156's SHA-pin sweep — the version skew between Claude-bot tier (`@v4`/`@v6`) and test/build tier (`@v5`/`@v7`) was visible while running `gh api ...` to resolve each tag, but bumping major versions is a separate revertability axis from pinning to SHAs (per CLAUDE.md's split-along-revertability-lines rule). Filed for a future workflow-touching PR to absorb. The Dependabot config landed alongside #74 will already nudge both tiers forward over time, so this item may eventually self-resolve without an explicit modernization PR.

@@ -631,8 +631,6 @@ def run(stop_event: threading.Event | None = None) -> None:
             for r in configured_roots:
                 cache.load_root(r)
 
-            _sweep_once(configured_roots, cache, daemon_started, daemon_create_time)
-
             debouncer = Debouncer(
                 on_emit=lambda item: _dispatch(item[2], cache, configured_roots),
                 timeouts_ms=_timeouts_from_env(),
@@ -642,21 +640,83 @@ def run(stop_event: threading.Event | None = None) -> None:
             for r in configured_roots:
                 observer.schedule(handler, str(r), recursive=True)
 
+            # ``worker`` is bound to None pre-observer-start so the outer
+            # ``finally`` can detect "observer never started; no worker to
+            # join" cases (e.g. ``_start_observer_or_exit`` calling
+            # ``sys.exit(75)`` on inotify ENOSPC/EMFILE). Once the observer
+            # is up and the worker is launched, the variable is rebound to
+            # the live ``Thread`` and the finally drives the join.
+            worker: threading.Thread | None = None
             debouncer.start()
             try:
                 _start_observer_or_exit(observer)
                 logger.info("watching roots: %s", [str(r) for r in configured_roots])
+
+                # Early state.write: signal "daemon alive, sweep pending"
+                # to consumers. last_sweep=None is the canonical
+                # state=starting marker (item #53). On disk-write failure
+                # log WARNING and continue — the worker will retry the
+                # write at end of initial sweep.
+                early_state = state_module.State(
+                    daemon_pid=os.getpid(),
+                    daemon_create_time=daemon_create_time,
+                    daemon_started=daemon_started,
+                    last_sweep=None,
+                    watched_roots=configured_roots,
+                )
+                try:
+                    state_module.write(early_state)
+                except OSError as exc:
+                    logger.warning("could not write early state file: %s", exc)
+
+                # Initial sweep moves to a worker thread so the observer
+                # is responsive and state.json reflects daemon-alive
+                # immediately, even on large trees where the sweep takes
+                # ~50s. On worker failure, the worker logs the exception
+                # and sets stop_event, triggering the same shutdown path
+                # signal handlers use.
+                worker = threading.Thread(
+                    target=_initial_sweep_worker,
+                    args=(
+                        configured_roots,
+                        cache,
+                        daemon_started,
+                        daemon_create_time,
+                        stop_event,
+                    ),
+                    daemon=False,
+                    name="dbxignored-initial-sweep",
+                )
+                worker.start()
+
                 try:
                     while not stop_event.is_set():
                         woke = stop_event.wait(SWEEP_INTERVAL_S)
                         if woke:
                             break
-                        _sweep_once(configured_roots, cache, daemon_started, daemon_create_time)
+                        _sweep_once(
+                            configured_roots,
+                            cache,
+                            daemon_started,
+                            daemon_create_time,
+                            stop_event=stop_event,
+                        )
                 finally:
                     observer.stop()
                     observer.join()
             finally:
                 debouncer.stop()
+                # Wait for the initial-sweep worker to honor stop_event and
+                # exit cleanly. The worker's reconcile_subtree checks
+                # stop_event at every directory and file boundary, so the
+                # join is bounded by ~one directory's reconcile time. The
+                # 60s timeout guards against pathological cases. ``worker``
+                # is None when the observer failed to start (sys.exit before
+                # the worker spawn) — nothing to join in that case.
+                if worker is not None:
+                    worker.join(timeout=60.0)
+                    if worker.is_alive():
+                        logger.warning("initial-sweep worker did not exit within 60s of stop_event")
                 logger.info("daemon stopped")
         finally:
             singleton_lock.close()
@@ -739,3 +799,30 @@ def _sweep_once(
         state_module.write(s)
     except OSError as exc:
         logger.warning("could not write state file: %s", exc)
+
+
+def _initial_sweep_worker(
+    roots: list[Path],
+    cache: RuleCache,
+    daemon_started: dt.datetime,
+    daemon_create_time: float | None,
+    stop_event: threading.Event,
+) -> None:
+    """Run the initial sweep in a worker thread (item #53).
+
+    Catches all non-system exceptions, logs with traceback, and sets
+    ``stop_event`` so the main thread shuts the daemon down via the same
+    code path SIGTERM uses. ``BaseException`` (KeyboardInterrupt, SystemExit)
+    propagates normally — those go through the signal handler.
+    """
+    try:
+        _sweep_once(
+            roots,
+            cache,
+            daemon_started,
+            daemon_create_time,
+            stop_event=stop_event,
+        )
+    except Exception:
+        logger.exception("initial sweep worker failed; shutting daemon down")
+        stop_event.set()

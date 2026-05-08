@@ -1836,13 +1836,15 @@ Or directly: `echo "<subject>" > /tmp/subj.txt && commit-check -m /tmp/subj.txt`
 
 Touches: `CLAUDE.md` Gotchas section (the existing `--no-verify` bullet documents the loop shape).
 
+**Status: RESOLVED 2026-05-08 (PR #151).** Fix candidate (A) — document the temp-file form as the canonical pre-flight — landed in PR #151's CLAUDE.md edit (commit `a1fdded`); the `--no-verify` gotcha now reads "Use the temp-file form, NOT `/dev/stdin`" with the reliable loop shape spelled out. Candidate (B) (Python one-liner) declined as overkill — (A) addressed the CI-visible failure mode. The BACKLOG-update arm of PR #151 corrected this item's body framing but missed the close-bookkeeping; backfilled here in PR #155 per the item #42 precedent.
+
 ---
 
 ## Status
 
 ### Open
 
-Eleven items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Ten items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -1854,11 +1856,12 @@ Eleven items. All passive (no concrete trigger requires action) — bundle each 
 - **#54** — Watchdog observer's recursive watch schedules one inotify watch per directory under `~/Dropbox`, including marked-ignored subtrees. Architectural fix (per-directory watches with mark/unmark lifecycle) is ~200 LOC of race-condition-prone state-machine work; deferred until a beta tester hits the watch ceiling on a system with limits already raised.
 - **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall.
 - **#74** — GitHub Actions pinned to mutable major-version tags (`@v4`, `@v1`, `@v2.6.0`, `@release/v1`) rather than 40-char SHAs across all workflow files. Speculative security hardening — switching to SHAs would be a project-wide convention shift requiring a Dependabot maintenance practice. Surfaced 2026-05-05 in `code-reviewer` review of PR #111. No observed incident or specific pressure.
-- **#83** — Pre-flight `commit-check -m /dev/stdin` is unreliable on Windows Git Bash (in both the loop AND single-shot forms): commit-check reports success/failure on a stale subject from earlier in the session rather than the freshly-piped one. The reliable workaround is a temp file: `echo "<subject>" > /tmp/subj.txt && commit-check -m /tmp/subj.txt`. Has caused over-72-char subject CI failures on PRs #144, #145, and #149 — each costing a force-push round. Two fix candidates filed (document temp-file as canonical / Python one-liner). Surfaced 2026-05-08.
 
 ### Resolved (reverse chronological)
 
 #### 2026-05-08
+
+- **#83** in PR #151 (commit `a1fdded`) — backfill close. Fix candidate (A) — document the temp-file form as the canonical pre-flight — landed silently in PR #151's CLAUDE.md edit; the `--no-verify` gotcha now reads "Use the temp-file form, NOT `/dev/stdin`" with the reliable loop shape spelled out. The BACKLOG-update arm of PR #151 corrected the item body's framing but missed the close-bookkeeping; backfilled in PR #155 per the item #42 precedent. Candidate (B) (Python one-liner) declined as overkill — (A) addressed the CI-visible failure mode (over-72-char subject regressions on PRs #144, #145, #149).
 
 - **#76** in PR #149 — conflict detector now flags directory-targeting glob-prefix negations (`!**/foo/bar/`, `!foo*/bar/`) when an earlier directory-marking include exists in the sequence. Previously skipped at the `literal_prefix() is None` early-exit, leaving `dbxignore status` and `explain` reporting "no conflicts" while Dropbox's ancestor inheritance made the negation inert wherever the glob landed under a marked parent. New `_find_masking_directory_include` helper recognizes both literal-prefix (`build/`) and glob-prefix (`**/foo/`) directory-marking includes (any include whose raw text ends in `/`); excludes children-only forms (`build/*`) and file-level forms (`*.log`). File-level glob-prefix negations (`!**/important.log`) still skip — file-level rules don't propagate via inheritance. Same-target overrides (`**/foo/` + `!**/foo/`) carve out — pathspec last-match-wins handles them and dropping would change marker behavior, not just diagnostics (Codex P1 catch). Three pre-existing tests adjusted (one shim, one real-pathspec, both flipped from documenting-the-limitation to verifying-the-fix); five new tests pin the don't-flag cases (file-level negation, no-directory-include, alone, same-target override, same-target override with other directory includes).
 

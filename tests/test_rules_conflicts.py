@@ -254,6 +254,49 @@ def test_detect_glob_prefix_same_target_override_no_flag(tmp_path: Path) -> None
     assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
 
 
+def test_detect_glob_prefix_negation_overridden_by_children_only_include_no_flag(
+    tmp_path: Path,
+) -> None:
+    """Children-only includes don't propagate via inheritance — their
+    matched paths are leaves, not marked ancestors. So a glob-prefix
+    negation that overlaps a children-only include's match-set is
+    overridable via pathspec last-match-wins, not inheritance-inert.
+
+    Bot reproducer (third Codex P1 round on PR #149):
+    ``build/`` + ``foo/*`` + ``!**/bar/``. The negation overrides
+    ``foo/*``'s match for ``foo/bar/`` via last-match-wins; the
+    unrelated ``build/`` directory-marking include is a strict
+    ancestor of nothing the negation could land on (literal-suffix
+    ``bar/`` doesn't start with ``build/``), so neither include
+    triggers the inheritance-inert flag.
+
+    Pre-fix the conservative-drop arm flagged this (because ``build/``
+    was a directory-marking include), silently dropping the negation
+    and leaving ``foo/bar/`` ignored on disk."""
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "build/", str(root)),
+        _entry(str(root / ".dropboxignore"), 2, "foo/*", str(root)),
+        _entry(str(root / ".dropboxignore"), 3, "!**/bar/", str(root)),
+    ]
+    assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
+
+
+def test_detect_glob_prefix_negation_unrelated_dir_include_no_flag(
+    tmp_path: Path,
+) -> None:
+    """Earlier directory-marking include whose target is unrelated to the
+    negation's suffix path: not a strict ancestor, so not inheritance-
+    inert. Negation effective for any path it lands on outside the
+    include's subtree."""
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "build/", str(root)),
+        _entry(str(root / ".dropboxignore"), 2, "!**/bar/", str(root)),
+    ]
+    assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
+
+
 def test_detect_glob_prefix_literal_suffix_matches_literal_include_no_flag(
     tmp_path: Path,
 ) -> None:

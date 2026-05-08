@@ -250,62 +250,30 @@ def _literal_suffix(pattern: str) -> str | None:
     return suffix
 
 
-def _is_same_target_override(
-    negation_raw_stripped: str,
-    negation_suffix: str,
-    earlier_include: _SequenceEntryLike,
-) -> bool:
-    """True if ``earlier_include`` is a same-target override of the negation.
+def _include_directory_target(include: _SequenceEntryLike) -> str | None:
+    """Return the literal directory path an include marks, if any.
 
-    Two equivalence cases are recognized:
+    A "directory-marking" include is one whose raw text ends in ``/``
+    AND whose literal target can be extracted statically. Examples:
 
-    1. **Exact raw match**: ``**/foo/`` followed by ``!**/foo/`` — the
-       user wrote the negation immediately after the include to unignore
-       the same target.
-    2. **Literal-prefix include matches the negation's literal-suffix**:
-       e.g. ``bar/`` + ``!**/bar/`` — the include's literal-prefix
-       (``bar/``) equals the negation's literal-suffix (``bar/``), so
-       pathspec last-match-wins resolves the negation as an explicit
-       override for the include's target paths. Surfaced by Codex P1
-       on PR #149's first iteration.
+    - ``build/`` → ``build/`` (literal-prefix include).
+    - ``**/foo/`` → ``foo/`` (glob-prefix include; literal-suffix is the
+      target).
+    - ``build/*`` → ``None`` (children-only; doesn't mark the parent
+      directory itself, so descendants don't inherit ignore-state).
+    - ``*.log`` → ``None`` (file-level; not a directory marker).
+    - ``[a-z]/`` → ``None`` (glob with no literal portion).
 
-    Either case means the negation produces real marker effect on at
-    least the directly-overridden target, so it is not fully inert and
-    must not be dropped — that would change marker behavior, not just
-    diagnostics, since ``RuleCache.match()`` filters entries listed in
-    ``_dropped`` before consulting pathspec.
+    Used by the glob-prefix-negation arm of ``_detect_conflicts`` to
+    drive the strict-ancestor inheritance check.
     """
-    include_raw = earlier_include.raw.strip()
-    if include_raw == negation_raw_stripped:
-        return True
-    include_prefix = literal_prefix(include_raw)
-    return include_prefix is not None and include_prefix == negation_suffix
-
-
-def _find_masking_directory_include(
-    earlier_entries: Sequence[_SequenceEntryLike],
-) -> _SequenceEntryLike | None:
-    """Return any earlier entry that is a directory-marking include.
-
-    "Directory-marking" means the include's raw text ends in ``/`` —
-    covers literal-prefix forms (``build/``) and glob-prefix forms
-    (``**/foo/``, ``src/*/build/``) alike. Excludes children-only forms
-    like ``build/*`` (which don't mark the parent directory itself) and
-    file-level forms like ``*.log``.
-
-    Used by the glob-prefix-negation arm of ``_detect_conflicts`` (item
-    #76): when a negation has no extractable literal prefix, we can't
-    statically reason about which on-disk paths it lands on, so the
-    conservative call is "if any earlier directory-marking include
-    exists, the negation could be inert under Dropbox's ancestor-
-    inheritance regardless of where the glob lands — flag it."
-    """
-    for include in earlier_entries:
-        if not include.pattern.include:
-            continue
-        if include.raw.strip().endswith("/"):
-            return include
-    return None
+    raw = include.raw.strip()
+    if not raw.endswith("/"):
+        return None
+    prefix = literal_prefix(raw)
+    if prefix is not None:
+        return prefix
+    return _literal_suffix(raw)
 
 
 def _detect_conflicts(sequence: Sequence[_SequenceEntryLike], *, root: Path) -> list[Conflict]:
@@ -323,11 +291,18 @@ def _detect_conflicts(sequence: Sequence[_SequenceEntryLike], *, root: Path) -> 
     - Literal-prefix negations (``!build/keep/``): walk extracted
       ancestors and run them against earlier includes (precise).
     - Glob-prefix directory negations (``!**/foo/bar/``, ``!foo*/bar/``):
-      flag if any earlier directory-marking include exists in the same
-      sequence (conservative — see ``_find_masking_directory_include``).
-      Glob-prefix file-level negations (``!**/important.log``) are still
-      skipped, since file-level rules don't propagate via ancestor
-      inheritance.
+      flag only when an earlier directory-marking include's literal
+      target is a *strict* ancestor (string-prefix) of the negation's
+      literal-suffix path — i.e. every match of the negation is a
+      descendant of a marked directory and is therefore inheritance-
+      ignored regardless of where the ``**`` lands. Same-target
+      overrides (``**/foo/`` + ``!**/foo/`` or ``bar/`` + ``!**/bar/``)
+      are NOT flagged because pathspec's last-match-wins resolves the
+      override; partial overrides (``foo/*`` + ``!**/bar/``) are NOT
+      flagged because the children-only include doesn't propagate via
+      inheritance. Glob-prefix file-level negations
+      (``!**/important.log``) are skipped — file-level rules don't
+      propagate via ancestor inheritance.
     """
     conflicts: list[Conflict] = []
     for i, entry in enumerate(sequence):
@@ -339,36 +314,42 @@ def _detect_conflicts(sequence: Sequence[_SequenceEntryLike], *, root: Path) -> 
             raw = raw[1:]
         prefix = literal_prefix(raw)
         if prefix is None:
-            # Glob-prefix negation. Static ancestor-walk isn't available,
-            # so apply the conservative drop (item #76): if the negation
-            # is directory-targeting AND any earlier include marks a
-            # directory, treat the negation as inert. The negation's
-            # actual on-disk reach depends on what `**`/`*` lands on,
-            # which we can't know without I/O — but Dropbox's ancestor-
-            # inheritance makes the negation inert wherever it does land
-            # under a marked directory, so flagging the rule globally is
-            # the safe call.
+            # Glob-prefix negation. Static ancestor-walk on absolute
+            # paths isn't available (the `**`/`*` could land anywhere),
+            # but we can still detect the case where every possible
+            # landing point would be inheritance-ignored: when an
+            # earlier directory-marking include's literal target is a
+            # strict ancestor (string-prefix) of the negation's
+            # literal-suffix path. Any path the negation matches then
+            # has the include's target as an ancestor, so inheritance
+            # makes the negation inert.
+            #
+            # Same-target relationships (negation suffix == include
+            # target) are NOT inert — pathspec's last-match-wins
+            # resolves the negation as an explicit override.
+            # Children-only includes (raw doesn't end in `/`) do not
+            # contribute inheritance, so they're never strict ancestors.
+            #
+            # This shape iterated through three Codex P1 review
+            # rounds on PR #149; earlier conservative-drop variants
+            # had false positives that changed marker behavior
+            # (since ``RuleCache.match()`` filters entries listed in
+            # ``_dropped`` before consulting pathspec).
             if not raw.rstrip().endswith("/"):
                 continue
-            # Same-target override carve-out: if any earlier include
-            # targets the same path the negation explicitly covers,
-            # pathspec last-match-wins handles the override and
-            # dropping the negation would change marker behavior
-            # (`RuleCache.match()` filters `_dropped` entries before
-            # consulting pathspec). `_is_same_target_override` recognizes
-            # both exact-raw matches (`**/foo/` + `!**/foo/`) and
-            # literal-prefix-matches-glob-suffix (`bar/` + `!**/bar/`).
-            # Surfaced by Codex on PR #149's first iteration; the second
-            # iteration broadened from raw-string equality to also
-            # include the literal-prefix-vs-suffix equivalence.
-            negation_target = raw.rstrip()
-            negation_suffix = _literal_suffix(negation_target)
-            if negation_suffix is not None and any(
-                e.pattern.include and _is_same_target_override(negation_target, negation_suffix, e)
-                for e in sequence[:i]
-            ):
+            negation_suffix = _literal_suffix(raw.rstrip())
+            if negation_suffix is None:
                 continue
-            masking = _find_masking_directory_include(sequence[:i])
+            masking = None
+            for earlier in sequence[:i]:
+                if not earlier.pattern.include:
+                    continue
+                include_target = _include_directory_target(earlier)
+                if include_target is None:
+                    continue
+                if negation_suffix.startswith(include_target) and negation_suffix != include_target:
+                    masking = earlier
+                    break
             if masking is None:
                 continue
             conflicts.append(

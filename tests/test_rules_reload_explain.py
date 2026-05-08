@@ -171,6 +171,32 @@ def test_rulecache_still_flags_directory_rule_negation(tmp_path: Path) -> None:
     assert conflicts[0].dropped_pattern == "!build/keep/"
 
 
+def test_rulecache_glob_negation_overrides_children_only_include_keeps_unignored(
+    tmp_path: Path,
+) -> None:
+    """Codex P1 (third iteration on PR #149) reproducer: ``build/`` +
+    ``foo/*`` + ``!**/bar/`` should leave ``foo/bar`` not-ignored.
+
+    The negation ``!**/bar/`` overrides ``foo/*`` for ``foo/bar`` via
+    pathspec last-match-wins. The unrelated ``build/`` is not a strict
+    ancestor of the negation's literal-suffix (``bar/`` doesn't start
+    with ``build/``), so the conservative-drop premise (every match of
+    the negation is inheritance-ignored) doesn't apply.
+
+    Pre-fix the conservative drop fired on the mere presence of
+    ``build/`` and silently dropped the negation, leaving ``foo/bar``
+    ignored on disk because ``foo/*`` matched it. Marker-behavior
+    regression guard."""
+    root = tmp_path
+    (root / ".dropboxignore").write_text("build/\nfoo/*\n!**/bar/\n", encoding="utf-8")
+    (root / "foo" / "bar").mkdir(parents=True)
+    cache = RuleCache()
+    cache.load_root(root)
+
+    assert cache.conflicts() == []
+    assert not cache.match(root / "foo" / "bar")
+
+
 def test_rulecache_literal_suffix_glob_negation_keeps_path_unignored(
     tmp_path: Path,
 ) -> None:

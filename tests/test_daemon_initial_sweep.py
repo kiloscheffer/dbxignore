@@ -14,29 +14,14 @@ import time
 from typing import TYPE_CHECKING
 
 from dbxignore import cli, daemon, reconcile, state
+from tests.conftest import BlockingMarkers, _poll_until, setup_daemon_state
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
     from pathlib import Path
 
     import pytest
 
-    from tests.conftest import BlockingMarkers, WriteFile
-
-
-def _poll_until(fn: Callable[[], bool], timeout_s: float = 5.0, interval_s: float = 0.05) -> bool:
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        if fn():
-            return True
-        time.sleep(interval_s)
-    return False
-
-
-def _make_blocking_markers(gate: threading.Event) -> BlockingMarkers:
-    from tests.conftest import BlockingMarkers
-
-    return BlockingMarkers(gate)
+    from tests.conftest import WriteFile
 
 
 def test_state_json_appears_before_sweep_completes(
@@ -52,14 +37,10 @@ def test_state_json_appears_before_sweep_completes(
     (root / "build").mkdir()
     (root / "src").mkdir()
 
-    state_dir = tmp_path / "state"
-    monkeypatch.setattr(state, "default_path", lambda: state_dir / "state.json")
-    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
-    monkeypatch.setattr(state, "user_log_dir", lambda: state_dir)
-    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [root])  # type: ignore[attr-defined, unused-ignore]
+    state_dir = setup_daemon_state(monkeypatch, tmp_path, root)
 
     gate = threading.Event()
-    blocking = _make_blocking_markers(gate)
+    blocking = BlockingMarkers(gate)
     monkeypatch.setattr(reconcile, "markers", blocking)
     monkeypatch.setattr(cli, "markers", blocking)
 
@@ -120,14 +101,10 @@ def test_observer_up_before_initial_sweep_completes(
     write_file(root / ".dropboxignore", "")
     (root / "existing").mkdir()
 
-    state_dir = tmp_path / "state"
-    monkeypatch.setattr(state, "default_path", lambda: state_dir / "state.json")
-    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
-    monkeypatch.setattr(state, "user_log_dir", lambda: state_dir)
-    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [root])  # type: ignore[attr-defined, unused-ignore]
+    state_dir = setup_daemon_state(monkeypatch, tmp_path, root)
 
     gate = threading.Event()
-    blocking = _make_blocking_markers(gate)
+    blocking = BlockingMarkers(gate)
     monkeypatch.setattr(reconcile, "markers", blocking)
     monkeypatch.setattr(cli, "markers", blocking)
 
@@ -179,11 +156,7 @@ def test_worker_failure_shuts_down_daemon(
     write_file(root / ".dropboxignore", "build/\n")
     (root / "build").mkdir()
 
-    state_dir = tmp_path / "state"
-    monkeypatch.setattr(state, "default_path", lambda: state_dir / "state.json")
-    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
-    monkeypatch.setattr(state, "user_log_dir", lambda: state_dir)
-    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [root])  # type: ignore[attr-defined, unused-ignore]
+    setup_daemon_state(monkeypatch, tmp_path, root)
 
     # Force the initial-sweep call to raise.
     def _raising_sweep_once(*args, **kwargs):  # type: ignore[no-untyped-def]
@@ -221,14 +194,10 @@ def test_cancelled_sweep_does_not_write_last_sweep(
     write_file(root / ".dropboxignore", "build/\n")
     (root / "build").mkdir()
 
-    state_dir = tmp_path / "state"
-    monkeypatch.setattr(state, "default_path", lambda: state_dir / "state.json")
-    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
-    monkeypatch.setattr(state, "user_log_dir", lambda: state_dir)
-    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [root])  # type: ignore[attr-defined, unused-ignore]
+    state_dir = setup_daemon_state(monkeypatch, tmp_path, root)
 
     gate = threading.Event()
-    blocking = _make_blocking_markers(gate)
+    blocking = BlockingMarkers(gate)
     monkeypatch.setattr(reconcile, "markers", blocking)
     monkeypatch.setattr(cli, "markers", blocking)
 
@@ -280,14 +249,10 @@ def test_cooperative_shutdown_during_initial_sweep(
     for i in range(20):
         (root / f"dir_{i}").mkdir()
 
-    state_dir = tmp_path / "state"
-    monkeypatch.setattr(state, "default_path", lambda: state_dir / "state.json")
-    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
-    monkeypatch.setattr(state, "user_log_dir", lambda: state_dir)
-    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [root])  # type: ignore[attr-defined, unused-ignore]
+    state_dir = setup_daemon_state(monkeypatch, tmp_path, root)
 
     gate = threading.Event()
-    blocking = _make_blocking_markers(gate)
+    blocking = BlockingMarkers(gate)
     monkeypatch.setattr(reconcile, "markers", blocking)
     monkeypatch.setattr(cli, "markers", blocking)
 
@@ -333,11 +298,7 @@ def test_state_starting_appears_before_rule_scan(
     root = tmp_path / "root"
     write_file(root / ".dropboxignore", "")
 
-    state_dir = tmp_path / "state"
-    monkeypatch.setattr(state, "default_path", lambda: state_dir / "state.json")
-    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
-    monkeypatch.setattr(state, "user_log_dir", lambda: state_dir)
-    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [root])  # type: ignore[attr-defined, unused-ignore]
+    state_dir = setup_daemon_state(monkeypatch, tmp_path, root)
 
     load_root_gate = threading.Event()
     original_load_root = RuleCache.load_root
@@ -392,11 +353,7 @@ def test_periodic_sweep_skipped_while_initial_worker_alive(
     write_file(root / ".dropboxignore", "build/\n")
     (root / "build").mkdir()
 
-    state_dir = tmp_path / "state"
-    monkeypatch.setattr(state, "default_path", lambda: state_dir / "state.json")
-    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
-    monkeypatch.setattr(state, "user_log_dir", lambda: state_dir)
-    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [root])  # type: ignore[attr-defined, unused-ignore]
+    state_dir = setup_daemon_state(monkeypatch, tmp_path, root)
 
     # Shorten SWEEP_INTERVAL_S so the periodic loop ticks within the test
     # window. The default 3600s would never fire during a 2-second test.
@@ -416,7 +373,7 @@ def test_periodic_sweep_skipped_while_initial_worker_alive(
     monkeypatch.setattr(daemon, "_sweep_once", counting_sweep_once)
 
     gate = threading.Event()
-    blocking = _make_blocking_markers(gate)
+    blocking = BlockingMarkers(gate)
     monkeypatch.setattr(reconcile, "markers", blocking)
     monkeypatch.setattr(cli, "markers", blocking)
 

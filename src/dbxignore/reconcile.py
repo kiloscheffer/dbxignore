@@ -100,15 +100,13 @@ def reconcile_subtree(
         # mid-list — a flat directory with thousands of children would otherwise
         # process every sibling before the next os.walk iteration check fired.
         keep: list[str] = []
-        _dir_stopped = False
         for name in dirnames:
             if stop_event is not None and stop_event.is_set():
-                _dir_stopped = True
                 break
             if not _reconcile_path(current_path / name, cache, report, dry_run=dry_run):
                 keep.append(name)
         dirnames[:] = keep
-        if _dir_stopped:
+        if stop_event is not None and stop_event.is_set():
             break
         for name in filenames:
             if stop_event is not None and stop_event.is_set():

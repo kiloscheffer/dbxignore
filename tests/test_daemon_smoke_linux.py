@@ -12,13 +12,13 @@ from __future__ import annotations
 import os
 import sys
 import threading
-import time
 from typing import TYPE_CHECKING
 
 import pytest
 
+from tests.conftest import _poll_until
+
 if TYPE_CHECKING:
-    from collections.abc import Callable
     from pathlib import Path
 
 pytestmark = pytest.mark.linux_only
@@ -46,15 +46,6 @@ def _xattr_supported(path: Path) -> bool:
 def _require_xattr_fs(tmp_path: Path) -> None:
     if not _xattr_supported(tmp_path):
         pytest.skip(f"tmp_path {tmp_path} rejects user.* xattrs")
-
-
-def _poll_until(fn: Callable[[], bool], timeout_s: float = 2.0, interval_s: float = 0.05) -> bool:
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        if fn():
-            return True
-        time.sleep(interval_s)
-    return False
 
 
 def _wait_for_daemon_watching(log_path: Path, timeout_s: float = 3.0) -> bool:

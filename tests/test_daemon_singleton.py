@@ -233,6 +233,23 @@ def test_singleton_lock_not_released_while_worker_alive(
     # Collapse the graceful-exit window so the warning fires in milliseconds.
     monkeypatch.setattr(daemon, "_INITIAL_SWEEP_JOIN_TIMEOUT_S", 0.01)
 
+    # Stub Observer so this test is independent of FSEvents/inotify semantics.
+    # On macOS, FSEvents can emit synthetic "created" events for the existing
+    # .dropboxignore at observer-start time. Those events queue in the
+    # debouncer, fire `_dispatch` → `reconcile_subtree` → `markers.is_ignored`
+    # which blocks on the gate. Then `debouncer.stop()` (no timeout) hangs
+    # waiting for that in-flight emit to finish, and the test's "did not exit"
+    # WARNING never fires. The contract under test is the daemon's lock
+    # release ordering, not watchdog event delivery — stubbing Observer
+    # isolates the architectural assertion from platform watcher quirks.
+    class _NoOpObserver:
+        def schedule(self, *args: object, **kwargs: object) -> None: ...
+        def start(self) -> None: ...
+        def stop(self) -> None: ...
+        def join(self) -> None: ...
+
+    monkeypatch.setattr(daemon, "Observer", _NoOpObserver)
+
     gate = threading.Event()
     blocking = BlockingMarkers(gate)
     monkeypatch.setattr(reconcile, "markers", blocking)

@@ -79,6 +79,31 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           additional_permissions: |
             actions: read
+          # The Claude action blocks bot-triggered runs by default; without
+          # this allowlist the job would no-op every Codex review-comment
+          # event since the trigger author is `chatgpt-codex-connector[bot]`.
+          # Surfaced by Codex on PR #150's first review round (P1).
+          allowed_bots: 'chatgpt-codex-connector[bot]'
+          # Claude doesn't have Bash exec by default; the prompt needs
+          # `uv`/`git`/`gh`/`commit-check` to run validation, push, and reply.
+          # Without this allowlist the fix-and-push path stalls or pushes
+          # without the checks it claims to enforce. Surfaced by Codex on
+          # PR #150's first review round (P2). Patterns scoped to exact tools
+          # Claude needs; the runner is a fresh CI VM with no persistent
+          # state, so the blast radius is bounded.
+          claude_args: >-
+            --allowed-tools
+            "Bash(uv:*)
+            Bash(git:*)
+            Bash(gh:*)
+            Bash(commit-check:*)
+            Bash(echo:*)
+            Bash(cat:*)
+            Bash(wc:*)
+            Bash(test:*)
+            Bash(grep:*)
+            Bash(jq:*)
+            Read Write Edit Glob Grep"
           prompt: |
             A Codex bot review comment was posted on PR #${{ github.event.pull_request.number }}
             (${{ github.server_url }}/${{ github.repository }}/pull/${{ github.event.pull_request.number }}).

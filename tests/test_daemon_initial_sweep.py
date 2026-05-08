@@ -303,9 +303,23 @@ def test_state_starting_appears_before_rule_scan(
     load_root_gate = threading.Event()
     original_load_root = RuleCache.load_root
 
-    def blocking_load_root(self: RuleCache, root_path: Path) -> None:
+    def blocking_load_root(
+        self: RuleCache,
+        root_path: Path,
+        *,
+        log_warnings: bool = True,
+        stop_event: threading.Event | None = None,
+    ) -> None:
+        # Forward the keyword arguments `_sweep_once` passes (`stop_event`
+        # since PR #162's fix #6, `log_warnings` long-standing). Without
+        # the forward, the worker would TypeError on the unexpected kwarg,
+        # `_initial_sweep_worker`'s try/except would catch it, and the
+        # test would pass vacuously — the early state.write fires in the
+        # main thread before the worker spawns, so the `state.json
+        # appears` and `last_sweep is None` assertions hold even when the
+        # gate never blocked anything.
         load_root_gate.wait(timeout=10.0)
-        original_load_root(self, root_path)
+        original_load_root(self, root_path, log_warnings=log_warnings, stop_event=stop_event)
 
     monkeypatch.setattr(RuleCache, "load_root", blocking_load_root)
 
@@ -331,6 +345,24 @@ def test_state_starting_appears_before_rule_scan(
         assert s is not None
         assert s.last_sweep is None, (
             f"expected state=starting (last_sweep=None), got last_sweep={s.last_sweep}"
+        )
+
+        # Open the gate; the worker should now actually run load_root and
+        # then proceed through reconcile + the post-sweep state.write.
+        # Asserting this transition guards against the worker dying silently
+        # (e.g., `blocking_load_root` missing a kwarg the production signature
+        # gained later — exactly the vacuous-pass shape the wrapper's
+        # docstring above warns about): a dead worker never writes
+        # `last_sweep != None`, so this poll would time out.
+        load_root_gate.set()
+        ran = _poll_until(
+            lambda: (lambda x: x is not None and x.last_sweep is not None)(state.read()),
+            timeout_s=10.0,
+        )
+        assert ran, (
+            "state.json never transitioned to last_sweep != None — the "
+            "worker likely died silently rather than running load_root + "
+            "reconcile after the gate opened"
         )
     finally:
         load_root_gate.set()

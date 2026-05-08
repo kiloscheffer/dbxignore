@@ -760,11 +760,17 @@ def _sweep_once(
     sweep_start = time.perf_counter()
 
     # Phase 1: refresh the rule cache. Sequential — load_root mutates the
-    # shared _rules dict and is cheap (only stats .dropboxignore files).
-    # `stop_event` threads through to load_root's rglob so SIGTERM during
-    # the rule scan is observed without waiting for the full traversal;
-    # the between-roots check covers multi-root configurations where one
-    # root's full scan completes before the next would start.
+    # shared _rules dict, so parallelizing across roots would just serialize
+    # on the RLock anyway. Cost depends on whether the cache is warm: the
+    # initial-sweep worker's first call performs a full `root.rglob`
+    # traversal of every directory looking for `.dropboxignore` files
+    # (the operation BACKLOG #53 deferred off the main thread); subsequent
+    # calls are cheap because `_load_if_changed` skips reparse on unchanged
+    # mtime+size. `stop_event` threads through to load_root's rglob so
+    # SIGTERM during the rule scan is observed without waiting for the
+    # full traversal; the between-roots check covers multi-root
+    # configurations where one root's full scan completes before the next
+    # would start.
     for r in roots:
         if stop_event is not None and stop_event.is_set():
             logger.debug("sweep cancelled in phase 1; skipping remaining roots")

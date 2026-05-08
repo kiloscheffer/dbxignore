@@ -105,16 +105,18 @@ dbxignore on macOS supports both Dropbox sync modes and auto-detects which one i
 - **Legacy mode** — Dropbox folder at `~/Dropbox`, ignored files marked via the `com.dropbox.ignored` extended attribute. Synced by Dropbox's own daemon.
 - **File Provider mode** — Dropbox folder at `~/Library/CloudStorage/Dropbox/`, ignored files marked via the `com.apple.fileprovider.ignore#P` extended attribute (per [Dropbox's docs](https://help.dropbox.com/sync/ignored-files)). Synced by Apple's File Provider extension; default for installs since 2023.
 
-The macOS xattr backend detects File Provider mode by the presence of `~/Library/CloudStorage/Dropbox/` at module-load time and selects the matching attribute name. No user action required — the daemon picks the active one automatically. The daemon registers as a launchd User Agent in either case.
+The macOS xattr backend auto-detects sync mode at first use. It reads the configured sync paths from `~/.dropbox/info.json` (one entry per Dropbox account) and queries `pluginkit` for the File Provider extension's user-toggled state. The decision: any path under `~/Library/CloudStorage/` (or under `/Volumes/...` with the extension allowed) → File Provider mode; extension explicitly disabled → legacy; `pluginkit` unavailable and no path is decisive → write both attribute names; otherwise → legacy. The result is cached for the rest of the process. `dbxignore status` echoes the decision on macOS; the daemon also logs it at startup. The daemon registers as a launchd User Agent in either case.
 
 <details>
 <summary>Verify your sync mode manually</summary>
 
+`dbxignore status` echoes a `sync mode:` line on macOS. To query Apple's PluginKit registry directly:
+
 ```bash
-fileproviderctl dump 2>&1 | grep -q "com.getdropbox.dropbox.fileprovider" \
-    && echo "File Provider mode" \
-    || echo "Legacy mode"
+pluginkit -m -A -i com.getdropbox.dropbox.fileprovider
 ```
+
+The prefix character indicates the user-toggled state: leading whitespace = registered, untoggled (default); `+` = explicitly enabled; `-` = explicitly disabled. No matching line means the extension isn't registered.
 
 </details>
 
@@ -214,8 +216,8 @@ target/
 | Command | Purpose |
 |---|---|
 | `dbxignore init [PATH]` | Scaffold a starter `.dropboxignore` in `PATH` (or cwd) with a template covering Node.js / Python / Rust / JVM / .NET / frontend frameworks / build outputs / OS detritus. Walks the tree to depth 3 and annotates the header with which marker-bait dirs were detected. See [First-time setup](#first-time-setup). |
-| `dbxignore install` / `uninstall` | Register / remove the daemon with the platform's user-scoped service manager (Task Scheduler on Windows, systemd user unit on Linux). `uninstall --purge` also clears every existing marker, removes local dbxignore state (`state.json`, `daemon.log*`, the state directory), and on Linux removes any systemd drop-in directory. Any stray marker on a `.dropboxignore` file itself is logged at `WARNING` before being cleared. |
-| `dbxignore daemon` | Run the watcher + hourly sweep in the foreground. Usually invoked by Task Scheduler. |
+| `dbxignore install` / `uninstall` | Register / remove the daemon with the platform's user-scoped service manager (Task Scheduler on Windows, systemd user unit on Linux, launchd LaunchAgent on macOS). `uninstall --purge` also clears every existing marker, removes local dbxignore state (`state.json`, `daemon.log*`, the state directory; on macOS also `~/Library/Logs/dbxignore/`), and on Linux removes any systemd drop-in directory. Any stray marker on a `.dropboxignore` file itself is logged at `WARNING` before being cleared. |
+| `dbxignore daemon` | Run the watcher + hourly sweep in the foreground. Usually invoked by the platform's service manager (Task Scheduler on Windows, systemd on Linux, launchd on macOS). |
 | `dbxignore apply [PATH]` | One-shot reconcile of the whole Dropbox (or a subtree). Pass `--from-gitignore <path>` to load rules from a `.gitignore` instead of `.dropboxignore` files in the tree. Pass `--dry-run` to preview what would be marked/cleared without changing anything. Prompts before mutating any marker; pass `--yes` to skip — see [Applying rules](#applying-rules). |
 | `dbxignore generate <PATH>` | Translate a `.gitignore` (or any nominated file) to a `.dropboxignore`. `<PATH>` is a file or a directory; default output is `<dir>/.dropboxignore`. Flags: `-o <path>`, `--stdout`, `--force`. |
 | `dbxignore status` | Is the daemon running? Last sweep counts, last error. Pass `--summary` for a stable single-line summary suitable for status-bar widgets — see [Status-bar integration](#status-bar-integration). |
@@ -332,7 +334,7 @@ git verb with materially different consequences.
 - **What "ignored" means in Dropbox.** Setting the ignore marker on a file or folder removes it from your cloud Dropbox and from every other linked device. The local copy on the device that set the marker is preserved. Removing the marker (by deleting the matching rule, or running `dbxignore clear`) restores the path to sync — the local copy is uploaded back to Dropbox and propagated to other devices. So `.dropboxignore` is **not** a `.gitignore`-style "leave this file untracked here" rule; it's an instruction to delete the path from cloud sync, with the local copy as the only surviving copy until the marker is cleared.
 - **Source of truth.** `.dropboxignore` files declare what is ignored. Removing a rule unignores the matching paths on the next reconcile. A path marked ignored via Dropbox's right-click menu but not matching any rule will be unignored.
 - **Hybrid trigger.** The daemon reacts to filesystem events in real time *and* runs an hourly safety-net sweep. If the daemon is offline, an initial sweep at the next start catches any drift.
-- **Multi-root.** Personal and Business Dropbox roots are discovered automatically from `%APPDATA%\Dropbox\info.json` (Windows) or `~/.dropbox/info.json` (Linux).
+- **Multi-root.** Personal and Business Dropbox roots are discovered automatically from `%APPDATA%\Dropbox\info.json` (with `%LOCALAPPDATA%\Dropbox\info.json` as a fallback for "install for all users") on Windows, and from `~/.dropbox/info.json` on Linux and macOS.
 
 ### Negations and Dropbox's ignore inheritance
 

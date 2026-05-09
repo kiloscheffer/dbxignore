@@ -218,7 +218,18 @@ class RuleCache:
                 except (OSError, RuntimeError) as exc:
                     logger.warning("Could not resolve %s during sweep: %s", ignore_file, exc)
                     continue
-                self._load_if_changed(ignore_file, as_path=canonical)
+                # Force reload when the fallback selected a mixed-case
+                # filename. Without this, the canonical-key cache entry's
+                # mtime+size could (extremely rarely) coincide with the
+                # mixed-case file's stat values after the canonical file
+                # was deleted — the mtime+size shortcut would skip
+                # reloading and stale rules from the now-deleted canonical
+                # file would persist. Codex P3 catch on PR #184; the
+                # canonical-name path retains the shortcut because
+                # mtime+size identity for the same source file is the
+                # contract `_load_if_changed` was built around.
+                force = match_name != IGNORE_FILENAME
+                self._load_if_changed(ignore_file, as_path=canonical, force=force)
             # Drop cached entries for .dropboxignore files under this root that
             # the walk didn't find — they've been deleted since the last load
             # and their rules must stop applying.
@@ -404,7 +415,13 @@ class RuleCache:
             size=st.st_size,
         )
 
-    def _load_if_changed(self, ignore_file: Path, *, as_path: Path | None = None) -> None:
+    def _load_if_changed(
+        self,
+        ignore_file: Path,
+        *,
+        as_path: Path | None = None,
+        force: bool = False,
+    ) -> None:
         """Load ``ignore_file`` only if its on-disk bytes differ from the
         cached version (mtime or size mismatch). No-op if unchanged.
 
@@ -421,6 +438,13 @@ class RuleCache:
         ``match()`` later looks up — without this, ``PosixPath`` equality
         is case-sensitive and the cache hit silently fails for the
         directory that contains the rule file.
+
+        ``force`` skips the mtime+size shortcut and reloads
+        unconditionally. Used by ``load_root`` when the fallback selected
+        a mixed-case filename — the cached entry under the canonical
+        key may have been populated from a different source file, so its
+        stat values cannot be trusted to identify the current source.
+        Codex P3 catch on PR #184.
         """
         try:
             st = ignore_file.stat()
@@ -428,9 +452,10 @@ class RuleCache:
             # Can't stat — let _load_file's read path surface the same error.
             self._load_file(ignore_file, as_path=as_path)
             return
-        cached = self._rules.get((as_path or ignore_file).resolve())
-        if cached and cached.mtime_ns == st.st_mtime_ns and cached.size == st.st_size:
-            return
+        if not force:
+            cached = self._rules.get((as_path or ignore_file).resolve())
+            if cached and cached.mtime_ns == st.st_mtime_ns and cached.size == st.st_size:
+                return
         self._load_file(ignore_file, st=st, as_path=as_path)
 
     def _applicable(self, root: Path, path: Path) -> list[tuple[Path, _LoadedRules]]:

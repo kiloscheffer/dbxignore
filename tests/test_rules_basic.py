@@ -261,6 +261,67 @@ def test_load_root_prefers_exact_dropboxignore_over_mixed_case(
     )
 
 
+def test_load_root_force_reloads_when_fallback_to_mixed_case(
+    tmp_path: Path, write_file: WriteFile
+) -> None:
+    """Item #86 / Codex P3 catch on PR #184: when load_root falls back to
+    a mixed-case filename (because the canonical `.dropboxignore` is
+    absent from the filenames list), reload unconditionally — don't trust
+    the cached entry's mtime/size shortcut. The cached entry under the
+    canonical key may have been populated from a *different* source file
+    earlier in the cache's life (e.g., the canonical file existed then,
+    was deleted, and only the mixed-case file remains). Without forcing
+    a reload, an unlucky stat-value coincidence between the two files
+    would let stale rules from the deleted canonical file persist.
+
+    Test exercises the deterministic case (different content) by setting
+    the new file's mtime to match the prior cache's mtime exactly via
+    `os.utime` — without `force`, the mtime+size shortcut would fire and
+    the test would fail."""
+    import os
+
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    canonical = sub / ".dropboxignore"
+    canonical.write_text("first_rule/\n", encoding="utf-8")
+
+    # Phase 1: warm the cache from the canonical file.
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+    cache_key = canonical.resolve()
+    assert cache_key in cache._rules
+    assert "first_rule/" in cache._rules[cache_key].lines
+    cached_mtime = cache._rules[cache_key].mtime_ns
+    cached_size = cache._rules[cache_key].size
+
+    # Phase 2: delete the canonical file, replace with a mixed-case file
+    # whose content differs but whose size happens to be identical (and
+    # whose mtime we force-set to match the cached value).
+    canonical.unlink()
+    mixed = sub / ".DropboxIgnore"
+    # Same byte length as "first_rule/\n" but different content.
+    mixed.write_text("other_rule/\n", encoding="utf-8")
+    assert mixed.stat().st_size == cached_size, (
+        "test setup error: replacement file size must match cached size"
+    )
+    # Force-set mtime to match the prior cache exactly (defeats the
+    # mtime+size shortcut in the absence of `force=True`).
+    os.utime(mixed, ns=(cached_mtime, cached_mtime))
+
+    # Phase 3: re-sweep. The fallback selects `.DropboxIgnore` (canonical
+    # is gone). Force-reload must fire even though the stat values match
+    # the cached entry's.
+    cache.load_root(tmp_path)
+
+    cached_after = cache._rules[cache_key]
+    assert "other_rule/" in cached_after.lines, (
+        f"expected stale-rules invalidation; got {cached_after.lines}"
+    )
+    assert "first_rule/" not in cached_after.lines, (
+        "stale rules from the deleted canonical file must NOT persist"
+    )
+
+
 def test_load_root_observes_stop_event_in_dropboxignore_free_tree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

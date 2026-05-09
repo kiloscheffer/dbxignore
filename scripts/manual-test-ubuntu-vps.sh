@@ -25,6 +25,12 @@ CLEANUP_DROPBOX=0
 TEST_SUBDIR="dbxignore-test"
 DROPBOXD_LOG="$(mktemp -t dropboxd.XXXXXX.log)"
 DROPBOXD_PID=""
+# Mirror src/dbxignore/state.py::user_state_dir on Linux: XDG_STATE_HOME
+# wins, with $HOME/.local/state as fallback. Hardcoding the fallback (as
+# elsewhere in this script for state.json/daemon.log probes) silently
+# misses when the tester has XDG_STATE_HOME set — slow-sweep marker
+# would seed at one path and the daemon would read from another.
+DBXIGNORE_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dbxignore"
 
 for arg in "$@"; do
     case "$arg" in
@@ -76,7 +82,7 @@ cleanup() {
     # Belt-and-suspenders: remove the slow-sweep test marker if a script
     # crash skipped the in-phase cleanup (BACKLOG #89). Honoring a stale
     # marker on a future install would silently pad every initial sweep.
-    rm -f "$HOME/.local/state/dbxignore/_test_slow_sweep" 2>/dev/null || true
+    rm -f "$DBXIGNORE_STATE_DIR/_test_slow_sweep" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -474,8 +480,8 @@ phase_daemon() {
     # 5f's 180s poll deterministically observes the transition to running,
     # regardless of the watched-tree size. The daemon logs WARNING when it
     # honors this; cleanup at the end of phase 5 removes it before phase 6.
-    mkdir -p "$HOME/.local/state/dbxignore"
-    printf '15\n' > "$HOME/.local/state/dbxignore/_test_slow_sweep"
+    mkdir -p "$DBXIGNORE_STATE_DIR"
+    printf '15\n' > "$DBXIGNORE_STATE_DIR/_test_slow_sweep"
     note "5 — slow-sweep marker seeded: 15s pad on initial sweep (item #89)"
 
     dbxignore install >/tmp/dbxignore-install.out 2>&1 \
@@ -639,7 +645,7 @@ phase_daemon() {
     # Remove slow-sweep marker so phase 6's re-install + uninstall cycles
     # run with normal sweep timing (item #89). The cleanup() trap removes
     # it too if this point is never reached.
-    rm -f "$HOME/.local/state/dbxignore/_test_slow_sweep"
+    rm -f "$DBXIGNORE_STATE_DIR/_test_slow_sweep"
     note "5 — slow-sweep marker removed before phase 6 (item #89)"
 }
 

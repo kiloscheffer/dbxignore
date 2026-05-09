@@ -938,11 +938,21 @@ def _initial_sweep_worker(
     manual-test scripts can observe the ``state=starting`` window on small
     trees (item #89). The wait is interruptible — shutdown stays prompt
     even mid-pad.
+
+    The pad-helper call AND the wait both live inside the try/except so a
+    future helper addition that raises an unanticipated exception type
+    routes through the same shutdown arm rather than escaping the worker
+    thread silently and stranding the daemon in ``state=starting`` (item
+    #91). Codex caught two such bugs on PR #175 (`OverflowError` from
+    `wait(inf)`, `UnicodeDecodeError` from non-UTF-8 marker contents);
+    both were fixed at the helper's parser level, but the structural
+    defense-in-depth means the next class of bug routes correctly without
+    needing a parser-level fix.
     """
-    pad_s = _slow_sweep_pad_seconds()
-    if pad_s > 0 and stop_event.wait(pad_s):
-        return
     try:
+        pad_s = _slow_sweep_pad_seconds()
+        if pad_s > 0 and stop_event.wait(pad_s):
+            return
         _sweep_once(
             roots,
             cache,

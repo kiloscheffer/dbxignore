@@ -266,6 +266,51 @@ def test_initial_sweep_worker_returns_early_when_stopped_during_pad(
     )
 
 
+def test_initial_sweep_worker_routes_helper_exception_to_shutdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An unhandled exception from `_slow_sweep_pad_seconds` (or the
+    surrounding `stop_event.wait` call) must NOT escape the worker thread
+    — it must route through the same try/except arm `_sweep_once`
+    failures use, setting `stop_event` so the daemon shuts down cleanly
+    instead of stranding in `state=starting` (item #91).
+
+    Defense-in-depth against future helper additions that introduce an
+    exception type the helper's parser doesn't catch. Codex caught two
+    such bugs on PR #175 — at the parser level — but a third class
+    would otherwise need a third parser-level fix; this test pins the
+    structural fallback."""
+    monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
+
+    def boom() -> float:
+        raise RuntimeError("simulated helper failure")
+
+    monkeypatch.setattr(daemon, "_slow_sweep_pad_seconds", boom)
+
+    sweep_called: list[bool] = []
+
+    def fake_sweep_once(*_args: object, **_kwargs: object) -> None:
+        sweep_called.append(True)
+
+    monkeypatch.setattr(daemon, "_sweep_once", fake_sweep_once)
+
+    stop = threading.Event()
+    caplog.set_level(logging.ERROR, logger="dbxignore.daemon")
+    daemon._initial_sweep_worker(
+        roots=[],
+        cache=None,  # type: ignore[arg-type]
+        daemon_started=None,  # type: ignore[arg-type]
+        daemon_create_time=None,
+        stop_event=stop,
+    )
+
+    assert stop.is_set(), "worker must set stop_event when helper raises"
+    assert sweep_called == [], "_sweep_once must not run after helper raises"
+    assert any("initial sweep worker failed" in rec.message for rec in caplog.records), (
+        "ERROR log must name the worker failure (matches existing _sweep_once-failure shape)"
+    )
+
+
 def test_initial_sweep_worker_no_pad_when_marker_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

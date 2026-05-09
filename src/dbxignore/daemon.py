@@ -812,7 +812,19 @@ def _sweep_once(
             logger.warning("could not enumerate root %s: %s", r, exc)
             continue
         for child in children:
-            work.append((r, child, True))
+            # Symlink children are reconciled at the path-only level
+            # (descend=False). os.walk(symlink, followlinks=False) follows
+            # the symlink when it's the *starting* path — followlinks only
+            # gates symlinks encountered as subdirectories during the walk
+            # — so a descend=True call against a top-level symlink would
+            # traverse the link's target and write/clear markers there
+            # (potentially outside the watched root). The previous shape
+            # (one os.walk call covering the entire root) saw symlink
+            # children only as `dirnames` entries, where followlinks=False
+            # actually applies; the per-subdir fan-out has to recover that
+            # protection at the work-list build (Codex P1 catch on PR #183).
+            descend = not child.is_symlink()
+            work.append((r, child, descend))
 
     if work:
         max_workers = min(os.cpu_count() or 4, len(work))

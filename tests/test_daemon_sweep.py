@@ -5,13 +5,13 @@ from __future__ import annotations
 import datetime as dt
 from typing import TYPE_CHECKING
 
+import pytest
+
 from dbxignore import daemon, state
 from dbxignore.rules import RuleCache
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
     from tests.conftest import FakeMarkers, WriteFile
 
@@ -194,6 +194,58 @@ def test_sweep_fans_out_per_top_level_child(
     assert (tmp_path / "build").resolve() in fake_markers._ignored
     assert (tmp_path / "src").resolve() not in fake_markers._ignored
     assert (tmp_path / "docs").resolve() not in fake_markers._ignored
+
+
+def test_sweep_does_not_descend_into_top_level_symlink(
+    tmp_path: Path,
+    fake_markers: FakeMarkers,
+    monkeypatch: pytest.MonkeyPatch,
+    write_file: WriteFile,
+) -> None:
+    """A top-level symlink-to-directory must not have its target traversed.
+
+    ``os.walk(path, followlinks=False)`` follows the symlink when the
+    symlink is the *starting* path — ``followlinks`` only applies to
+    symlinks encountered as subdirectories during the walk. The previous
+    sweep shape (one ``os.walk`` covering the whole root) saw symlinks
+    only as ``dirnames`` entries, where ``followlinks=False`` did protect
+    against descent. The per-subdir fan-out has to recover that protection
+    at the work-list build by submitting symlink children with
+    ``descend=False``. Regression for the Codex P1 catch on PR #183.
+    """
+    root = tmp_path / "root"
+    root.mkdir()
+    write_file(root / ".dropboxignore", "*.leak\n")  # any rule; matters only if walked
+    (root / "src").mkdir()  # a real (non-symlink) child for sanity
+
+    target = tmp_path / "outside_target"
+    target.mkdir()
+    leaked = target / "secret.leak"
+    leaked.touch()
+
+    link = root / "link_into_target"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        # Windows non-admin runs without SeCreateSymbolicLink; skip.
+        pytest.skip("symlink creation not supported in this environment")
+
+    monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")
+
+    cache = RuleCache()
+    daemon._sweep_once([root], cache, _utc_now())
+
+    # The leaked file under the symlink target must NEVER have been
+    # queried. The walk into the link target would have surfaced it via
+    # the `*.leak` rule.
+    assert leaked.resolve() not in fake_markers.is_ignored_calls, (
+        f"sweep descended into symlink target — queried {leaked} "
+        f"(out of {len(fake_markers.is_ignored_calls)} queries)"
+    )
+    # Sanity: the regular 'src' subdir was reconciled.
+    assert (root / "src").resolve() in fake_markers.is_ignored_calls, (
+        "regular subdir must still be reconciled"
+    )
 
 
 def test_sweep_handles_unreadable_root(

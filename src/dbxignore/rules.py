@@ -129,6 +129,48 @@ def _escape_segment(segment: str) -> str:
     return "".join("\\" + c if c in _META_CHARS_INLINE else c for c in segment)
 
 
+_FILE_HEADER = "# .dropboxignore — managed by dbxignore\n"
+
+
+def append_rule(rule_file: Path, rule_line: str) -> bool:
+    """Atomic append-iff-missing of ``rule_line`` to ``rule_file``.
+
+    Returns True if the line was appended, False if an equivalent line
+    (after ``rstrip()``) was already present. Creates the file with a
+    leading comment header if it doesn't exist.
+
+    Atomic via temp-then-replace, mirroring ``state.write()``: writes to
+    ``<rule_file>.tmp``, fsyncs, then ``os.replace`` into place. Survives
+    SIGKILL or power loss between read-modify-write — the file is either
+    fully updated or unchanged, never half-written.
+    """
+    target_norm = rule_line.rstrip()
+    if rule_file.exists():
+        content = rule_file.read_text(encoding="utf-8")
+        existing_lines = content.splitlines()
+        if any(line.rstrip() == target_norm for line in existing_lines):
+            return False
+        # Ensure the existing content ends with a newline so our appended
+        # line lands on its own line. ``splitlines()`` already ate a trailing
+        # newline if present, so we always rebuild with explicit \n joins.
+        new_content = "\n".join(existing_lines) + "\n" + rule_line + "\n"
+    else:
+        new_content = _FILE_HEADER + rule_line + "\n"
+
+    tmp = rule_file.with_suffix(rule_file.suffix + ".tmp")
+    tmp.write_text(new_content, encoding="utf-8")
+    os.replace(tmp, rule_file)
+    return True
+
+
+def remove_rule(rule_file: Path, rule_line: str) -> bool:
+    """Atomic removal-iff-present of ``rule_line`` from ``rule_file``.
+
+    Task 3 will implement this. Stub for now.
+    """
+    raise NotImplementedError
+
+
 class _CaseInsensitiveGitIgnorePattern(GitIgnoreSpecPattern):
     """GitIgnoreSpec pattern that compiles regex with re.IGNORECASE.
 

@@ -2039,7 +2039,7 @@ Touches: `src/dbxignore/daemon.py` (`_initial_sweep_worker`).
 
 ## 92. Mixed-case rule filenames not handled end-to-end
 
-**Surfaced 2026-05-09 in PR #184 (Codex P2 #5).**
+**Surfaced 2026-05-09 in PR #184 (Codex P2 #5). Status: RESOLVED 2026-05-09 (PR #185).**
 
 `RuleCache.load_root` now discovers and canonicalizes mixed-case rule files (e.g. `.DropboxIgnore`) — but the watchdog path (`daemon._classify`, `daemon._moved_dest_under_root`) and several `RuleCache` mutations (`remove_file`, `reload_file`, `match`, `explain`) still use exact-case `name == IGNORE_FILENAME` checks. Practical effect on case-sensitive Linux/macOS-APFS-strict with `.DropboxIgnore`:
 
@@ -2069,7 +2069,7 @@ Touches: `src/dbxignore/rules.py` (`match`, `explain`, `remove_file`, `reload_fi
 
 ### Open
 
-Ten items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Nine items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2080,11 +2080,12 @@ Ten items. All passive (no concrete trigger requires action) — bundle each wit
 - **#53** — Initial-sweep wall-clock on a fresh install (no existing markers) was 49.62s on a 27k-dir tree, blocking systemd readiness for ~50s. Candidate 1 (ready-before-sweep) shipped in PR #162 (removed the readiness-pause symptom). Candidate 3 (per-subdir worker fan-out) shipped in PR #183 (parallelizes the sweep itself across top-level subdirs). Only candidate 2 (persisted sweep-complete hint, ~80 LOC) remains open — has reliability concerns on network FS / File Provider mtime semantics; no fired trigger yet.
 - **#54** — Watchdog observer's recursive watch schedules one inotify watch per directory under `~/Dropbox`, including marked-ignored subtrees. Architectural fix (per-directory watches with mark/unmark lifecycle) is ~200 LOC of race-condition-prone state-machine work; deferred until a beta tester hits the watch ceiling on a system with limits already raised.
 - **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall.
-- **#92** — Mixed-case rule filenames (e.g. `.DropboxIgnore`) discovered by `load_root` (PR #184) but watchdog path and several `RuleCache` mutations still use exact-case `==` checks. Edits to mixed-case rule files have up-to-1-hour staleness until the next hourly sweep refreshes the cache. Pre-existing inconsistency on Windows since v0.2; PR #184 surfaced it on Linux/macOS-APFS-strict. Fix candidates: (1) comprehensive case-insensitive predicate across rules.py and daemon.py (~30 LOC), (2) document as a known limitation, (3) defer. No fired trigger.
 
 ### Resolved (reverse chronological)
 
 #### 2026-05-09
+
+- **#92** in PR #185 — comprehensive case-insensitive rule-filename predicate. Took fix candidate (1). Two new helpers in `rules.py`: `is_ignore_filename(name: str) -> bool` (case-insensitive `.dropboxignore` predicate) and `_canonical_cache_key(path: Path) -> Path` (lowercase-basename cache-key normalization). Used at all the case-sensitivity sites flagged by Codex P2 #5 on PR #184: `match` and `explain` (predicate), `reload_file` and `remove_file` and `_load_file` and `_load_if_changed` (cache-key normalization), `daemon._classify` and `daemon._moved_dest_under_root` and `_dispatch`'s `src_is_rules` (predicate), `reconcile._reconcile_path` (predicate, for the rule-file-marked-ignored warning), `cli._walk_marked_paths` (predicate, for skipping rule files in the clear-walk). End state: `.DropboxIgnore` and `.dropboxignore` are equivalent across discovery, watchdog, reconcile, and walk paths regardless of filesystem case sensitivity. Eight new tests cover the predicate (`test_is_ignore_filename_predicate`), `match`/`explain` short-circuit (two tests), `reload_file`/`remove_file` canonical-key normalization (two tests), `_reconcile_path` warning fires for mixed-case (one test), and `daemon._classify`/`_moved_dest_under_root` recognize mixed-case events (two tests). The cli `_walk_marked_paths` use site reuses an existing untested branch (rule-file marker auto-clear is a project invariant restoration that's verified end-to-end by the existing manual-test scripts rather than a unit test).
 
 - **#86** in PR #184 — replaced `root.rglob(IGNORE_FILENAME)` with `os.walk(root, followlinks=False)` in `RuleCache.load_root`, with the per-iteration `stop_event` check now firing on every directory visit instead of every rglob yield. Took fix candidate (1). The pre-fix shape's worst case was a 100k-directory tree with zero `.dropboxignore` files: rglob yielded zero results, the for-loop body (and its cancellation check) never executed, the unbounded outer `worker.join()` (PR #162's singleton-lock-not-released invariant) blocked shutdown until rglob finished traversing every directory. Operationally bounded by systemd's `TimeoutStopSec=90s` default; the new shape returns within one directory's worth of work. Case-insensitive lookups preserved via `(Path(current) / IGNORE_FILENAME).is_file()` — verified that `Path.resolve()` produces identical cache keys to the prior `rglob`-based path on Windows NTFS, so a `.DropboxIgnore` (mixed casing on disk) is still loaded under the same `.dropboxignore` cache key. Existing test `test_load_root_honors_stop_event_between_rglob_yields` reframed as `test_load_root_honors_stop_event_between_directory_visits` with `os.walk`-based mocking; new test `test_load_root_observes_stop_event_in_dropboxignore_free_tree` pins the load-bearing improvement (zero-rule-file tree still observes cancellation per directory).
 

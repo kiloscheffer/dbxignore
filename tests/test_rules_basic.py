@@ -302,12 +302,14 @@ def test_load_root_force_reloads_when_fallback_to_mixed_case(
     assert mixed.stat().st_size == cached_size, (
         "test setup error: replacement file size must match cached size"
     )
-    # Force-set mtime to match the prior cache exactly (defeats the
-    # mtime+size shortcut in the absence of `force=True`).
+    # Force-set mtime to match the prior cache exactly. Without the
+    # `as_path.name != ignore_file.name` skip-shortcut check inside
+    # `_load_if_changed`, the mtime+size match would skip reloading and
+    # the test would see stale "first_rule/" content.
     os.utime(mixed, ns=(cached_mtime, cached_mtime))
 
     # Phase 3: re-sweep. The fallback selects `.DropboxIgnore` (canonical
-    # is gone). Force-reload must fire even though the stat values match
+    # is gone). The reload must fire even though the stat values match
     # the cached entry's.
     cache.load_root(tmp_path)
 

@@ -25,6 +25,12 @@ CLEANUP_DROPBOX=0
 TEST_SUBDIR="dbxignore-test"
 DROPBOXD_LOG="$(mktemp -t dropboxd.XXXXXX.log)"
 DROPBOXD_PID=""
+# Mirror src/dbxignore/state.py::user_state_dir on Linux: XDG_STATE_HOME
+# wins, with $HOME/.local/state as fallback. Hardcoding the fallback (as
+# elsewhere in this script for state.json/daemon.log probes) silently
+# misses when the tester has XDG_STATE_HOME set — slow-sweep marker
+# would seed at one path and the daemon would read from another.
+DBXIGNORE_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dbxignore"
 
 for arg in "$@"; do
     case "$arg" in
@@ -73,6 +79,10 @@ cleanup() {
         fi
     fi
     rm -f "$DROPBOXD_LOG" 2>/dev/null || true
+    # Belt-and-suspenders: remove the slow-sweep test marker if a script
+    # crash skipped the in-phase cleanup (BACKLOG #89). Honoring a stale
+    # marker on a future install would silently pad every initial sweep.
+    rm -f "$DBXIGNORE_STATE_DIR/_test_slow_sweep" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -465,6 +475,15 @@ phase_daemon() {
         echo "  Run: sudo sysctl fs.inotify.max_user_watches=524288"
     fi
 
+    # Slow-sweep determinism (BACKLOG #89). Seed a 15s pad so 5a's 5-iteration
+    # state=starting poll deterministically catches the transient state and
+    # 5f's 180s poll deterministically observes the transition to running,
+    # regardless of the watched-tree size. The daemon logs WARNING when it
+    # honors this; cleanup at the end of phase 5 removes it before phase 6.
+    mkdir -p "$DBXIGNORE_STATE_DIR"
+    printf '15\n' > "$DBXIGNORE_STATE_DIR/_test_slow_sweep"
+    note "5 — slow-sweep marker seeded: 15s pad on initial sweep (item #89)"
+
     dbxignore install >/tmp/dbxignore-install.out 2>&1 \
         && pass "dbxignore install (rc=0)" \
         || { fail "dbxignore install"; sed 's/^/    /' /tmp/dbxignore-install.out; return; }
@@ -521,6 +540,32 @@ phase_daemon() {
         pass "5a — observed state=starting via --summary post-readiness (PR #162)"
     else
         note "5a — state=starting not observed within 5s post-readiness (small tree where sweep finished, or state.json not yet written); 5f still pins state=running"
+    fi
+
+    # 5a-post — gate watchdog tests on state=running (cache populated).
+    # cache.load_root runs in _initial_sweep_worker, NOT the main thread
+    # (item #53 + daemon.py:638). When the slow-sweep marker pads the
+    # worker, RuleCache stays empty until the pad expires AND load_root
+    # finishes — watchdog events arriving during that window dispatch
+    # against match()=False, so 5b would observe an unmarked file even
+    # though the rule applies. Even without the marker, a slow sweep on
+    # a real ~/Dropbox tree could race 5b's 8-second create-and-check
+    # window — this gate makes the test deterministic in both cases.
+    # Codex P2 catch on PR #175.
+    note "5a-post — waiting up to 180s for state=running (cache populated)"
+    local cache_ready=0
+    for _ in $(seq 1 180); do
+        if dbxignore status --summary 2>/dev/null | grep -qE '^state=running pid='; then
+            cache_ready=1; break
+        fi
+        sleep 1
+    done
+    if [ "$cache_ready" -eq 1 ]; then
+        pass "5a-post — cache populated; safe to exercise watchdog events"
+    else
+        fail "5a-post — state=running never reached within 180s"
+        _dump_daemon_diagnostics "$T"
+        return
     fi
 
     # 5b — watchdog reacts to a new file (created AFTER observer is live)
@@ -622,6 +667,12 @@ phase_daemon() {
         dbxignore status 2>&1 | sed 's/^/    /'
         fail "5f — human status did not report 'daemon: running'"
     fi
+
+    # Remove slow-sweep marker so phase 6's re-install + uninstall cycles
+    # run with normal sweep timing (item #89). The cleanup() trap removes
+    # it too if this point is never reached.
+    rm -f "$DBXIGNORE_STATE_DIR/_test_slow_sweep"
+    note "5 — slow-sweep marker removed before phase 6 (item #89)"
 }
 
 # ---------------------------------------------------------------------------

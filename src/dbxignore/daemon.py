@@ -7,6 +7,7 @@ import datetime as dt
 import errno
 import logging
 import logging.handlers
+import math
 import os
 import signal
 import sys
@@ -845,6 +846,79 @@ def _sweep_once(
         logger.warning("could not write state file: %s", exc)
 
 
+SLOW_SWEEP_MARKER_NAME = "_test_slow_sweep"
+
+
+def _slow_sweep_pad_seconds() -> float:
+    """Return seconds to pad the initial sweep with for manual-test determinism.
+
+    Reads ``state.user_state_dir() / "_test_slow_sweep"``: present and parseable
+    as a non-negative number → return that value and log a WARNING so the
+    honored state is never silently active. Missing, empty, or invalid
+    contents → return ``0.0``. Manual-test scripts use the marker to
+    deterministically exercise the long-sweep arms (Phase 5a's
+    ``state=starting`` capture and 5f's ``state=running`` transition) on
+    small test trees that would otherwise finish the sweep before any
+    timing-sensitive case can observe the transient state (item #89).
+
+    Lives in production code because the manual-test scripts drive the
+    *installed* daemon — bypassing the install path would change what's
+    being tested. Marker-file rather than env var because the install layer
+    forwards only ``DBXIGNORE_ROOT`` (other ``DBXIGNORE_*`` tuning vars are
+    set via unit/plist drop-ins) and Windows Task Scheduler XML has no
+    env-var forwarding mechanism at all; a marker file works uniformly
+    across all three platforms with zero install-layer surface change.
+    Validation shape mirrors ``_timeouts_from_env``.
+    """
+    marker = state_module.user_state_dir() / SLOW_SWEEP_MARKER_NAME
+    try:
+        raw = marker.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return 0.0
+    except (OSError, UnicodeDecodeError) as exc:
+        # UnicodeDecodeError isn't an OSError — derives from ValueError —
+        # so it needs its own arm. Surfaces when a stale marker was written
+        # in non-UTF-8 (Windows PS 5.1 Set-Content writes UTF-16 by default;
+        # corrupt/binary contents) and would otherwise propagate out of the
+        # worker thread before the sweep runs.
+        logger.warning("could not read slow-sweep marker %s: %s", marker, exc)
+        return 0.0
+    if not raw:
+        return 0.0
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "%s contents %r is not a number; ignoring slow-sweep marker.",
+            marker,
+            raw,
+        )
+        return 0.0
+    if value < 0:
+        logger.warning(
+            "%s contents %s is negative; ignoring slow-sweep marker.",
+            marker,
+            value,
+        )
+        return 0.0
+    if not math.isfinite(value) or value > threading.TIMEOUT_MAX:
+        logger.warning(
+            "%s contents %s is non-finite or above threading.TIMEOUT_MAX (%s); "
+            "ignoring slow-sweep marker.",
+            marker,
+            value,
+            threading.TIMEOUT_MAX,
+        )
+        return 0.0
+    if value > 0:
+        logger.warning(
+            "%s honored — initial sweep padded by %.1fs (test-only marker).",
+            marker,
+            value,
+        )
+    return value
+
+
 def _initial_sweep_worker(
     roots: list[Path],
     cache: RuleCache,
@@ -858,7 +932,16 @@ def _initial_sweep_worker(
     ``stop_event`` so the main thread shuts the daemon down via the same
     code path SIGTERM uses. ``BaseException`` (KeyboardInterrupt, SystemExit)
     propagates normally — those go through the signal handler.
+
+    A ``_test_slow_sweep`` marker file under ``state.user_state_dir()``
+    pads this worker with a ``stop_event.wait`` before the sweep runs, so
+    manual-test scripts can observe the ``state=starting`` window on small
+    trees (item #89). The wait is interruptible — shutdown stays prompt
+    even mid-pad.
     """
+    pad_s = _slow_sweep_pad_seconds()
+    if pad_s > 0 and stop_event.wait(pad_s):
+        return
     try:
         _sweep_once(
             roots,

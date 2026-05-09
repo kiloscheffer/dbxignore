@@ -379,6 +379,15 @@ phase_daemon() {
     rm -rf "$T"; mkdir -p "$T"
     printf '*.tmp\n' > "$T/.dropboxignore"
 
+    # Slow-sweep determinism (BACKLOG #89). Seed a 15s pad so 5a's 5-iteration
+    # state=starting poll deterministically catches the transient state and
+    # 5f's 180s poll deterministically observes the transition to running,
+    # regardless of the watched-tree size. The daemon logs WARNING when it
+    # honors this; cleanup at the end of phase 5 removes it before phase 6.
+    mkdir -p "$HOME/Library/Application Support/dbxignore"
+    printf '15\n' > "$HOME/Library/Application Support/dbxignore/_test_slow_sweep"
+    note "5 — slow-sweep marker seeded: 15s pad on initial sweep (item #89)"
+
     dbxignore install >/tmp/dbxignore-install.out 2>&1 \
         && pass "dbxignore install (rc=0)" \
         || { fail "dbxignore install"; sed 's/^/    /' /tmp/dbxignore-install.out; return; }
@@ -436,6 +445,32 @@ phase_daemon() {
         pass "5a — observed state=starting via --summary post-readiness (PR #162)"
     else
         note "5a — state=starting not observed within 5s post-readiness (small tree where sweep finished, or state.json not yet written); 5f still pins state=running"
+    fi
+
+    # 5a-post — gate watchdog tests on state=running (cache populated).
+    # cache.load_root runs in _initial_sweep_worker, NOT the main thread
+    # (item #53 + daemon.py:638). When the slow-sweep marker pads the
+    # worker, RuleCache stays empty until the pad expires AND load_root
+    # finishes — watchdog events arriving during that window dispatch
+    # against match()=False, so 5b would observe an unmarked file even
+    # though the rule applies. Even without the marker, a slow sweep on
+    # a real Dropbox tree could race 5b's 8-second create-and-check
+    # window — this gate makes the test deterministic in both cases.
+    # Codex P2 catch on PR #175.
+    note "5a-post — waiting up to 180s for state=running (cache populated)"
+    local cache_ready=0
+    for _ in $(seq 1 180); do
+        if dbxignore status --summary 2>/dev/null | grep -qE '^state=running pid='; then
+            cache_ready=1; break
+        fi
+        sleep 1
+    done
+    if [ "$cache_ready" -eq 1 ]; then
+        pass "5a-post — cache populated; safe to exercise watchdog events"
+    else
+        fail "5a-post — state=running never reached within 180s"
+        _dump_daemon_diagnostics "$T"
+        return
     fi
 
     # Item 37 — verify the daemon also logged the sync mode at startup.
@@ -545,6 +580,12 @@ phase_daemon() {
         dbxignore status 2>&1 | sed 's/^/    /'
         fail "5f — human status did not report 'daemon: running'"
     fi
+
+    # Remove slow-sweep marker so phase 6's re-install + uninstall cycles
+    # run with normal sweep timing (item #89). Phase 7 also removes it as
+    # a defensive backstop if this point is never reached.
+    rm -f "$HOME/Library/Application Support/dbxignore/_test_slow_sweep"
+    note "5 — slow-sweep marker removed before phase 6 (item #89)"
 }
 
 # ---------------------------------------------------------------------------
@@ -643,6 +684,12 @@ phase_cleanup() {
 
     rm -rf "${DROPBOX_DIR:?}/$TEST_SUBDIR" 2>/dev/null || true
     note "test fixtures removed from Dropbox folder"
+
+    # Defensive backstop for the slow-sweep marker (item #89). Honoring a
+    # stale marker on a future install would silently pad every initial
+    # sweep, so make sure phase 7 cleans it up even when phase 5 returned
+    # early.
+    rm -f "$HOME/Library/Application Support/dbxignore/_test_slow_sweep" 2>/dev/null || true
 
     uv tool uninstall dbxignore >/dev/null 2>&1 \
         && pass "uv tool uninstall dbxignore" \

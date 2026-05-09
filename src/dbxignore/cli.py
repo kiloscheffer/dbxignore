@@ -63,6 +63,8 @@ def _purge_local_state() -> None:
     log dir (~/Library/Logs/dbxignore/) is separate from the state dir
     (~/Library/Application Support/dbxignore/), so we clean both.
     """
+    from dbxignore import daemon as daemon_mod
+
     state_dir = state.user_state_dir()
     if state_dir.exists():
         _purge_dir(
@@ -73,6 +75,7 @@ def _purge_local_state() -> None:
                 "daemon.lock",
                 "daemon.log",
                 "daemon.log.*",
+                daemon_mod.SLOW_SWEEP_MARKER_NAME,
             ],
         )
         click.echo(f"Cleaned {state_dir}.")

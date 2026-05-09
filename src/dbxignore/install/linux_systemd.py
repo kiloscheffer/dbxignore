@@ -15,12 +15,23 @@ logger = logging.getLogger(__name__)
 UNIT_NAME = "dbxignore.service"
 
 # Env vars that `install_unit()` forwards from the caller's shell into the
-# generated unit's `[Service]` block. Scoped to DBXIGNORE_ROOT because
-# without it the daemon silently falls back to `~/.dropbox/info.json`
-# discovery, leaving non-stock-Dropbox users confused. Other DBXIGNORE_*
-# vars are optional tuning with sensible defaults — users who want to adjust
-# them can drop in their own override under `dbxignore.service.d/`.
-_FORWARDED_ENV_VARS = ("DBXIGNORE_ROOT",)
+# generated unit's `[Service]` block.
+#
+# DBXIGNORE_ROOT — without this forwarded, the daemon silently falls back
+# to `~/.dropbox/info.json` discovery, leaving non-stock-Dropbox users
+# confused.
+#
+# XDG_STATE_HOME — `state.user_state_dir()` resolves
+# `$XDG_STATE_HOME/dbxignore` if set, falling back to `~/.local/state/...`
+# otherwise. Without forwarding, a user who sets `XDG_STATE_HOME` in their
+# shell ends up with their own tools (`dbxignore status` etc.) probing one
+# path and the systemd-launched daemon writing to another, producing
+# silent "no state.json" reports. Forwarding aligns both sides.
+#
+# Other DBXIGNORE_* vars are optional tuning with sensible defaults — users
+# who want to adjust them can drop in their own override under
+# `dbxignore.service.d/`.
+_FORWARDED_ENV_VARS = ("DBXIGNORE_ROOT", "XDG_STATE_HOME")
 
 
 def _unit_path() -> Path:
@@ -105,9 +116,17 @@ def build_unit_content(
     exec_start = f"{_quote_exec_start_path(exe_path)} {arguments}".strip()
     env_lines = ""
     if environment:
+        # Symmetric with `_quote_exec_start_path`'s `%` → `%%` doubling:
+        # systemd's specifier expansion runs inside `Environment=` values
+        # too (per systemd.exec(5) "specifier expansion is possible"), so
+        # a literal `%` in a forwarded value (e.g. `XDG_STATE_HOME=
+        # /home/me/100%state`) would be silently rewritten by the
+        # specifier expander. Doubled before the C-style escape because
+        # the two transformations are orthogonal — backslash + quote
+        # escapes do not add or remove `%` characters.
         env_lines = (
             "\n".join(
-                f'Environment="{key}={_escape_systemd_quoted_string(value)}"'
+                f'Environment="{key}={_escape_systemd_quoted_string(value.replace("%", "%%"))}"'
                 for key, value in environment.items()
             )
             + "\n"

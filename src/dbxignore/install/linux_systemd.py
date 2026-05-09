@@ -116,9 +116,17 @@ def build_unit_content(
     exec_start = f"{_quote_exec_start_path(exe_path)} {arguments}".strip()
     env_lines = ""
     if environment:
+        # Symmetric with `_quote_exec_start_path`'s `%` → `%%` doubling:
+        # systemd's specifier expansion runs inside `Environment=` values
+        # too (per systemd.exec(5) "specifier expansion is possible"), so
+        # a literal `%` in a forwarded value (e.g. `XDG_STATE_HOME=
+        # /home/me/100%state`) would be silently rewritten by the
+        # specifier expander. Doubled before the C-style escape because
+        # the two transformations are orthogonal — backslash + quote
+        # escapes do not add or remove `%` characters.
         env_lines = (
             "\n".join(
-                f'Environment="{key}={_escape_systemd_quoted_string(value)}"'
+                f'Environment="{key}={_escape_systemd_quoted_string(value.replace("%", "%%"))}"'
                 for key, value in environment.items()
             )
             + "\n"

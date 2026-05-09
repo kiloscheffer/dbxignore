@@ -132,6 +132,22 @@ def test_unit_content_escapes_backslash_and_quote_in_exec_start_path() -> None:
     assert r'ExecStart="/home/user/odd \"path\"/dbxignored"' in content
 
 
+def test_unit_content_escapes_percent_in_environment_value() -> None:
+    """systemd expands ``%X`` specifiers inside ``Environment=`` values too
+    (per ``systemd.exec(5)`` "specifier expansion is possible"). A literal
+    ``%`` in a forwarded var (e.g. ``XDG_STATE_HOME=/home/me/100%state``)
+    must be doubled to ``%%`` so the daemon receives the path the user
+    actually set. Codex P3 catch on PR #177."""
+    from dbxignore.install import linux_systemd
+
+    content = linux_systemd.build_unit_content(
+        Path("/usr/local/bin/dbxignored"),
+        "",
+        environment={"XDG_STATE_HOME": "/home/me/100%state"},
+    )
+    assert 'Environment="XDG_STATE_HOME=/home/me/100%%state"' in content
+
+
 def test_unit_content_escapes_percent_in_quoted_exec_start_path() -> None:
     """systemd expands ``%X`` specifiers in ExecStart at unit-load time
     (``%T`` → ``/tmp``, ``%h`` → home, etc.). A literal ``%`` in the install

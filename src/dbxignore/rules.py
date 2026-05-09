@@ -168,8 +168,8 @@ class RuleCache:
                     continue
                 self._load_if_changed(ignore_file)
             # Drop cached entries for .dropboxignore files under this root that
-            # rglob didn't find — they've been deleted since the last load and
-            # their rules must stop applying.
+            # the walk didn't find — they've been deleted since the last load
+            # and their rules must stop applying.
             for stale in [p for p in self._rules if p not in seen and p.is_relative_to(root)]:
                 del self._rules[stale]
             self._recompute_conflicts(log_warnings=log_warnings)

@@ -426,7 +426,14 @@ def test_reload_file_with_mixed_case_path_updates_canonical_entry(
     Pre-#92, reload_file did `self._rules.pop(ignore_file.resolve(), None)`
     which on POSIX uses the on-disk casing. Mixed-case path → mixed-case
     cache key → match()'s lookup of canonical key misses the fresh entry
-    and continues reading the stale canonical-key entry."""
+    and continues reading the stale canonical-key entry.
+
+    The reload-triggering edit goes to the canonical file (which is what
+    actually drives the cache content per `load_root`'s prefer-exact-match
+    precedence). The watchdog event happens to deliver the mixed-case
+    path; the precedence guard in reload_file redirects the read to the
+    canonical sibling so the cache entry reflects the canonical file's
+    rules."""
     rule_file = tmp_path / ".dropboxignore"
     write_file(rule_file, "first/\n")
 
@@ -436,9 +443,9 @@ def test_reload_file_with_mixed_case_path_updates_canonical_entry(
     assert canonical_key in cache._rules
     assert "first/" in cache._rules[canonical_key].lines
 
-    # Watchdog delivers the event using mixed-case path (e.g. on POSIX
-    # case-sensitive FS where the user actually has `.DropboxIgnore`).
-    # Update the file's content to detect whether reload took effect.
+    # User edits the (canonical) rule file. Watchdog could fire for either
+    # casing depending on FS quirks; passing the mixed-case path here
+    # exercises the case-insensitive cache-key normalization.
     rule_file.write_text("second/\n", encoding="utf-8")
 
     cache.reload_file(tmp_path / ".DropboxIgnore")  # <- mixed-case path
@@ -452,25 +459,116 @@ def test_reload_file_with_mixed_case_path_updates_canonical_entry(
     )
 
 
+def test_reload_file_preserves_canonical_precedence_when_both_files_exist(
+    tmp_path: Path, write_file: WriteFile
+) -> None:
+    """When both `.dropboxignore` (canonical) and `.DropboxIgnore` (mixed
+    case) exist on disk (only possible on case-sensitive Linux/macOS-APFS
+    -strict), a watchdog event for the mixed-case sibling must NOT
+    overwrite the cache entry with the mixed-case file's content.
+    `load_root`'s prefer-exact-match selection means the canonical file
+    drives the active cache; an edit to the shadowed sibling is a no-op
+    from the cache's perspective. Codex P2 catch on PR #185."""
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    canonical = sub / ".dropboxignore"
+    mixed = sub / ".DropboxIgnore"
+    canonical.write_text("canonical_rule/\n", encoding="utf-8")
+
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+    cached_lines_before = list(cache._rules[canonical.resolve()].lines)
+
+    # Try to create the mixed-case sibling. On case-insensitive FS this
+    # rewrites the canonical file's content (same on-disk file).
+    try:
+        mixed.write_text("mixed_rule/\n", encoding="utf-8")
+    except OSError:
+        pytest.skip("mixed-case sibling creation failed on this FS")
+    if mixed.resolve() == canonical.resolve():
+        pytest.skip("case-insensitive FS — both names resolve to one file")
+
+    # Watchdog fires for the mixed-case sibling. The reload must redirect
+    # to the canonical file (which is unchanged) and keep its rules in
+    # the cache; the mixed-case file's content must NOT replace them.
+    cache.reload_file(mixed)
+
+    cached_lines_after = list(cache._rules[canonical.resolve()].lines)
+    assert "canonical_rule/" in cached_lines_after, (
+        "canonical file's rules must remain in the cache"
+    )
+    assert "mixed_rule/" not in cached_lines_after, (
+        "mixed-case sibling's rules must NOT shadow the canonical file"
+    )
+    assert cached_lines_after == cached_lines_before, (
+        "cache content should be unchanged when reload redirects to "
+        f"unchanged canonical sibling; got {cached_lines_after}"
+    )
+
+
 def test_remove_file_with_mixed_case_path_removes_canonical_entry(
     tmp_path: Path, write_file: WriteFile
 ) -> None:
     """A watchdog deletion event delivered with mixed-case path must
-    remove the canonical-key cache entry. Without normalization, the
-    pop misses on POSIX and the cache stays stale (item #92)."""
-    rule_file = tmp_path / ".dropboxignore"
-    write_file(rule_file, "deleted/\n")
+    remove the canonical-key cache entry when the rule file is genuinely
+    gone (no canonical sibling on disk). Without canonical-key
+    normalization the pop misses on POSIX and the cache stays stale
+    (item #92)."""
+    # Only `.DropboxIgnore` ever existed (no canonical sibling).
+    rule_file = tmp_path / ".DropboxIgnore"
+    rule_file.write_text("deleted/\n", encoding="utf-8")
 
     cache = RuleCache()
     cache.load_root(tmp_path)
-    canonical_key = rule_file.resolve()
+    canonical_key = (tmp_path / ".dropboxignore").resolve()
     assert canonical_key in cache._rules
 
-    # Watchdog delivers deletion using mixed-case path.
-    cache.remove_file(tmp_path / ".DropboxIgnore")
+    # File is genuinely deleted before the watchdog event fires.
+    rule_file.unlink()
+    cache.remove_file(rule_file)  # mixed-case path
 
     assert canonical_key not in cache._rules, (
         "remove_file with mixed-case path must drop the canonical-key entry"
+    )
+
+
+def test_remove_file_preserves_cache_when_canonical_sibling_exists(
+    tmp_path: Path, write_file: WriteFile
+) -> None:
+    """A deletion event for `.DropboxIgnore` while a canonical
+    `.dropboxignore` sibling still exists must NOT drop the cache
+    entry — the canonical file's rules are still authoritative.
+    Mirrors `load_root`'s prefer-exact-match precedence on the
+    deletion side (Codex P2 catch on PR #185).
+
+    Only meaningful on case-sensitive Linux/macOS-APFS-strict where
+    both files are distinct entries. On case-insensitive FS, deleting
+    one removes both names; the test skips."""
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    canonical = sub / ".dropboxignore"
+    mixed = sub / ".DropboxIgnore"
+    canonical.write_text("canonical/\n", encoding="utf-8")
+    try:
+        mixed.write_text("mixed/\n", encoding="utf-8")
+    except OSError:
+        pytest.skip("mixed-case sibling creation failed on this FS")
+    if mixed.resolve() == canonical.resolve():
+        pytest.skip("case-insensitive FS — both names resolve to one file")
+
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+    canonical_key = canonical.resolve()
+    assert canonical_key in cache._rules
+
+    # User deletes only the mixed-case sibling. Watchdog fires for
+    # `.DropboxIgnore` deletion.
+    mixed.unlink()
+    cache.remove_file(mixed)
+
+    assert canonical_key in cache._rules, (
+        "canonical sibling's cache entry must NOT be dropped when only the "
+        "mixed-case sibling was deleted"
     )
 
 

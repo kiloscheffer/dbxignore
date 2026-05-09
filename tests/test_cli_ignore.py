@@ -4,6 +4,7 @@ Covers helper unit tests, command happy paths, idempotence + redundancy
 branches, --yes / --dry-run flags, error paths, and daemon-coexistence smoke.
 """
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -154,3 +155,98 @@ def test_ignore_redundant_when_wildcard_already_matches(
     content = (proj / IGNORE_FILENAME).read_text(encoding="utf-8")
     assert content == "**/build/\n"  # unchanged
     assert fake_markers.is_ignored(target)
+
+
+def test_ignore_rejects_nonexistent_path(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(root / "ghost"), "--yes"])
+    assert result.exit_code == 2
+    assert "does not exist" in result.output
+
+
+def test_ignore_rejects_path_outside_roots(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    elsewhere = tmp_path.parent / "not_dropbox"
+    elsewhere.mkdir(exist_ok=True)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(elsewhere), "--yes"])
+    assert result.exit_code == 2
+    assert "not under any Dropbox root" in result.output
+
+
+def test_ignore_rejects_no_dropbox_roots(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [])
+    target = tmp_path / "build"
+    target.mkdir()
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(target), "--yes"])
+    assert result.exit_code == 2
+    assert "No Dropbox roots" in result.output
+
+
+def test_ignore_dry_run_does_not_mutate(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(target), "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "would append" in result.output
+    assert "would set marker" in result.output
+    assert not (root / IGNORE_FILENAME).exists()
+    assert not fake_markers.is_ignored(target)
+
+
+def test_ignore_file_target_has_no_trailing_slash(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "notes.txt"
+    target.touch()
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(target), "--yes"])
+    assert result.exit_code == 0, result.output
+    content = (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert "notes.txt\n" in content
+    assert "notes.txt/\n" not in content
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows filesystems forbid '*' in filenames",
+)
+def test_ignore_meta_char_escaping_in_dir_name(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "foo*bar"
+    target.mkdir()
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(target), "--yes"])
+    assert result.exit_code == 0, result.output
+    content = (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert r"foo\*bar/" in content
+
+
+def test_ignore_default_prompts_then_aborts_on_no(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(target)], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    # No mutation occurred.
+    assert not (root / IGNORE_FILENAME).exists()
+    assert not fake_markers.is_ignored(target)

@@ -779,18 +779,64 @@ def _sweep_once(
         cache.load_root(r, stop_event=stop_event)
 
     # Phase 2: reconcile each root. Reads cache (no writes) and writes
-    # per-file ADS markers on disjoint paths, so threads across roots
-    # don't contend. Single-root skips the pool to stay simple.
-    if len(roots) > 1:
-        with ThreadPoolExecutor(max_workers=len(roots)) as pool:
+    # per-file markers on disjoint paths, so threads don't contend.
+    #
+    # Fan-out across top-level subdirs (item #53 candidate 3): the ~50s
+    # initial-sweep wall-clock on a 27k-dir personal Dropbox tree is
+    # dominated by per-directory ``markers.is_ignored`` syscalls, and a
+    # single root's walk is single-threaded under the per-root pool used
+    # before. Splitting per top-level child lets a single 27k-dir root
+    # parallelize across its ~10-50 immediate subdirs. Multi-root setups
+    # also fall out of this — every (root, child) pair lands in the same
+    # pool rather than two nested layers.
+    #
+    # Each root contributes one ``descend=False`` call (reconcile root's
+    # own marker, no walk) plus one ``descend=True`` call per immediate
+    # child. ``reconcile_subtree`` short-circuits at line 81 when the path
+    # itself ends up ignored, so a child whose marker matches an existing
+    # rule is reconciled in O(1) without descending — the steady-state
+    # pruning contract still fires per-child.
+    work: list[tuple[Path, Path, bool]] = []
+    for r in roots:
+        if stop_event is not None and stop_event.is_set():
+            logger.debug("sweep cancelled in phase 2 work-list build; skipping remaining roots")
+            return
+        work.append((r, r, False))
+        try:
+            children = sorted(r.iterdir())
+        except OSError as exc:
+            # Root unreadable: log and continue with the descend=False
+            # entry for this root (which itself will surface the same
+            # error via _reconcile_path's broad-OSError arm). Mirrors
+            # the way Phase 1 tolerates per-root failures.
+            logger.warning("could not enumerate root %s: %s", r, exc)
+            continue
+        for child in children:
+            # Symlink children are reconciled at the path-only level
+            # (descend=False). os.walk(symlink, followlinks=False) follows
+            # the symlink when it's the *starting* path — followlinks only
+            # gates symlinks encountered as subdirectories during the walk
+            # — so a descend=True call against a top-level symlink would
+            # traverse the link's target and write/clear markers there
+            # (potentially outside the watched root). The previous shape
+            # (one os.walk call covering the entire root) saw symlink
+            # children only as `dirnames` entries, where followlinks=False
+            # actually applies; the per-subdir fan-out has to recover that
+            # protection at the work-list build (Codex P1 catch on PR #183).
+            descend = not child.is_symlink()
+            work.append((r, child, descend))
+
+    if work:
+        max_workers = min(os.cpu_count() or 4, len(work))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
             reports = list(
                 pool.map(
-                    lambda r: reconcile_subtree(r, r, cache, stop_event=stop_event),
-                    roots,
+                    lambda w: reconcile_subtree(
+                        w[0], w[1], cache, descend=w[2], stop_event=stop_event
+                    ),
+                    work,
                 )
             )
-    elif roots:
-        reports = [reconcile_subtree(roots[0], roots[0], cache, stop_event=stop_event)]
     else:
         reports = []
 

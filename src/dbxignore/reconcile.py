@@ -41,6 +41,7 @@ def reconcile_subtree(
     cache: RuleCache,
     *,
     dry_run: bool = False,
+    descend: bool = True,
     stop_event: threading.Event | None = None,
 ) -> Report:
     """Reconcile ``subdir`` under ``root`` with the current rule set.
@@ -59,6 +60,13 @@ def reconcile_subtree(
     mutations; per-path detail lives in ``report.would_mark`` /
     ``report.would_clear`` for CLI consumption.
 
+    When ``descend`` is False, only ``subdir`` itself is reconciled; the
+    ``os.walk`` is skipped. Used by ``daemon._sweep_once`` to handle the
+    root-path reconcile separately from the per-top-level-child fan-out
+    (item #53 candidate 3) — the caller submits one ``descend=False`` call
+    per root plus one ``descend=True`` call per top-level child to a single
+    ``ThreadPoolExecutor``, parallelizing the walk across subdirs.
+
     When ``stop_event`` is supplied and gets set during the walk, the walk
     breaks out at the next directory or file boundary. The ``Report``
     returned has accurate counts for what completed before the break;
@@ -72,13 +80,18 @@ def reconcile_subtree(
     # Pairs with the `done` log below to measure subtree-walk wall-clock.
     # Under AV scanning, this can be the dominant cost on Windows runners.
     # No-op cost when DBXIGNORE_LOG_LEVEL != DEBUG.
-    logger.debug("reconcile_subtree start subdir=%s dry_run=%s", subdir, dry_run)
+    logger.debug(
+        "reconcile_subtree start subdir=%s dry_run=%s descend=%s", subdir, dry_run, descend
+    )
 
     if subdir != root and not subdir.is_relative_to(root):
         raise ValueError(f"subdir {subdir} is not under root {root}")
 
-    # If subdir itself ends up ignored, don't descend.
-    if _reconcile_path(subdir, cache, report, dry_run=dry_run):
+    # If subdir itself ends up ignored, don't descend. Also short-circuits
+    # when descend=False — the caller has split the walk across siblings
+    # and only wants the path-only reconcile here.
+    subdir_ignored = _reconcile_path(subdir, cache, report, dry_run=dry_run)
+    if subdir_ignored or not descend:
         report.duration_s = time.perf_counter() - start
         logger.debug(
             "reconcile_subtree done subdir=%s duration=%.4fs marked=%d cleared=%d errors=%d",

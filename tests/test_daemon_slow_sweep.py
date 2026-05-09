@@ -127,7 +127,11 @@ def test_initial_sweep_worker_pads_before_sweep(
     daemon thread (the helper wires the wait into the worker; the wait
     itself is well-tested by Python's stdlib)."""
     monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
-    _write_marker(tmp_path, "0.3")
+    # 0.5s pad with 0.4s lower-bound assertion gives ~100ms headroom for
+    # thread-scheduling jitter on contended CI workers — Python's
+    # threading.Event.wait honors the timeout as a minimum, but cross-
+    # platform timer resolution can produce small under-shoots in practice.
+    _write_marker(tmp_path, "0.5")
 
     sweep_called_at: list[float] = []
 
@@ -148,7 +152,7 @@ def test_initial_sweep_worker_pads_before_sweep(
     elapsed = sweep_called_at[0] - started
 
     assert sweep_called_at, "_sweep_once was never called"
-    assert elapsed >= 0.25, f"sweep ran after only {elapsed:.3f}s; marker should have padded ~0.3s"
+    assert elapsed >= 0.4, f"sweep ran after only {elapsed:.3f}s; marker should have padded ~0.5s"
 
 
 def test_initial_sweep_worker_returns_early_when_stopped_during_pad(

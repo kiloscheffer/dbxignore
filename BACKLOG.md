@@ -1995,7 +1995,7 @@ Touches: `src/dbxignore/daemon.py` (`_initial_sweep_worker`) for option 1; `scri
 
 **Surfaced 2026-05-09 in PR #175 (Codex P3 review on the slow-sweep marker fix; called out in the reply but left out of #89's scope).**
 
-`scripts/manual-test-ubuntu-vps.sh` references `$HOME/.local/state/dbxignore/` directly at four sites (daemon.log probes at lines 442 and 511, state.json + log-file probes at lines 715 and 719). On Linux, `state.user_state_dir()` resolves `$XDG_STATE_HOME/dbxignore` if set and falls back to `$HOME/.local/state/dbxignore` only when unset — so testers with `XDG_STATE_HOME` configured (some distro defaults set it) silently miss those probes: `daemon.log` and `state.json` are written to one path and grep'd at another, false-failing the readiness assertion (line 511) and the post-purge cleanup assertion (line 715-719).
+`scripts/manual-test-ubuntu-vps.sh` references `$HOME/.local/state/dbxignore/` directly at four sites (daemon.log probes at lines 442 and 511, state.json + log-file probes at lines 741 and 745). On Linux, `state.user_state_dir()` resolves `$XDG_STATE_HOME/dbxignore` if set and falls back to `$HOME/.local/state/dbxignore` only when unset — so testers with `XDG_STATE_HOME` configured (some distro defaults set it) silently miss those probes: `daemon.log` and `state.json` are written to one path and grep'd at another, false-failing the readiness assertion (line 511) and the post-purge cleanup assertion (lines 741, 745).
 
 PR #175 introduced `DBXIGNORE_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dbxignore"` for the slow-sweep marker only and stopped at #89's scope. The remaining four references have the same latent divergence shape and should consolidate onto the same variable.
 
@@ -2007,7 +2007,7 @@ macOS and Windows scripts are unaffected — `~/Library/Application Support/dbxi
 
 **Urgency:** low. Pre-existing latent bug; surfaces only when the tester has `XDG_STATE_HOME` set, which isn't common on stock distros. Bundle with the next manual-test-script edit; standalone PR is also fine since the diff is small and self-contained.
 
-Touches: `scripts/manual-test-ubuntu-vps.sh` (lines 442, 511, 715, 719).
+Touches: `scripts/manual-test-ubuntu-vps.sh` (lines 442, 511, 741, 745).
 
 ---
 
@@ -2028,7 +2028,7 @@ Twelve items. All passive (no concrete trigger requires action) — bundle each 
 - **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall.
 - **#84** — `actions/checkout` is split @v4 vs @v5 across the workflow files (Claude-bot tier on v4, test/build/CI tier on v5). Visible-but-incidental skew surfaced during item #74's SHA-pin sweep — separate revertability axis from the pin work itself, so deferred. Mechanical fix: bump the laggards once major-version release-notes are reviewed. No observed pain from the split. Surfaced 2026-05-08 in PR #156. (Note: scope reduced after PR #163 retired `codex-followup.yml` — original `setup-uv` v6/v7 split is moot since the v6 holder is gone; only `actions/checkout` v4/v5 across `claude.yml` + `claude-code-review.yml` remains.)
 - **#86** — Initial-sweep shutdown can wait for `RuleCache.load_root` rglob completion when the watched tree has many directories but few `.dropboxignore` files — `rglob`'s internal traversal between yields blocks `stop_event` observation, and the unbounded outer `worker.join()` (the singleton-invariant guard from PR #162's fix #2) then waits for the rglob to finish. Bounded operationally by systemd's `TimeoutStopSec=90s` default. Two fix candidates: reimplement `load_root` as a manual `os.walk` with per-directory checks (~15 LOC), or replace the unbounded outer `worker.join()` with a different singleton-protection mechanism (architectural). Surfaced 2026-05-08 in PR #162's Codex finding #7.
-- **#90** — `scripts/manual-test-ubuntu-vps.sh` has four hardcoded `$HOME/.local/state/dbxignore/` references (daemon.log + state.json probes at lines 442/511/715/719) that miss `XDG_STATE_HOME`. Same latent divergence shape PR #175's slow-sweep marker fix consolidated for one site only. ~10 LOC mechanical fix using the existing `DBXIGNORE_STATE_DIR` variable. Surfaced 2026-05-09 in PR #175 (Codex P3 review). Linux-only — macOS/Windows have no XDG-equivalent.
+- **#90** — `scripts/manual-test-ubuntu-vps.sh` has four hardcoded `$HOME/.local/state/dbxignore/` references (daemon.log + state.json probes at lines 442/511/741/745) that miss `XDG_STATE_HOME`. Same latent divergence shape PR #175's slow-sweep marker fix consolidated for one site only. ~10 LOC mechanical fix using the existing `DBXIGNORE_STATE_DIR` variable. Surfaced 2026-05-09 in PR #175 (Codex P3 review). Linux-only — macOS/Windows have no XDG-equivalent.
 
 ### Resolved (reverse chronological)
 

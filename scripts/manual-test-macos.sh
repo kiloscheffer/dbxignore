@@ -26,6 +26,10 @@ DBXIGNORE_INSTALL_SPEC="${DBXIGNORE_INSTALL_SPEC:-dbxignore}"
 TEST_SUBDIR="dbxignore-test"
 ATTR_LEGACY="com.dropbox.ignored"
 ATTR_FILEPROVIDER="com.apple.fileprovider.ignore#P"
+# macOS goes straight to ~/Library/Application Support per Apple's
+# app-data conventions; no XDG-equivalent. Mirrors the variable shape in
+# manual-test-ubuntu-vps.sh for parity.
+DBXIGNORE_STATE_DIR="$HOME/Library/Application Support/dbxignore"
 
 for arg in "$@"; do
     case "$arg" in
@@ -384,8 +388,8 @@ phase_daemon() {
     # 5f's 180s poll deterministically observes the transition to running,
     # regardless of the watched-tree size. The daemon logs WARNING when it
     # honors this; cleanup at the end of phase 5 removes it before phase 6.
-    mkdir -p "$HOME/Library/Application Support/dbxignore"
-    printf '15\n' > "$HOME/Library/Application Support/dbxignore/_test_slow_sweep"
+    mkdir -p "$DBXIGNORE_STATE_DIR"
+    printf '15\n' > "$DBXIGNORE_STATE_DIR/_test_slow_sweep"
     note "5 — slow-sweep marker seeded: 15s pad on initial sweep (item #89)"
 
     dbxignore install >/tmp/dbxignore-install.out 2>&1 \
@@ -456,7 +460,6 @@ phase_daemon() {
     # though the rule applies. Even without the marker, a slow sweep on
     # a real Dropbox tree could race 5b's 8-second create-and-check
     # window — this gate makes the test deterministic in both cases.
-    # Codex P2 catch on PR #175.
     note "5a-post — waiting up to 180s for state=running (cache populated)"
     local cache_ready=0
     for _ in $(seq 1 180); do
@@ -584,7 +587,7 @@ phase_daemon() {
     # Remove slow-sweep marker so phase 6's re-install + uninstall cycles
     # run with normal sweep timing (item #89). Phase 7 also removes it as
     # a defensive backstop if this point is never reached.
-    rm -f "$HOME/Library/Application Support/dbxignore/_test_slow_sweep"
+    rm -f "$DBXIGNORE_STATE_DIR/_test_slow_sweep"
     note "5 — slow-sweep marker removed before phase 6 (item #89)"
 }
 
@@ -654,7 +657,7 @@ phase_uninstall() {
 
     # macOS splits state vs. log dirs (~/Library/Application Support vs.
     # ~/Library/Logs); --purge should clean both.
-    local state_dir="$HOME/Library/Application Support/dbxignore"
+    local state_dir="$DBXIGNORE_STATE_DIR"
     local log_dir="$HOME/Library/Logs/dbxignore"
     if [ ! -f "$state_dir/state.json" ] && [ ! -f "$log_dir/daemon.log" ]; then
         pass "purge — state.json + daemon.log removed"
@@ -689,7 +692,7 @@ phase_cleanup() {
     # stale marker on a future install would silently pad every initial
     # sweep, so make sure phase 7 cleans it up even when phase 5 returned
     # early.
-    rm -f "$HOME/Library/Application Support/dbxignore/_test_slow_sweep" 2>/dev/null || true
+    rm -f "$DBXIGNORE_STATE_DIR/_test_slow_sweep" 2>/dev/null || true
 
     uv tool uninstall dbxignore >/dev/null 2>&1 \
         && pass "uv tool uninstall dbxignore" \

@@ -213,9 +213,8 @@ def test_initial_sweep_worker_pads_before_sweep(
         daemon_create_time=None,
         stop_event=stop,
     )
-    elapsed = sweep_called_at[0] - started
-
     assert sweep_called_at, "_sweep_once was never called"
+    elapsed = sweep_called_at[0] - started
     assert elapsed >= 0.4, f"sweep ran after only {elapsed:.3f}s; marker should have padded ~0.5s"
 
 
@@ -334,9 +333,8 @@ def test_initial_sweep_worker_no_pad_when_marker_missing(
         daemon_create_time=None,
         stop_event=stop,
     )
-    elapsed = sweep_called_at[0] - started
-
     assert sweep_called_at, "_sweep_once was never called"
+    elapsed = sweep_called_at[0] - started
     assert elapsed < 0.1, (
         f"sweep delayed {elapsed:.3f}s without marker; expected near-zero overhead"
     )

@@ -163,12 +163,32 @@ def append_rule(rule_file: Path, rule_line: str) -> bool:
     return True
 
 
-def remove_rule(rule_file: Path, rule_line: str) -> bool:
-    """Atomic removal-iff-present of ``rule_line`` from ``rule_file``.
+def remove_rule(rule_file: Path, rule_line: str) -> int:
+    """Atomic remove-all-rstrip-matches of ``rule_line`` from ``rule_file``.
 
-    Task 3 will implement this. Stub for now.
+    Returns the count of removed lines. Returns 0 (and does not error) if
+    the file doesn't exist or the line is not present. Atomic via
+    temp-then-replace; the file is either fully rewritten or untouched.
+    Not safe against concurrent writers; intended for serial CLI invocation.
+
+    rstrip-equality (rather than exact-string equality) tolerates manually-
+    typed rules with trailing whitespace, mirroring pathspec's
+    gitignore-trailing-whitespace semantics.
     """
-    raise NotImplementedError
+    if not rule_file.exists():
+        return 0
+    target_norm = rule_line.rstrip()
+    content = rule_file.read_text(encoding="utf-8")
+    existing_lines = content.splitlines()
+    kept = [line for line in existing_lines if line.rstrip() != target_norm]
+    removed_count = len(existing_lines) - len(kept)
+    if removed_count == 0:
+        return 0
+    new_content = "\n".join(kept) + ("\n" if kept else "")
+    tmp = rule_file.with_suffix(rule_file.suffix + ".tmp")
+    tmp.write_text(new_content, encoding="utf-8")
+    os.replace(tmp, rule_file)
+    return removed_count
 
 
 class _CaseInsensitiveGitIgnorePattern(GitIgnoreSpecPattern):

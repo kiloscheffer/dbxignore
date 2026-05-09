@@ -439,7 +439,7 @@ source "$(dirname "$0")/_phase_extended_cli.sh"
 
 _dump_daemon_diagnostics() {
     note "tail of daemon.log (last 40 lines):"
-    tail -n 40 "$HOME/.local/state/dbxignore/daemon.log" 2>/dev/null | sed 's/^/    /' || true
+    tail -n 40 "$DBXIGNORE_STATE_DIR/daemon.log" 2>/dev/null | sed 's/^/    /' || true
     note "journalctl for the unit (last 5 minutes):"
     journalctl --user -u dbxignore.service --since "5 minutes ago" --no-pager 2>/dev/null \
         | sed 's/^/    /' || true
@@ -508,7 +508,7 @@ phase_daemon() {
     note "  (sweep cost is proportional to ~/Dropbox subdir count: $dir_count)"
     local ready=0
     for _ in $(seq 1 180); do
-        if grep -q 'watching roots' "$HOME/.local/state/dbxignore/daemon.log" 2>/dev/null; then
+        if grep -q 'watching roots' "$DBXIGNORE_STATE_DIR/daemon.log" 2>/dev/null; then
             ready=1; break
         fi
         sleep 1
@@ -738,11 +738,11 @@ phase_uninstall() {
     [ -f "$T/watch-me.tmp" ] && assert_xattr_unset "$T/watch-me.tmp" "purge — watch-me.tmp marker cleared"
     [ -d "$T/cache" ]        && assert_xattr_unset "$T/cache"        "purge — cache/ marker cleared"
 
-    if [ ! -f "$HOME/.local/state/dbxignore/state.json" ] && [ ! -f "$HOME/.local/state/dbxignore/daemon.log" ]; then
+    if [ ! -f "$DBXIGNORE_STATE_DIR/state.json" ] && [ ! -f "$DBXIGNORE_STATE_DIR/daemon.log" ]; then
         pass "purge — state.json + daemon.log removed"
     else
         fail "purge — state files remain"
-        ls -la "$HOME/.local/state/dbxignore/" 2>/dev/null | sed 's/^/    /'
+        ls -la "$DBXIGNORE_STATE_DIR/" 2>/dev/null | sed 's/^/    /'
     fi
 
     # 6b — status --summary returns state=no_state post-purge (PR #162).

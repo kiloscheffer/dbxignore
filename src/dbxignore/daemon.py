@@ -875,7 +875,12 @@ def _slow_sweep_pad_seconds() -> float:
         raw = marker.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
         return 0.0
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
+        # UnicodeDecodeError isn't an OSError — derives from ValueError —
+        # so it needs its own arm. Surfaces when a stale marker was written
+        # in non-UTF-8 (Windows PS 5.1 Set-Content writes UTF-16 by default;
+        # corrupt/binary contents) and would otherwise propagate out of the
+        # worker thread before the sweep runs.
         logger.warning("could not read slow-sweep marker %s: %s", marker, exc)
         return 0.0
     if not raw:

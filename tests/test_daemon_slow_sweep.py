@@ -148,6 +148,24 @@ def test_pad_warns_and_returns_zero_on_nan(
     assert any("non-finite" in rec.message for rec in caplog.records)
 
 
+def test_pad_warns_and_returns_zero_on_undecodable_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Marker file with non-UTF-8 bytes → returns 0.0, WARNING.
+    ``Path.read_text(encoding="utf-8")`` raises ``UnicodeDecodeError``
+    (which derives from ``ValueError``, not ``OSError``), so it needs
+    its own catch arm. Surfaces when a stale marker was written in a
+    different encoding — Windows PS 5.1 ``Set-Content`` defaults to
+    UTF-16, corrupt/binary edits, etc. (Codex P2 catch on PR #175)."""
+    monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
+    marker = tmp_path / daemon.SLOW_SWEEP_MARKER_NAME
+    # UTF-16 LE BOM + "15" — 0xff is not a valid UTF-8 start byte.
+    marker.write_bytes(b"\xff\xfe1\x005\x00")
+    caplog.set_level(logging.WARNING, logger="dbxignore.daemon")
+    assert daemon._slow_sweep_pad_seconds() == 0.0
+    assert any("could not read slow-sweep marker" in rec.message for rec in caplog.records)
+
+
 def test_pad_warns_and_returns_zero_above_timeout_max(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

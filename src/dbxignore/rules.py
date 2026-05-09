@@ -179,7 +179,18 @@ class RuleCache:
                 )
                 if match_name is None:
                     continue
+                # `ignore_file` carries the on-disk casing so the read in
+                # `_load_file` works on case-sensitive filesystems where
+                # `.DropboxIgnore` and `.dropboxignore` are different entries.
+                # `canonical` carries the lowercase basename and is the
+                # cache-key path: `match()` later looks up
+                # `ancestor / IGNORE_FILENAME` (always lowercase), so the
+                # cache key MUST end in lowercase too — otherwise `PosixPath`
+                # equality (case-sensitive) misses on Linux/macOS and a
+                # mixed-case rule file is loaded but its rules are never
+                # applied. Third Codex P2 catch on PR #184.
                 ignore_file = Path(current_dir) / match_name
+                canonical = Path(current_dir) / IGNORE_FILENAME
                 # Same resolve-failure shape as `_load_file`: a `.dropboxignore`
                 # whose path now contains a symlink loop would crash the
                 # sweep here before `_load_if_changed` runs. Skip the
@@ -187,11 +198,11 @@ class RuleCache:
                 # `_load_if_changed`'s own resolve failure handler logs the
                 # underlying issue.
                 try:
-                    seen.add(ignore_file.resolve())
+                    seen.add(canonical.resolve())
                 except (OSError, RuntimeError) as exc:
                     logger.warning("Could not resolve %s during sweep: %s", ignore_file, exc)
                     continue
-                self._load_if_changed(ignore_file)
+                self._load_if_changed(ignore_file, as_path=canonical)
             # Drop cached entries for .dropboxignore files under this root that
             # the walk didn't find — they've been deleted since the last load
             # and their rules must stop applying.
@@ -377,24 +388,34 @@ class RuleCache:
             size=st.st_size,
         )
 
-    def _load_if_changed(self, ignore_file: Path) -> None:
+    def _load_if_changed(self, ignore_file: Path, *, as_path: Path | None = None) -> None:
         """Load ``ignore_file`` only if its on-disk bytes differ from the
         cached version (mtime or size mismatch). No-op if unchanged.
 
         Used by the sweep path (``load_root``) to avoid reparsing every
         .dropboxignore every hour. ``reload_file`` bypasses this check — a
         watchdog event is an explicit signal to reload regardless of stat.
+
+        ``as_path`` overrides the cache-key derivation (mirrors
+        ``_load_file``'s same-named kwarg). When set, the cache lookup
+        uses ``as_path.resolve()`` rather than ``ignore_file.resolve()``;
+        the read still uses ``ignore_file``. ``load_root`` passes the
+        canonical lowercase path here so a mixed-case `.DropboxIgnore`
+        on a case-sensitive filesystem is cached under the same key
+        ``match()`` later looks up — without this, ``PosixPath`` equality
+        is case-sensitive and the cache hit silently fails for the
+        directory that contains the rule file.
         """
         try:
             st = ignore_file.stat()
         except OSError:
             # Can't stat — let _load_file's read path surface the same error.
-            self._load_file(ignore_file)
+            self._load_file(ignore_file, as_path=as_path)
             return
-        cached = self._rules.get(ignore_file.resolve())
+        cached = self._rules.get((as_path or ignore_file).resolve())
         if cached and cached.mtime_ns == st.st_mtime_ns and cached.size == st.st_size:
             return
-        self._load_file(ignore_file, st=st)
+        self._load_file(ignore_file, st=st, as_path=as_path)
 
     def _applicable(self, root: Path, path: Path) -> list[tuple[Path, _LoadedRules]]:
         """Return (ancestor, loaded_rules) for each applicable .dropboxignore

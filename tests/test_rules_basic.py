@@ -168,15 +168,18 @@ def test_load_root_preserves_cache_when_pre_stat_would_flap(
     )
 
 
-def test_load_root_finds_mixed_case_dropboxignore(
+def test_load_root_finds_and_applies_mixed_case_dropboxignore(
     tmp_path: Path, write_file: WriteFile
 ) -> None:
-    """Item #86 / Codex P2 catch on PR #184: load_root must find rule files
-    whose on-disk filename has mixed casing (e.g. `.DropboxIgnore` vs
-    `.dropboxignore`) on case-insensitive filesystems. The prior `rglob`
-    shape would have found these on Windows NTFS and default macOS
-    APFS/HFS+ because glob matching is case-insensitive there. The
-    os.walk swap must preserve that behavior.
+    """Item #86 / Codex P2 catches on PR #184: load_root must find rule
+    files whose on-disk filename has mixed casing (e.g. `.DropboxIgnore`
+    vs `.dropboxignore`) AND the rules must actually apply via
+    `cache.match()`. The prior `rglob` shape found mixed-case files on
+    Windows NTFS and default macOS APFS/HFS+ because glob matching is
+    case-insensitive there. The os.walk swap must preserve that behavior
+    AND ensure the cache key is canonical (lowercase) so `match()`'s
+    lookup hits — without normalization, `PosixPath` equality is
+    case-sensitive on Linux/macOS and the cached entry is unreachable.
 
     Portable: on case-sensitive Linux, this creates a file named exactly
     `.DropboxIgnore` (a different file from `.dropboxignore` — but the
@@ -186,18 +189,27 @@ def test_load_root_finds_mixed_case_dropboxignore(
     sub.mkdir()
     rule_file = sub / ".DropboxIgnore"  # mixed case
     rule_file.write_text("build/\n", encoding="utf-8")
+    target = sub / "build"
+    target.mkdir()
 
     cache = RuleCache()
     cache.load_root(tmp_path)
 
-    # Find the cache entry by lowercasing the filename — `Path.resolve()`
-    # on Windows preserves on-disk casing, so the cache key may be
-    # `.DropboxIgnore` on Windows; on Linux/macOS the literal name is
-    # whatever was created. Either way, lowercasing the basename should
-    # match `.dropboxignore`.
-    matching_keys = [k for k in cache._rules if k.name.lower() == ".dropboxignore"]
-    assert len(matching_keys) == 1, (
-        f"expected one cached rule (mixed-case file), got {matching_keys}"
+    # Cache key must end in `.dropboxignore` (lowercase) regardless of
+    # on-disk casing — otherwise PosixPath case-sensitive lookup in
+    # match() / _applicable would silently fail.
+    canonical_key = (sub / ".dropboxignore").resolve()
+    assert canonical_key in cache._rules, (
+        f"expected canonical lowercase cache key {canonical_key}, "
+        f"got {list(cache._rules.keys())}"
+    )
+
+    # End-to-end: rules from the mixed-case file must apply via match().
+    # The pre-fix shape (cache key with on-disk casing) silently failed
+    # this assertion on Linux/macOS — file was loaded but match() lookup
+    # via `ancestor / IGNORE_FILENAME` (lowercase) missed.
+    assert cache.match(target.resolve()), (
+        "rules from the mixed-case file must apply to a matching path"
     )
 
 

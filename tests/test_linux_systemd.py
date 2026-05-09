@@ -219,6 +219,7 @@ def test_install_propagates_dbxignore_root_env(
     generated unit must carry it forward — that's the fix for item 9."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("DBXIGNORE_ROOT", "/home/kilo/dbx-smoke")
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
     monkeypatch.setattr(
         "dbxignore.install.linux_systemd.detect_invocation",
         lambda: (Path("/usr/local/bin/dbxignored"), ""),
@@ -239,13 +240,46 @@ def test_install_propagates_dbxignore_root_env(
     assert 'Environment="DBXIGNORE_ROOT=/home/kilo/dbx-smoke"' in unit_path.read_text()
 
 
+def test_install_propagates_xdg_state_home_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When XDG_STATE_HOME is set in the install process's env, the
+    generated unit must carry it forward — otherwise the daemon's
+    `state.user_state_dir()` falls back to `~/.local/state/dbxignore`
+    while the user's shell tools (running with the override) probe
+    `$XDG_STATE_HOME/dbxignore`, leaving them disagreeing about where
+    state lives. Surfaced by Codex on PR #177."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_STATE_HOME", "/tmp/state-override")
+    monkeypatch.delenv("DBXIGNORE_ROOT", raising=False)
+    monkeypatch.setattr(
+        "dbxignore.install.linux_systemd.detect_invocation",
+        lambda: (Path("/usr/local/bin/dbxignored"), ""),
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda cmd, check, capture_output=False, text=False: subprocess.CompletedProcess(
+            cmd, 0, "", ""
+        ),
+    )
+
+    from dbxignore.install import linux_systemd
+
+    linux_systemd.install_unit()
+
+    unit_path = tmp_path / ".config" / "systemd" / "user" / "dbxignore.service"
+    assert 'Environment="XDG_STATE_HOME=/tmp/state-override"' in unit_path.read_text()
+
+
 def test_install_omits_environment_when_dbxignore_root_unset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """No env var → no Environment= line. Stock-Dropbox users shouldn't see
+    """No env vars → no Environment= line. Stock-Dropbox users shouldn't see
     boilerplate they don't need."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("DBXIGNORE_ROOT", raising=False)
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
     monkeypatch.setattr(
         "dbxignore.install.linux_systemd.detect_invocation",
         lambda: (Path("/usr/local/bin/dbxignored"), ""),
@@ -274,6 +308,7 @@ def test_install_ignores_empty_dbxignore_root(
     cause ``roots.discover()`` to fall through to ``info.json`` anyway."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("DBXIGNORE_ROOT", "")
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
     monkeypatch.setattr(
         "dbxignore.install.linux_systemd.detect_invocation",
         lambda: (Path("/usr/local/bin/dbxignored"), ""),

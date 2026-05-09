@@ -140,9 +140,9 @@ def append_rule(rule_file: Path, rule_line: str) -> bool:
     leading comment header if it doesn't exist.
 
     Atomic via temp-then-replace, mirroring ``state.write()``: writes to
-    ``<rule_file>.tmp``, fsyncs, then ``os.replace`` into place. Survives
-    SIGKILL or power loss between read-modify-write — the file is either
-    fully updated or unchanged, never half-written.
+    ``<rule_file>.tmp``, then ``os.replace`` into place. Survives SIGKILL
+    or power loss mid-write — the file is either fully updated or unchanged.
+    Not safe against concurrent writers; intended for serial CLI invocation.
     """
     target_norm = rule_line.rstrip()
     if rule_file.exists():

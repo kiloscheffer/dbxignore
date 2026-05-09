@@ -8,7 +8,9 @@ file-creation-with-header path.
 
 from pathlib import Path
 
-from dbxignore.rules import append_rule, remove_rule  # noqa: F401
+import pytest
+
+from dbxignore.rules import append_rule, remove_rule
 
 # Header written when append_rule creates a new file.
 HEADER = "# .dropboxignore — managed by dbxignore\n"
@@ -58,3 +60,10 @@ def test_append_handles_existing_file_without_trailing_newline(tmp_path: Path) -
     assert appended is True
     # Should be normalized so each rule is on its own line.
     assert rule_file.read_text(encoding="utf-8") == "node_modules/\nbuild/\n"
+
+
+def test_remove_rule_is_stub_until_task_3(tmp_path: Path) -> None:
+    """The Task 2 stub must raise NotImplementedError so Task 3's TDD
+    red phase fails for the right reason. Replaced in Task 3."""
+    with pytest.raises(NotImplementedError):
+        remove_rule(tmp_path / ".dropboxignore", "build/")

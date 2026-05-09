@@ -173,9 +173,25 @@ class RuleCache:
                 # preserved in the constructed Path so the resolved cache
                 # key matches what `rglob` produced. Second Codex P2 catch
                 # on PR #184.
-                match_name = next(
-                    (f for f in filenames if f.lower() == IGNORE_FILENAME),
-                    None,
+                #
+                # Prefer the exact `.dropboxignore` filename when present,
+                # falling back to a case-insensitive match only when the
+                # canonical name is absent. On case-sensitive filesystems
+                # (Linux ext4) a directory could in principle contain both
+                # `.dropboxignore` and `.DropboxIgnore` as distinct files;
+                # `os.walk`'s filename order is not guaranteed, so without
+                # an exact-match preference the selection would be order-
+                # dependent and the canonical file's rules might be
+                # silently shadowed. README documents the lowercase form,
+                # so the canonical file wins. Fourth Codex P2 catch on
+                # PR #184.
+                match_name = (
+                    IGNORE_FILENAME
+                    if IGNORE_FILENAME in filenames
+                    else next(
+                        (f for f in filenames if f.lower() == IGNORE_FILENAME),
+                        None,
+                    )
                 )
                 if match_name is None:
                     continue

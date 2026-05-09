@@ -213,6 +213,54 @@ def test_load_root_finds_and_applies_mixed_case_dropboxignore(
     )
 
 
+def test_load_root_prefers_exact_dropboxignore_over_mixed_case(
+    tmp_path: Path, write_file: WriteFile, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item #86 / fourth Codex P2 catch on PR #184: when a directory contains
+    both `.dropboxignore` (canonical) and `.DropboxIgnore` (mixed case), the
+    canonical lowercase file MUST be selected. `os.walk`'s filename order is
+    not guaranteed, so without an exact-match preference the selection is
+    order-dependent and the canonical file's rules can be silently shadowed.
+
+    Mocks `os.walk` to inject a mixed-case filename ahead of the real
+    `.dropboxignore` in the filenames list. Only `.dropboxignore` exists on
+    disk (creating both is impossible on case-insensitive filesystems
+    anyway). The fix's exact-match preference ensures the read targets
+    the file that actually exists; without it, on case-sensitive Linux
+    the read would attempt `.DropboxIgnore` (nonexistent), fail, and
+    leave the cache empty for that directory."""
+    import os
+
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    write_file(sub / ".dropboxignore", "lower_marker/\n")
+
+    real_walk = os.walk
+
+    def fake_walk(top, **kwargs):  # type: ignore[no-untyped-def]
+        for current, dirs, files in real_walk(top, **kwargs):
+            if current == str(sub):
+                # Force the mixed-case name to appear first.
+                files = [".DropboxIgnore", *files]
+            yield (current, dirs, files)
+
+    monkeypatch.setattr(os, "walk", fake_walk)
+
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+
+    canonical = (sub / ".dropboxignore").resolve()
+    assert canonical in cache._rules, (
+        "exact-match `.dropboxignore` must be selected even when a mixed-case "
+        "name appears earlier in os.walk's filenames"
+    )
+    cached = cache._rules[canonical]
+    assert "lower_marker/" in cached.lines, (
+        f"expected the canonical .dropboxignore's content to be cached; "
+        f"got {cached.lines}"
+    )
+
+
 def test_load_root_observes_stop_event_in_dropboxignore_free_tree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

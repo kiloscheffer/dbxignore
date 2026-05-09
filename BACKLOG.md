@@ -1897,7 +1897,7 @@ Touches: `.github/workflows/codex-followup.yml` — the `prompt:` block under "Y
 
 ## 86. Initial-sweep shutdown can wait for `RuleCache.load_root` rglob completion
 
-**Surfaced 2026-05-08 in PR #162 (Codex P2 finding #7).**
+**Surfaced 2026-05-08 in PR #162 (Codex P2 finding #7). Status: RESOLVED 2026-05-09 (PR #184).**
 
 After PR #162's fix #6 (commit `97d90de`) made `RuleCache.load_root` cancellable between `rglob` yields, a tree with many directories but few `.dropboxignore` files still has coarse cancellation granularity — `rglob`'s internal traversal between yields can do thousands of stat calls before the next yield, during which `stop_event` is not observed. The outer `worker.join()` (no timeout, added by fix #2 to enforce the singleton-lock-not-released-until-worker-exits invariant) then blocks the entire shutdown until the rglob completes.
 
@@ -1907,7 +1907,7 @@ Operationally bounded by systemd's `TimeoutStopSec=90s` default — beyond that,
 
 **Fix candidates:**
 
-- **Reimplement `RuleCache.load_root` as a manual `os.walk` with per-directory `stop_event` checks.** The deferred half of fix #6. Replaces `root.rglob(IGNORE_FILENAME)` with an `os.walk` that explicitly checks `stop_event` between directories and filters for `.dropboxignore` filename matches inline. Eliminates the slow-rglob-without-yields case. ~15 LOC + a test. Preserves the singleton-lock invariant; cancellation is finer-grained.
+- **Reimplement `RuleCache.load_root` as a manual `os.walk` with per-directory `stop_event` checks.** **DONE in PR #184.** The deferred half of fix #6. Replaces `root.rglob(IGNORE_FILENAME)` with an `os.walk` that explicitly checks `stop_event` between directories and filters for `.dropboxignore` filename matches inline. Eliminates the slow-rglob-without-yields case. ~15 LOC + a test. Preserves the singleton-lock invariant; cancellation is finer-grained.
 
 - **Replace the unbounded outer `worker.join()` with a different singleton-protection mechanism.** E.g., second-daemon refuses to start if `state.json`'s `daemon_pid` matches a live process even when the lock is acquirable. Lock can be released early without correctness loss. Bigger architectural shift; requires updating the legacy-compat path and `is_daemon_alive` semantics.
 
@@ -2037,6 +2037,34 @@ Touches: `src/dbxignore/daemon.py` (`_initial_sweep_worker`).
 
 ---
 
+## 92. Mixed-case rule filenames not handled end-to-end
+
+**Surfaced 2026-05-09 in PR #184 (Codex P2 #5).**
+
+`RuleCache.load_root` now discovers and canonicalizes mixed-case rule files (e.g. `.DropboxIgnore`) — but the watchdog path (`daemon._classify`, `daemon._moved_dest_under_root`) and several `RuleCache` mutations (`remove_file`, `reload_file`, `match`, `explain`) still use exact-case `name == IGNORE_FILENAME` checks. Practical effect on case-sensitive Linux/macOS-APFS-strict with `.DropboxIgnore`:
+
+- Initial sweep: rules loaded under canonical lowercase cache key (PR #184 fix).
+- Edits via watchdog: `_classify` doesn't match → routed to OTHER → cache not refreshed.
+- Hourly sweep: refreshes via `load_root`.
+
+Net experience: rules apply correctly, edits take up to ~1 hour to be reflected.
+
+Pre-existing on Windows + mixed-case files since v0.2 — the watchdog event would have `src.name = '.DropboxIgnore'` and Python's `==` is case-sensitive even on Windows. PR #184 didn't make this worse; it just exposed the gap by enabling discovery on Linux/macOS-APFS-strict where the file was previously ignored entirely.
+
+**Fix candidates:**
+
+- **Comprehensive case-insensitive predicate.** Add `_is_ignore_filename(name: str) -> bool` and `_canonical_cache_key(path: Path) -> Path` helpers in `rules.py`. Use throughout `match`, `explain`, `remove_file`, `reload_file`, `_load_file`, `_load_if_changed`, plus `daemon._classify` and `daemon._moved_dest_under_root`. Touches both modules; ~30 LOC + tests for each predicate site. End state: full case-insensitive support across discovery, watchdog, and reconcile.
+
+- **Document the limitation.** Add a CLAUDE.md gotcha: "rule files must be exactly `.dropboxignore` (lowercase) for full functionality; mixed-case files work with up-to-1-hour staleness on edits." No code change.
+
+- **Defer.** No tests or beta-tester reports show a real user with mixed-case rule files in 6 months across three platforms.
+
+**Urgency:** low. No fired trigger. Bundle with the next watchdog or `RuleCache`-mutation-touching change. The watchdog gap was filed-and-deferred rather than fixed inline in PR #184 because the comprehensive fix touches surface beyond the cancellation-granularity goal of item #86 — same revertability-axis split rule as past PRs.
+
+Touches: `src/dbxignore/rules.py` (`match`, `explain`, `remove_file`, `reload_file`, `_load_file`, `_load_if_changed`); `src/dbxignore/daemon.py` (`_classify`, `_moved_dest_under_root`).
+
+---
+
 ## Status
 
 ### Open
@@ -2052,11 +2080,13 @@ Ten items. All passive (no concrete trigger requires action) — bundle each wit
 - **#53** — Initial-sweep wall-clock on a fresh install (no existing markers) was 49.62s on a 27k-dir tree, blocking systemd readiness for ~50s. Candidate 1 (ready-before-sweep) shipped in PR #162 (removed the readiness-pause symptom). Candidate 3 (per-subdir worker fan-out) shipped in PR #183 (parallelizes the sweep itself across top-level subdirs). Only candidate 2 (persisted sweep-complete hint, ~80 LOC) remains open — has reliability concerns on network FS / File Provider mtime semantics; no fired trigger yet.
 - **#54** — Watchdog observer's recursive watch schedules one inotify watch per directory under `~/Dropbox`, including marked-ignored subtrees. Architectural fix (per-directory watches with mark/unmark lifecycle) is ~200 LOC of race-condition-prone state-machine work; deferred until a beta tester hits the watch ceiling on a system with limits already raised.
 - **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall.
-- **#86** — Initial-sweep shutdown can wait for `RuleCache.load_root` rglob completion when the watched tree has many directories but few `.dropboxignore` files — `rglob`'s internal traversal between yields blocks `stop_event` observation, and the unbounded outer `worker.join()` (the singleton-invariant guard from PR #162's fix #2) then waits for the rglob to finish. Bounded operationally by systemd's `TimeoutStopSec=90s` default. Two fix candidates: reimplement `load_root` as a manual `os.walk` with per-directory checks (~15 LOC), or replace the unbounded outer `worker.join()` with a different singleton-protection mechanism (architectural). Surfaced 2026-05-08 in PR #162's Codex finding #7.
+- **#92** — Mixed-case rule filenames (e.g. `.DropboxIgnore`) discovered by `load_root` (PR #184) but watchdog path and several `RuleCache` mutations still use exact-case `==` checks. Edits to mixed-case rule files have up-to-1-hour staleness until the next hourly sweep refreshes the cache. Pre-existing inconsistency on Windows since v0.2; PR #184 surfaced it on Linux/macOS-APFS-strict. Fix candidates: (1) comprehensive case-insensitive predicate across rules.py and daemon.py (~30 LOC), (2) document as a known limitation, (3) defer. No fired trigger.
 
 ### Resolved (reverse chronological)
 
 #### 2026-05-09
+
+- **#86** in PR #184 — replaced `root.rglob(IGNORE_FILENAME)` with `os.walk(root, followlinks=False)` in `RuleCache.load_root`, with the per-iteration `stop_event` check now firing on every directory visit instead of every rglob yield. Took fix candidate (1). The pre-fix shape's worst case was a 100k-directory tree with zero `.dropboxignore` files: rglob yielded zero results, the for-loop body (and its cancellation check) never executed, the unbounded outer `worker.join()` (PR #162's singleton-lock-not-released invariant) blocked shutdown until rglob finished traversing every directory. Operationally bounded by systemd's `TimeoutStopSec=90s` default; the new shape returns within one directory's worth of work. Case-insensitive lookups preserved via `(Path(current) / IGNORE_FILENAME).is_file()` — verified that `Path.resolve()` produces identical cache keys to the prior `rglob`-based path on Windows NTFS, so a `.DropboxIgnore` (mixed casing on disk) is still loaded under the same `.dropboxignore` cache key. Existing test `test_load_root_honors_stop_event_between_rglob_yields` reframed as `test_load_root_honors_stop_event_between_directory_visits` with `os.walk`-based mocking; new test `test_load_root_observes_stop_event_in_dropboxignore_free_tree` pins the load-bearing improvement (zero-rule-file tree still observes cancellation per directory).
 
 - **#53 candidate 3** in PR #183 — partial resolution; candidate 2 remains open (see item body). `daemon._sweep_once`'s Phase 2 reconcile now fans out across each root's top-level subdirs via a single `ThreadPoolExecutor(max_workers=min(os.cpu_count() or 4, len(work)))`. Each root contributes one `descend=False` work item (reconcile root's own marker, no walk) plus one `descend=True` item per immediate child. The previous per-root pool is subsumed — multi-root setups parallelize along (root, child) pairs in the same pool rather than two nested layers. `reconcile_subtree` gains a `descend: bool = True` parameter (default preserves existing behavior at all four call sites — CLI `apply`, watchdog `_dispatch`, fast-path DIR_CREATE, and the daemon sweep's per-child fan-out itself). The `iterdir` enumeration is wrapped in `try/except OSError` so an unreadable root logs a WARNING and continues — the root's own `descend=False` reconcile still runs, surfacing the same error via `_reconcile_path`'s broad-OSError arm. Three new tests: `test_reconcile_subtree_descend_false_skips_walk` pins the new parameter contract; `test_sweep_fans_out_per_top_level_child` spies on `ThreadPoolExecutor.map` to verify the work-list shape (1 descend=False + N descend=True per root); `test_sweep_handles_unreadable_root` verifies the WARNING-and-continue behavior on `iterdir` failure. Wall-clock improvement is real but not measured against the original 27k-dir VPS scenario yet — bounded by CPU count and disk contention as the body predicted.
 

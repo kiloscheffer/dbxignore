@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from pathlib import Path
+from typing import Protocol
 
 import pathspec
 from pathspec.patterns.gitwildmatch import GitIgnoreSpecPattern  # type: ignore[attr-defined]
@@ -15,10 +17,6 @@ from dbxignore._logging import timed_debug
 from dbxignore.roots import find_containing
 from dbxignore.rules_conflicts import Conflict as Conflict
 from dbxignore.rules_conflicts import _detect_conflicts
-
-if TYPE_CHECKING:
-    import os
-    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -134,35 +132,107 @@ class RuleCache:
             if root not in self._roots:
                 self._roots.append(root)
             seen: set[Path] = set()
-            for ignore_file in root.rglob(IGNORE_FILENAME):
-                # Cooperative cancellation between rglob yields. On a tree
-                # with many `.dropboxignore` files this gives reasonable
-                # SIGTERM responsiveness during phase 1 of _sweep_once.
-                # Note: rglob's internal traversal between yields can still
-                # block (one stat per directory between matches), so a tree
-                # with few rule files but many directories has coarser
-                # cancellation granularity. Returning here skips the
-                # stale-purge step intentionally — purging against an
-                # incomplete `seen` set would corrupt the cache by dropping
-                # entries that simply weren't reached. Surfaced by Codex
-                # on PR #162.
+            for current_dir, _dirnames, filenames in os.walk(root, followlinks=False):
+                # Cooperative cancellation per directory visited (item #86).
+                # The previous shape used `root.rglob(IGNORE_FILENAME)` and
+                # checked between yields — fine for trees with many rule
+                # files, but coarse for trees with many directories and few
+                # rule files (rglob's internal traversal between yields can
+                # do thousands of stat calls before the next yield, blocking
+                # SIGTERM observation for tens of seconds). os.walk yields
+                # one tuple per directory regardless of whether any rule
+                # file is present, so the check fires every directory.
+                # Returning here skips the stale-purge step intentionally —
+                # purging against an incomplete `seen` set would corrupt the
+                # cache by dropping entries that simply weren't reached.
                 if stop_event is not None and stop_event.is_set():
                     return
+                # Match against the already-materialized filenames list
+                # rather than via a separate `Path.is_file()` stat. A fresh
+                # stat per directory can flap on transient read errors
+                # (network drive EIO, AV scan, brief editor lock) — the same
+                # failure mode `_load_file`'s OSError arm explicitly
+                # preserves cached rules through. If the pre-stat returned
+                # False under transient flap, the file would be silently
+                # skipped, the stale-purge below would drop the cached
+                # entry, and Dropbox would upload previously-ignored paths
+                # before the stat recovered. Using scandir's directory
+                # listing (which is one syscall per directory regardless)
+                # mirrors `rglob`'s prior behavior. First Codex P2 catch on
+                # PR #184.
+                #
+                # Match case-insensitively so a `.DropboxIgnore` (mixed
+                # casing on disk) is still found on case-insensitive
+                # filesystems (Windows NTFS, default macOS APFS/HFS+) —
+                # parity with the prior `rglob` behavior. On Linux (case-
+                # sensitive), this is slightly looser than rglob, but the
+                # project's pattern-matching layer is already case-
+                # insensitive everywhere via `_CaseInsensitiveGitIgnorePattern`,
+                # so the overall posture is "treat names as the lowest-
+                # common-denominator filesystem would." On-disk casing is
+                # preserved in the constructed Path so the resolved cache
+                # key matches what `rglob` produced. Second Codex P2 catch
+                # on PR #184.
+                #
+                # Prefer the exact `.dropboxignore` filename when present,
+                # falling back to a case-insensitive match only when the
+                # canonical name is absent. On case-sensitive filesystems
+                # (Linux ext4) a directory could in principle contain both
+                # `.dropboxignore` and `.DropboxIgnore` as distinct files;
+                # `os.walk`'s filename order is not guaranteed, so without
+                # an exact-match preference the selection would be order-
+                # dependent and the canonical file's rules might be
+                # silently shadowed. README documents the lowercase form,
+                # so the canonical file wins. Fourth Codex P2 catch on
+                # PR #184.
+                match_name = (
+                    IGNORE_FILENAME
+                    if IGNORE_FILENAME in filenames
+                    else next(
+                        (f for f in filenames if f.lower() == IGNORE_FILENAME),
+                        None,
+                    )
+                )
+                if match_name is None:
+                    continue
+                # `ignore_file` carries the on-disk casing so the read in
+                # `_load_file` works on case-sensitive filesystems where
+                # `.DropboxIgnore` and `.dropboxignore` are different entries.
+                # `canonical` carries the lowercase basename and is the
+                # cache-key path: `match()` later looks up
+                # `ancestor / IGNORE_FILENAME` (always lowercase), so the
+                # cache key MUST end in lowercase too — otherwise `PosixPath`
+                # equality (case-sensitive) misses on Linux/macOS and a
+                # mixed-case rule file is loaded but its rules are never
+                # applied. Third Codex P2 catch on PR #184.
+                ignore_file = Path(current_dir) / match_name
+                canonical = Path(current_dir) / IGNORE_FILENAME
                 # Same resolve-failure shape as `_load_file`: a `.dropboxignore`
-                # discovered by rglob whose path now contains a symlink loop
-                # would crash the sweep here before `_load_if_changed` runs.
-                # Skip the stale-purge tracking for unresolvable paths;
+                # whose path now contains a symlink loop would crash the
+                # sweep here before `_load_if_changed` runs. Skip the
+                # stale-purge tracking for unresolvable paths;
                 # `_load_if_changed`'s own resolve failure handler logs the
                 # underlying issue.
                 try:
-                    seen.add(ignore_file.resolve())
+                    seen.add(canonical.resolve())
                 except (OSError, RuntimeError) as exc:
                     logger.warning("Could not resolve %s during sweep: %s", ignore_file, exc)
                     continue
-                self._load_if_changed(ignore_file)
+                # Force reload when the fallback selected a mixed-case
+                # filename. Without this, the canonical-key cache entry's
+                # mtime+size could (extremely rarely) coincide with the
+                # mixed-case file's stat values after the canonical file
+                # was deleted — the mtime+size shortcut would skip
+                # reloading and stale rules from the now-deleted canonical
+                # file would persist. Codex P3 catch on PR #184; the
+                # canonical-name path retains the shortcut because
+                # mtime+size identity for the same source file is the
+                # contract `_load_if_changed` was built around.
+                force = match_name != IGNORE_FILENAME
+                self._load_if_changed(ignore_file, as_path=canonical, force=force)
             # Drop cached entries for .dropboxignore files under this root that
-            # rglob didn't find — they've been deleted since the last load and
-            # their rules must stop applying.
+            # the walk didn't find — they've been deleted since the last load
+            # and their rules must stop applying.
             for stale in [p for p in self._rules if p not in seen and p.is_relative_to(root)]:
                 del self._rules[stale]
             self._recompute_conflicts(log_warnings=log_warnings)
@@ -345,24 +415,48 @@ class RuleCache:
             size=st.st_size,
         )
 
-    def _load_if_changed(self, ignore_file: Path) -> None:
+    def _load_if_changed(
+        self,
+        ignore_file: Path,
+        *,
+        as_path: Path | None = None,
+        force: bool = False,
+    ) -> None:
         """Load ``ignore_file`` only if its on-disk bytes differ from the
         cached version (mtime or size mismatch). No-op if unchanged.
 
         Used by the sweep path (``load_root``) to avoid reparsing every
         .dropboxignore every hour. ``reload_file`` bypasses this check — a
         watchdog event is an explicit signal to reload regardless of stat.
+
+        ``as_path`` overrides the cache-key derivation (mirrors
+        ``_load_file``'s same-named kwarg). When set, the cache lookup
+        uses ``as_path.resolve()`` rather than ``ignore_file.resolve()``;
+        the read still uses ``ignore_file``. ``load_root`` passes the
+        canonical lowercase path here so a mixed-case `.DropboxIgnore`
+        on a case-sensitive filesystem is cached under the same key
+        ``match()`` later looks up — without this, ``PosixPath`` equality
+        is case-sensitive and the cache hit silently fails for the
+        directory that contains the rule file.
+
+        ``force`` skips the mtime+size shortcut and reloads
+        unconditionally. Used by ``load_root`` when the fallback selected
+        a mixed-case filename — the cached entry under the canonical
+        key may have been populated from a different source file, so its
+        stat values cannot be trusted to identify the current source.
+        Codex P3 catch on PR #184.
         """
         try:
             st = ignore_file.stat()
         except OSError:
             # Can't stat — let _load_file's read path surface the same error.
-            self._load_file(ignore_file)
+            self._load_file(ignore_file, as_path=as_path)
             return
-        cached = self._rules.get(ignore_file.resolve())
-        if cached and cached.mtime_ns == st.st_mtime_ns and cached.size == st.st_size:
-            return
-        self._load_file(ignore_file, st=st)
+        if not force:
+            cached = self._rules.get((as_path or ignore_file).resolve())
+            if cached and cached.mtime_ns == st.st_mtime_ns and cached.size == st.st_size:
+                return
+        self._load_file(ignore_file, st=st, as_path=as_path)
 
     def _applicable(self, root: Path, path: Path) -> list[tuple[Path, _LoadedRules]]:
         """Return (ancestor, loaded_rules) for each applicable .dropboxignore

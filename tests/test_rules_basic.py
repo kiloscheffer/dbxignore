@@ -474,19 +474,23 @@ def test_reload_file_preserves_canonical_precedence_when_both_files_exist(
     canonical = sub / ".dropboxignore"
     mixed = sub / ".DropboxIgnore"
     canonical.write_text("canonical_rule/\n", encoding="utf-8")
+    # Detect filesystem case sensitivity BEFORE creating the mixed-case
+    # file. On case-insensitive FS (Windows NTFS, default macOS APFS,
+    # default HFS+), `mixed` resolves to the same on-disk file as
+    # `canonical` and `mixed.exists()` returns True even though we only
+    # wrote `canonical`. Without this guard, `mixed.write_text` below
+    # would rewrite canonical's content, defeating the test setup.
+    # `PosixPath.resolve()` does NOT lowercase basenames on POSIX so an
+    # equality check against resolved paths would falsely suggest two
+    # distinct files on case-insensitive macOS.
+    if mixed.exists():
+        pytest.skip("case-insensitive FS — both names resolve to one file")
 
     cache = RuleCache()
     cache.load_root(tmp_path)
     cached_lines_before = list(cache._rules[canonical.resolve()].lines)
 
-    # Try to create the mixed-case sibling. On case-insensitive FS this
-    # rewrites the canonical file's content (same on-disk file).
-    try:
-        mixed.write_text("mixed_rule/\n", encoding="utf-8")
-    except OSError:
-        pytest.skip("mixed-case sibling creation failed on this FS")
-    if mixed.resolve() == canonical.resolve():
-        pytest.skip("case-insensitive FS — both names resolve to one file")
+    mixed.write_text("mixed_rule/\n", encoding="utf-8")
 
     # Watchdog fires for the mixed-case sibling. The reload must redirect
     # to the canonical file (which is unchanged) and keep its rules in
@@ -549,12 +553,13 @@ def test_remove_file_preserves_cache_when_canonical_sibling_exists(
     canonical = sub / ".dropboxignore"
     mixed = sub / ".DropboxIgnore"
     canonical.write_text("canonical/\n", encoding="utf-8")
-    try:
-        mixed.write_text("mixed/\n", encoding="utf-8")
-    except OSError:
-        pytest.skip("mixed-case sibling creation failed on this FS")
-    if mixed.resolve() == canonical.resolve():
+    # See note in test_reload_file_preserves_canonical_precedence_*
+    # for why a probe of the alternate-cased path is the right way to
+    # detect case-insensitive filesystems on POSIX.
+    if mixed.exists():
         pytest.skip("case-insensitive FS — both names resolve to one file")
+
+    mixed.write_text("mixed/\n", encoding="utf-8")
 
     cache = RuleCache()
     cache.load_root(tmp_path)

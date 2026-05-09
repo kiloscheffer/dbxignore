@@ -730,7 +730,7 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
     """
     target = path.resolve()
     if not target.exists():
-        click.echo(f"error: {path} does not exist", err=True)
+        click.echo(f"Path {path} does not exist.", err=True)
         sys.exit(2)
 
     discovered = _discover_roots()
@@ -740,7 +740,7 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
 
     root = find_containing(target, discovered)
     if root is None:
-        click.echo(f"error: {path} is not under any Dropbox root", err=True)
+        click.echo(f"Path {path} is not under any Dropbox root.", err=True)
         sys.exit(2)
 
     cache = _load_cache(discovered)

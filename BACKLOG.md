@@ -2037,11 +2037,39 @@ Touches: `src/dbxignore/daemon.py` (`_initial_sweep_worker`).
 
 ---
 
+## 92. Mixed-case rule filenames not handled end-to-end
+
+**Surfaced 2026-05-09 in PR #184 (Codex P2 #5).**
+
+`RuleCache.load_root` now discovers and canonicalizes mixed-case rule files (e.g. `.DropboxIgnore`) — but the watchdog path (`daemon._classify`, `daemon._moved_dest_under_root`) and several `RuleCache` mutations (`remove_file`, `reload_file`, `match`, `explain`) still use exact-case `name == IGNORE_FILENAME` checks. Practical effect on case-sensitive Linux/macOS-APFS-strict with `.DropboxIgnore`:
+
+- Initial sweep: rules loaded under canonical lowercase cache key (PR #184 fix).
+- Edits via watchdog: `_classify` doesn't match → routed to OTHER → cache not refreshed.
+- Hourly sweep: refreshes via `load_root`.
+
+Net experience: rules apply correctly, edits take up to ~1 hour to be reflected.
+
+Pre-existing on Windows + mixed-case files since v0.2 — the watchdog event would have `src.name = '.DropboxIgnore'` and Python's `==` is case-sensitive even on Windows. PR #184 didn't make this worse; it just exposed the gap by enabling discovery on Linux/macOS-APFS-strict where the file was previously ignored entirely.
+
+**Fix candidates:**
+
+- **Comprehensive case-insensitive predicate.** Add `_is_ignore_filename(name: str) -> bool` and `_canonical_cache_key(path: Path) -> Path` helpers in `rules.py`. Use throughout `match`, `explain`, `remove_file`, `reload_file`, `_load_file`, `_load_if_changed`, plus `daemon._classify` and `daemon._moved_dest_under_root`. Touches both modules; ~30 LOC + tests for each predicate site. End state: full case-insensitive support across discovery, watchdog, and reconcile.
+
+- **Document the limitation.** Add a CLAUDE.md gotcha: "rule files must be exactly `.dropboxignore` (lowercase) for full functionality; mixed-case files work with up-to-1-hour staleness on edits." No code change.
+
+- **Defer.** No tests or beta-tester reports show a real user with mixed-case rule files in 6 months across three platforms.
+
+**Urgency:** low. No fired trigger. Bundle with the next watchdog or `RuleCache`-mutation-touching change. The watchdog gap was filed-and-deferred rather than fixed inline in PR #184 because the comprehensive fix touches surface beyond the cancellation-granularity goal of item #86 — same revertability-axis split rule as past PRs.
+
+Touches: `src/dbxignore/rules.py` (`match`, `explain`, `remove_file`, `reload_file`, `_load_file`, `_load_if_changed`); `src/dbxignore/daemon.py` (`_classify`, `_moved_dest_under_root`).
+
+---
+
 ## Status
 
 ### Open
 
-Nine items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Ten items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2052,6 +2080,7 @@ Nine items. All passive (no concrete trigger requires action) — bundle each wi
 - **#53** — Initial-sweep wall-clock on a fresh install (no existing markers) was 49.62s on a 27k-dir tree, blocking systemd readiness for ~50s. Candidate 1 (ready-before-sweep) shipped in PR #162 (removed the readiness-pause symptom). Candidate 3 (per-subdir worker fan-out) shipped in PR #183 (parallelizes the sweep itself across top-level subdirs). Only candidate 2 (persisted sweep-complete hint, ~80 LOC) remains open — has reliability concerns on network FS / File Provider mtime semantics; no fired trigger yet.
 - **#54** — Watchdog observer's recursive watch schedules one inotify watch per directory under `~/Dropbox`, including marked-ignored subtrees. Architectural fix (per-directory watches with mark/unmark lifecycle) is ~200 LOC of race-condition-prone state-machine work; deferred until a beta tester hits the watch ceiling on a system with limits already raised.
 - **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall.
+- **#92** — Mixed-case rule filenames (e.g. `.DropboxIgnore`) discovered by `load_root` (PR #184) but watchdog path and several `RuleCache` mutations still use exact-case `==` checks. Edits to mixed-case rule files have up-to-1-hour staleness until the next hourly sweep refreshes the cache. Pre-existing inconsistency on Windows since v0.2; PR #184 surfaced it on Linux/macOS-APFS-strict. Fix candidates: (1) comprehensive case-insensitive predicate across rules.py and daemon.py (~30 LOC), (2) document as a known limitation, (3) defer. No fired trigger.
 
 ### Resolved (reverse chronological)
 

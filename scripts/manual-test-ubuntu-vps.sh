@@ -73,6 +73,10 @@ cleanup() {
         fi
     fi
     rm -f "$DROPBOXD_LOG" 2>/dev/null || true
+    # Belt-and-suspenders: remove the slow-sweep test marker if a script
+    # crash skipped the in-phase cleanup (BACKLOG #89). Honoring a stale
+    # marker on a future install would silently pad every initial sweep.
+    rm -f "$HOME/.local/state/dbxignore/_test_slow_sweep" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -465,6 +469,15 @@ phase_daemon() {
         echo "  Run: sudo sysctl fs.inotify.max_user_watches=524288"
     fi
 
+    # Slow-sweep determinism (BACKLOG #89). Seed a 15s pad so 5a's 5-iteration
+    # state=starting poll deterministically catches the transient state and
+    # 5f's 180s poll deterministically observes the transition to running,
+    # regardless of the watched-tree size. The daemon logs WARNING when it
+    # honors this; cleanup at the end of phase 5 removes it before phase 6.
+    mkdir -p "$HOME/.local/state/dbxignore"
+    printf '15\n' > "$HOME/.local/state/dbxignore/_test_slow_sweep"
+    note "5 — slow-sweep marker seeded: 15s pad on initial sweep (item #89)"
+
     dbxignore install >/tmp/dbxignore-install.out 2>&1 \
         && pass "dbxignore install (rc=0)" \
         || { fail "dbxignore install"; sed 's/^/    /' /tmp/dbxignore-install.out; return; }
@@ -622,6 +635,12 @@ phase_daemon() {
         dbxignore status 2>&1 | sed 's/^/    /'
         fail "5f — human status did not report 'daemon: running'"
     fi
+
+    # Remove slow-sweep marker so phase 6's re-install + uninstall cycles
+    # run with normal sweep timing (item #89). The cleanup() trap removes
+    # it too if this point is never reached.
+    rm -f "$HOME/.local/state/dbxignore/_test_slow_sweep"
+    note "5 — slow-sweep marker removed before phase 6 (item #89)"
 }
 
 # ---------------------------------------------------------------------------

@@ -478,6 +478,34 @@ def test_purge_removes_daemon_log_and_rotations(
         assert not (state_dir / name).exists(), f"{name} survived --purge"
 
 
+def test_purge_removes_slow_sweep_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
+) -> None:
+    """--purge deletes the ``_test_slow_sweep`` marker (BACKLOG #89).
+    Defends against a manual-test run that crashes mid-Phase-5 before
+    the script's own cleanup arm runs — the next ``uninstall --purge``
+    leaves no stale marker behind to silently re-pad future installs."""
+    import click.testing
+
+    from dbxignore import cli, daemon, state
+
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    (state_dir / daemon.SLOW_SWEEP_MARKER_NAME).write_text("15\n", encoding="utf-8")
+    # Need at least one other file so the dir survives the rmdir step and
+    # the assertion targets the marker specifically.
+    (state_dir / "user-note.txt").write_text("keep me\n", encoding="utf-8")
+
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [])
+    monkeypatch.setattr("dbxignore.install.uninstall_service", lambda: None)
+
+    result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
+    assert result.exit_code == 0
+    assert not (state_dir / daemon.SLOW_SWEEP_MARKER_NAME).exists()
+    assert (state_dir / "user-note.txt").exists()
+
+
 def test_purge_rmdirs_empty_state_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
 ) -> None:

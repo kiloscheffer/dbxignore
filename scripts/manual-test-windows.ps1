@@ -541,6 +541,19 @@ function Test-Daemon {
     $T = Join-Path $script:DropboxDir $TestSubdir
     Reset-TestDir -Path $T -DropboxignoreContent "*.tmp"
 
+    # Slow-sweep determinism (BACKLOG #89). Seed a 15s pad so 5a's 5-iteration
+    # state=starting poll deterministically catches the transient state and
+    # 5f's 180s poll deterministically observes the transition to running,
+    # regardless of the watched-tree size. The daemon logs WARNING when it
+    # honors this; cleanup at the end of phase 5 removes it before phase 6.
+    $slowSweepDir = Join-Path $env:LOCALAPPDATA "dbxignore"
+    $slowSweepMarker = Join-Path $slowSweepDir "_test_slow_sweep"
+    if (-not (Test-Path $slowSweepDir)) {
+        New-Item -ItemType Directory -Path $slowSweepDir -Force | Out-Null
+    }
+    Set-Content -Path $slowSweepMarker -Value "15" -Encoding ascii -NoNewline
+    Write-Note "5 - slow-sweep marker seeded: 15s pad on initial sweep (item #89)"
+
     $installOut = "$env:TEMP\dbxignore-install.out"
     dbxignore install *> $installOut
     if ($LASTEXITCODE -eq 0) {
@@ -711,6 +724,14 @@ function Test-Daemon {
         $humanOut -split "`r?`n" | ForEach-Object { Write-Note "    $_" }
         Write-Fail "5f - human status did not report 'daemon: running'"
     }
+
+    # Remove slow-sweep marker so phase 6's re-install + uninstall cycles
+    # run with normal sweep timing (item #89). Phase 7 also removes it as
+    # a defensive backstop if this point is never reached.
+    if (Test-Path $slowSweepMarker) {
+        Remove-Item $slowSweepMarker -Force -ErrorAction SilentlyContinue
+        Write-Note "5 - slow-sweep marker removed before phase 6 (item #89)"
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -861,6 +882,15 @@ function Test-Cleanup {
     if (Test-Path $T) {
         Remove-Item -Path $T -Recurse -Force -ErrorAction SilentlyContinue
         Write-Note "test fixtures removed from Dropbox folder"
+    }
+
+    # Defensive backstop for the slow-sweep marker (item #89). Honoring a
+    # stale marker on a future install would silently pad every initial
+    # sweep, so make sure phase 7 cleans it up even when phase 5 returned
+    # early.
+    $slowSweepMarker = Join-Path $env:LOCALAPPDATA "dbxignore\_test_slow_sweep"
+    if (Test-Path $slowSweepMarker) {
+        Remove-Item $slowSweepMarker -Force -ErrorAction SilentlyContinue
     }
 
     uv tool uninstall dbxignore 2>$null | Out-Null

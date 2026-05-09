@@ -379,6 +379,15 @@ phase_daemon() {
     rm -rf "$T"; mkdir -p "$T"
     printf '*.tmp\n' > "$T/.dropboxignore"
 
+    # Slow-sweep determinism (BACKLOG #89). Seed a 15s pad so 5a's 5-iteration
+    # state=starting poll deterministically catches the transient state and
+    # 5f's 180s poll deterministically observes the transition to running,
+    # regardless of the watched-tree size. The daemon logs WARNING when it
+    # honors this; cleanup at the end of phase 5 removes it before phase 6.
+    mkdir -p "$HOME/Library/Application Support/dbxignore"
+    printf '15\n' > "$HOME/Library/Application Support/dbxignore/_test_slow_sweep"
+    note "5 — slow-sweep marker seeded: 15s pad on initial sweep (item #89)"
+
     dbxignore install >/tmp/dbxignore-install.out 2>&1 \
         && pass "dbxignore install (rc=0)" \
         || { fail "dbxignore install"; sed 's/^/    /' /tmp/dbxignore-install.out; return; }
@@ -545,6 +554,12 @@ phase_daemon() {
         dbxignore status 2>&1 | sed 's/^/    /'
         fail "5f — human status did not report 'daemon: running'"
     fi
+
+    # Remove slow-sweep marker so phase 6's re-install + uninstall cycles
+    # run with normal sweep timing (item #89). Phase 7 also removes it as
+    # a defensive backstop if this point is never reached.
+    rm -f "$HOME/Library/Application Support/dbxignore/_test_slow_sweep"
+    note "5 — slow-sweep marker removed before phase 6 (item #89)"
 }
 
 # ---------------------------------------------------------------------------
@@ -643,6 +658,12 @@ phase_cleanup() {
 
     rm -rf "${DROPBOX_DIR:?}/$TEST_SUBDIR" 2>/dev/null || true
     note "test fixtures removed from Dropbox folder"
+
+    # Defensive backstop for the slow-sweep marker (item #89). Honoring a
+    # stale marker on a future install would silently pad every initial
+    # sweep, so make sure phase 7 cleans it up even when phase 5 returned
+    # early.
+    rm -f "$HOME/Library/Application Support/dbxignore/_test_slow_sweep" 2>/dev/null || true
 
     uv tool uninstall dbxignore >/dev/null 2>&1 \
         && pass "uv tool uninstall dbxignore" \

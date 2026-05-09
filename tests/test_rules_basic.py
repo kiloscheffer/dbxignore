@@ -127,6 +127,47 @@ def test_load_root_honors_stop_event_between_directory_visits(
     )
 
 
+def test_load_root_preserves_cache_when_pre_stat_would_flap(
+    tmp_path: Path, write_file: WriteFile, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item #86 / Codex P2 catch on PR #184: load_root must NOT pre-stat
+    rule files in a way that lets a transient stat failure silently skip
+    the file. If it did, the file would be missing from `seen` and the
+    stale-purge would drop the cached entry — letting Dropbox upload
+    previously-ignored paths before the next sweep recovers. The fix is
+    to use os.walk's already-materialized filenames list rather than a
+    separate `Path.is_file()` call.
+
+    Pin contract: monkeypatching `Path.is_file` to always return False
+    must NOT prevent load_root from finding the rule file or preserving
+    its cached entry. (If a future refactor reintroduces a pre-stat
+    gate via is_file, this test fails.)"""
+    rule_file = tmp_path / "sub" / ".dropboxignore"
+    write_file(rule_file, "build/\n")
+
+    # Phase 1: warm the cache.
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+    cache_key = rule_file.resolve()
+    assert cache_key in cache._rules, "cache should be warm after first load"
+
+    # Phase 2: monkeypatch Path.is_file to ALWAYS return False, simulating
+    # a transient stat flap that affects every subsequent stat call. If
+    # load_root pre-stats via is_file, this would cause the file to be
+    # silently skipped → stale-purge drops the cache entry. The fix
+    # avoids the pre-stat entirely; the file is detected via os.walk's
+    # filenames list (which derives from a single scandir, not per-file
+    # stat).
+    monkeypatch.setattr(Path, "is_file", lambda self: False)
+
+    cache.load_root(tmp_path)
+
+    assert cache_key in cache._rules, (
+        "is_file()-flap must NOT drop the cached entry — "
+        "load_root must use os.walk's filenames list, not a pre-stat gate"
+    )
+
+
 def test_load_root_observes_stop_event_in_dropboxignore_free_tree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

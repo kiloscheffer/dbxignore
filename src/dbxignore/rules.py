@@ -132,7 +132,7 @@ class RuleCache:
             if root not in self._roots:
                 self._roots.append(root)
             seen: set[Path] = set()
-            for current_dir, _dirnames, _filenames in os.walk(root, followlinks=False):
+            for current_dir, _dirnames, filenames in os.walk(root, followlinks=False):
                 # Cooperative cancellation per directory visited (item #86).
                 # The previous shape used `root.rglob(IGNORE_FILENAME)` and
                 # checked between yields — fine for trees with many rule
@@ -147,14 +147,26 @@ class RuleCache:
                 # cache by dropping entries that simply weren't reached.
                 if stop_event is not None and stop_event.is_set():
                     return
-                # `Path.is_file()` resolves case-insensitively on Windows
-                # NTFS and default macOS HFS+/APFS, matching `rglob`'s prior
-                # behavior on those filesystems — verified for parity at
-                # PR #184 prep time. A directory with `.DropboxIgnore` (mixed
-                # case) is still found.
-                ignore_file = Path(current_dir) / IGNORE_FILENAME
-                if not ignore_file.is_file():
+                # Match against the already-materialized filenames list
+                # rather than via a separate `Path.is_file()` stat. A fresh
+                # stat per directory can flap on transient read errors
+                # (network drive EIO, AV scan, brief editor lock) — the same
+                # failure mode `_load_file`'s OSError arm explicitly
+                # preserves cached rules through. If the pre-stat returned
+                # False under transient flap, the file would be silently
+                # skipped, the stale-purge below would drop the cached
+                # entry, and Dropbox would upload previously-ignored paths
+                # before the stat recovered. Using scandir's directory
+                # listing (which is one syscall per directory regardless)
+                # mirrors `rglob`'s prior behavior. Codex P2 catch on
+                # PR #184. Filename match is exact (case-sensitive); on
+                # case-insensitive filesystems users still create the file
+                # as the documented `.dropboxignore` lowercase per README
+                # — no test or beta-tester report has surfaced a mixed-case
+                # use case.
+                if IGNORE_FILENAME not in filenames:
                     continue
+                ignore_file = Path(current_dir) / IGNORE_FILENAME
                 # Same resolve-failure shape as `_load_file`: a `.dropboxignore`
                 # whose path now contains a symlink loop would crash the
                 # sweep here before `_load_if_changed` runs. Skip the

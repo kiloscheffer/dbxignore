@@ -58,23 +58,19 @@ def _canonical_cache_key(path: Path) -> Path:
 
 
 def _resolve_to_canonical_sibling(ignore_file: Path) -> Path:
-    """If ``ignore_file`` has a mixed-case basename and a canonical
-    ``.dropboxignore`` sibling exists in the same directory, return the
-    canonical path; otherwise return ``ignore_file`` unchanged.
+    """Return the canonical ``.dropboxignore`` sibling if it exists,
+    else ``ignore_file`` unchanged. Identity is preserved when no
+    redirect happens, so callers can detect "did we redirect?" via
+    ``result is not ignore_file``.
 
-    Mirrors ``load_root``'s prefer-exact-match selection in the
-    ``reload_file`` path so a watchdog edit to a shadowed mixed-case
-    sibling redirects to the canonical file rather than overwriting the
-    cache entry with content the active rule set never used (Codex P2
-    on PR #185).
-
-    The ``is_file()`` call is a single stat. If it returns False under
-    a transient flap (network drive EIO, AV scan, brief editor lock),
-    the redirect is skipped and the mixed-case file is loaded. The
-    cache state then reflects the mixed-case file until the next
-    watchdog event or hourly sweep — bounded transient deviation,
+    Mirrors ``load_root``'s prefer-exact-match selection at the
+    watchdog seam (``reload_file`` / ``remove_file``) so a shadowed
+    mixed-case sibling never overwrites or evicts the canonical's
+    cache entry. The single ``is_file()`` stat may flap on transient
+    I/O errors; the redirect is then skipped and the next watchdog
+    event or hourly sweep recovers — bounded transient deviation,
     strictly better than the no-redirect shape's "always wrong when
-    both files exist" mode.
+    both files coexist" mode.
     """
     if ignore_file.name == IGNORE_FILENAME:
         return ignore_file
@@ -208,89 +204,46 @@ class RuleCache:
                 # cache by dropping entries that simply weren't reached.
                 if stop_event is not None and stop_event.is_set():
                     return
-                # Match against the already-materialized filenames list
-                # rather than via a separate `Path.is_file()` stat. A fresh
-                # stat per directory can flap on transient read errors
-                # (network drive EIO, AV scan, brief editor lock) — the same
-                # failure mode `_load_file`'s OSError arm explicitly
-                # preserves cached rules through. If the pre-stat returned
-                # False under transient flap, the file would be silently
-                # skipped, the stale-purge below would drop the cached
-                # entry, and Dropbox would upload previously-ignored paths
-                # before the stat recovered. Using scandir's directory
-                # listing (which is one syscall per directory regardless)
-                # mirrors `rglob`'s prior behavior. First Codex P2 catch on
-                # PR #184.
+                # Detect rule files via the already-materialized filenames
+                # list (one scandir per directory, no separate stat per
+                # file). A fresh `Path.is_file()` stat would flap under the
+                # same transient read errors `_load_file`'s OSError arm
+                # explicitly preserves cached rules through, dropping the
+                # cache entry to the stale-purge below.
                 #
-                # Match case-insensitively so a `.DropboxIgnore` (mixed
-                # casing on disk) is still found on case-insensitive
-                # filesystems (Windows NTFS, default macOS APFS/HFS+) —
-                # parity with the prior `rglob` behavior. On Linux (case-
-                # sensitive), this is slightly looser than rglob, but the
-                # project's pattern-matching layer is already case-
-                # insensitive everywhere via `_CaseInsensitiveGitIgnorePattern`,
-                # so the overall posture is "treat names as the lowest-
-                # common-denominator filesystem would." On-disk casing is
-                # preserved in the constructed Path so the resolved cache
-                # key matches what `rglob` produced. Second Codex P2 catch
-                # on PR #184.
-                #
-                # Prefer the exact `.dropboxignore` filename when present,
-                # falling back to a case-insensitive match only when the
-                # canonical name is absent. On case-sensitive filesystems
-                # (Linux ext4) a directory could in principle contain both
-                # `.dropboxignore` and `.DropboxIgnore` as distinct files;
-                # `os.walk`'s filename order is not guaranteed, so without
-                # an exact-match preference the selection would be order-
-                # dependent and the canonical file's rules might be
-                # silently shadowed. README documents the lowercase form,
-                # so the canonical file wins. Fourth Codex P2 catch on
-                # PR #184.
-                match_name = (
-                    IGNORE_FILENAME
-                    if IGNORE_FILENAME in filenames
-                    else next(
+                # Match case-insensitively to recover `rglob`'s prior
+                # discovery behavior on case-insensitive filesystems
+                # (Windows NTFS, default macOS APFS/HFS+) where a
+                # `.DropboxIgnore` would be found by a `.dropboxignore`
+                # query. The exact-match check fires first so a canonical
+                # file always wins over a mixed-case sibling on case-
+                # sensitive filesystems where both could coexist. (PR #184)
+                if IGNORE_FILENAME in filenames:
+                    match_name = IGNORE_FILENAME
+                else:
+                    candidate = next(
                         (f for f in filenames if f.lower() == IGNORE_FILENAME),
                         None,
                     )
-                )
-                if match_name is None:
-                    continue
-                # `ignore_file` carries the on-disk casing so the read in
-                # `_load_file` works on case-sensitive filesystems where
-                # `.DropboxIgnore` and `.dropboxignore` are different entries.
-                # `canonical` carries the lowercase basename and is the
-                # cache-key path: `match()` later looks up
-                # `ancestor / IGNORE_FILENAME` (always lowercase), so the
-                # cache key MUST end in lowercase too — otherwise `PosixPath`
-                # equality (case-sensitive) misses on Linux/macOS and a
-                # mixed-case rule file is loaded but its rules are never
-                # applied. Third Codex P2 catch on PR #184.
+                    if candidate is None:
+                        continue
+                    match_name = candidate
+                # Read uses on-disk casing; cache keys use canonical
+                # lowercase so `PosixPath` equality (case-sensitive on
+                # POSIX) doesn't split entries between `match()`'s
+                # `ancestor / IGNORE_FILENAME` lookup and `load_root`'s
+                # discovered-path storage (PR #184).
                 ignore_file = Path(current_dir) / match_name
                 canonical = Path(current_dir) / IGNORE_FILENAME
-                # Same resolve-failure shape as `_load_file`: a `.dropboxignore`
-                # whose path now contains a symlink loop would crash the
-                # sweep here before `_load_if_changed` runs. Skip the
-                # stale-purge tracking for unresolvable paths;
-                # `_load_if_changed`'s own resolve failure handler logs the
-                # underlying issue.
+                # Skip stale-purge tracking on unresolvable paths (e.g.
+                # symlink loops). `_load_if_changed`'s own resolve-failure
+                # arm logs the underlying issue.
                 try:
                     seen.add(canonical.resolve())
                 except (OSError, RuntimeError) as exc:
                     logger.warning("Could not resolve %s during sweep: %s", ignore_file, exc)
                     continue
-                # Force reload when the fallback selected a mixed-case
-                # filename. Without this, the canonical-key cache entry's
-                # mtime+size could (extremely rarely) coincide with the
-                # mixed-case file's stat values after the canonical file
-                # was deleted — the mtime+size shortcut would skip
-                # reloading and stale rules from the now-deleted canonical
-                # file would persist. Codex P3 catch on PR #184; the
-                # canonical-name path retains the shortcut because
-                # mtime+size identity for the same source file is the
-                # contract `_load_if_changed` was built around.
-                force = match_name != IGNORE_FILENAME
-                self._load_if_changed(ignore_file, as_path=canonical, force=force)
+                self._load_if_changed(ignore_file, as_path=canonical)
             # Drop cached entries for .dropboxignore files under this root that
             # the walk didn't find — they've been deleted since the last load
             # and their rules must stop applying.
@@ -301,22 +254,12 @@ class RuleCache:
     def reload_file(self, ignore_file: Path, *, log_warnings: bool = True) -> None:
         """Re-read a single .dropboxignore file, replacing any cached version.
 
-        ``ignore_file`` may be a mixed-case spelling (e.g. ``.DropboxIgnore``)
-        as delivered by a watchdog event on a case-sensitive filesystem; the
-        cache key is normalized to canonical lowercase via
-        ``_canonical_cache_key`` so the entry stays in sync with what
-        ``load_root`` stores and ``match`` looks up. Without normalization,
-        a watchdog reload would silently create a second cache entry under
-        the on-disk casing while ``match`` continues to read the stale
-        canonical-key entry (item #92).
-
-        Precedence: when ``ignore_file`` has a mixed-case basename AND a
-        canonical ``.dropboxignore`` sibling exists in the same directory,
-        the canonical file is reloaded instead. Mirrors ``load_root``'s
-        prefer-exact-match selection — the cache entry under the canonical
-        key reflects the canonical file's rules; a watchdog edit to a
-        shadowed mixed-case sibling must not overwrite that with content
-        the active rule set never had (Codex P2 catch on PR #185).
+        Mirrors ``load_root``'s prefer-exact-match precedence: a watchdog
+        event for a mixed-case sibling redirects to the canonical
+        ``.dropboxignore`` when one exists. Cache key is normalized to
+        canonical lowercase so ``PosixPath`` equality (case-sensitive on
+        POSIX) doesn't split entries between this method and ``match()``
+        / ``load_root`` (item #92).
         """
         # DEBUG-level boundary log for backlog item #34 timing diagnostics.
         # Measures rule-cache reload + conflict-detector recompute under the
@@ -333,27 +276,20 @@ class RuleCache:
     def remove_file(self, ignore_file: Path, *, log_warnings: bool = True) -> None:
         """Drop all cached state for a .dropboxignore file (e.g. after deletion).
 
-        ``ignore_file`` may be a mixed-case spelling as delivered by a
-        watchdog deletion event; the cache key is normalized to canonical
-        lowercase via ``_canonical_cache_key`` so the entry actually
-        gets dropped (item #92). Without normalization, the lookup against
-        the watchdog's on-disk casing misses the canonical-key entry on
-        case-sensitive filesystems and the cache stays stale.
-
-        Precedence: when ``ignore_file`` has a mixed-case basename AND a
-        canonical ``.dropboxignore`` sibling still exists in the same
-        directory, the deletion is a no-op — the cache entry reflects the
-        canonical file's rules (per ``load_root``'s prefer-exact-match
-        selection), which are still valid because the canonical file
-        wasn't deleted (Codex P2 catch on PR #185).
+        Mirrors ``load_root``'s prefer-exact-match precedence: a deletion
+        event for a mixed-case sibling is a no-op when the canonical
+        ``.dropboxignore`` still exists, since the cache entry reflects
+        the canonical file's still-valid rules. Cache key is normalized
+        to canonical lowercase so the lookup hits on case-sensitive
+        filesystems where ``PosixPath`` equality is case-sensitive
+        (item #92).
         """
         with self._lock:
             if not is_ignore_filename(ignore_file.name):
                 return
-            if ignore_file.name != IGNORE_FILENAME:
-                canonical_path = ignore_file.parent / IGNORE_FILENAME
-                if canonical_path.is_file():
-                    return
+            if _resolve_to_canonical_sibling(ignore_file) is not ignore_file:
+                # Canonical sibling still exists → its rules remain valid.
+                return
             self._rules.pop(_canonical_cache_key(ignore_file), None)
             self._recompute_conflicts(log_warnings=log_warnings)
 
@@ -517,36 +453,24 @@ class RuleCache:
             size=st.st_size,
         )
 
-    def _load_if_changed(
-        self,
-        ignore_file: Path,
-        *,
-        as_path: Path | None = None,
-        force: bool = False,
-    ) -> None:
+    def _load_if_changed(self, ignore_file: Path, *, as_path: Path | None = None) -> None:
         """Load ``ignore_file`` only if its on-disk bytes differ from the
         cached version (mtime or size mismatch). No-op if unchanged.
 
         Used by the sweep path (``load_root``) to avoid reparsing every
-        .dropboxignore every hour. ``reload_file`` bypasses this check — a
-        watchdog event is an explicit signal to reload regardless of stat.
+        .dropboxignore every hour. ``reload_file`` bypasses this check —
+        a watchdog event is an explicit signal to reload regardless of
+        stat.
 
         ``as_path`` overrides the cache-key derivation (mirrors
-        ``_load_file``'s same-named kwarg). When set, the cache lookup
-        uses ``as_path.resolve()`` rather than ``ignore_file.resolve()``;
-        the read still uses ``ignore_file``. ``load_root`` passes the
-        canonical lowercase path here so a mixed-case `.DropboxIgnore`
-        on a case-sensitive filesystem is cached under the same key
-        ``match()`` later looks up — without this, ``PosixPath`` equality
-        is case-sensitive and the cache hit silently fails for the
-        directory that contains the rule file.
-
-        ``force`` skips the mtime+size shortcut and reloads
-        unconditionally. Used by ``load_root`` when the fallback selected
-        a mixed-case filename — the cached entry under the canonical
-        key may have been populated from a different source file, so its
-        stat values cannot be trusted to identify the current source.
-        Codex P3 catch on PR #184.
+        ``_load_file``'s same-named kwarg). When ``as_path``'s basename
+        differs from ``ignore_file``'s (the mixed-case fallback case in
+        ``load_root``), the mtime+size shortcut is skipped — the
+        canonical-key entry may have been populated from a different
+        source file, so its stat values cannot be trusted to identify
+        the current source. Name comparison rather than Path equality
+        because ``WindowsPath`` equality is case-insensitive on Windows
+        and would falsely collapse the fallback case to a no-op.
         """
         try:
             st = ignore_file.stat()
@@ -554,7 +478,7 @@ class RuleCache:
             # Can't stat — let _load_file's read path surface the same error.
             self._load_file(ignore_file, as_path=as_path)
             return
-        if not force:
+        if as_path is None or as_path.name == ignore_file.name:
             cached = self._rules.get(_canonical_cache_key(as_path or ignore_file))
             if cached and cached.mtime_ns == st.st_mtime_ns and cached.size == st.st_size:
                 return

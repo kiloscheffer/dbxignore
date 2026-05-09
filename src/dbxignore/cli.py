@@ -705,6 +705,89 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
         click.echo(f"  error: {p} - {msg}", err=True)
 
 
+@main.command()
+@click.argument("path", type=click.Path(exists=False, path_type=Path))
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Print what would be added/marked without changing anything.",
+)
+@click.option(
+    "--yes",
+    is_flag=True,
+    help="Skip the confirmation prompt (for scripted use). Without --yes "
+    "and outside --dry-run, ignore previews changes and asks before "
+    "mutating — marking a previously-synced path causes Dropbox to "
+    "remove it from cloud and from every linked device.",
+)
+def ignore(path: Path, dry_run: bool, yes: bool) -> None:
+    """Mark <PATH> ignored persistently.
+
+    Appends a literal-path rule to the nearest ancestor .dropboxignore
+    (creating one at the Dropbox root if no ancestor exists) AND sets the
+    ignore marker on <PATH> in one synchronous invocation. Idempotent —
+    safe to re-call.
+    """
+    target = path.resolve()
+    if not target.exists():
+        click.echo(f"error: {path} does not exist", err=True)
+        sys.exit(2)
+
+    discovered = _discover_roots()
+    if not discovered:
+        click.echo("No Dropbox roots found. Is Dropbox installed?", err=True)
+        sys.exit(2)
+
+    root = find_containing(target, discovered)
+    if root is None:
+        click.echo(f"error: {path} is not under any Dropbox root", err=True)
+        sys.exit(2)
+
+    cache = _load_cache(discovered)
+    rule_file = _select_rule_file(target, root)
+    canonical = rules.format_literal_rule(target, rule_file)
+
+    # Idempotence + redundancy guards
+    if cache.match(target):
+        matches = cache.explain(target)
+        via_us = any(m.pattern.rstrip() == canonical.rstrip() for m in matches if not m.is_dropped)
+        if via_us:
+            click.echo(f"{path} is already ignored.")
+        else:
+            blocker = next(m for m in matches if not m.is_dropped)
+            click.echo(
+                f"{path} is already covered by {blocker.pattern.rstrip()!r} "
+                f"in {blocker.ignore_file}; not adding redundant rule."
+            )
+        # Half-state recovery: ensure marker is set even if rule was already on disk.
+        if not markers.is_ignored(target):
+            markers.set_ignored(target)
+            click.echo(f"Set marker on {target}.")
+        return
+
+    # Confirmation
+    if dry_run:
+        click.echo(f"would append {canonical!r} to {rule_file}")
+        click.echo(f"would set marker on {target}")
+        return
+
+    if not yes:
+        click.echo(f"This will mark {target} ignored.")
+        click.echo(
+            "Dropbox will remove it from cloud Dropbox and from every "
+            "other linked device. Local copies on this device are preserved."
+        )
+        if not click.confirm("Continue?"):
+            click.echo("Aborted.")
+            return
+
+    # Mutation: rule first, then marker (avoids the daemon-race documented
+    # in the spec § Order of operations).
+    rules.append_rule(rule_file, canonical)
+    markers.set_ignored(target)
+    click.echo(f"ignore: rule added to {rule_file}; marker set on {target}")
+
+
 @main.command("list")
 @click.argument("path", required=False, type=click.Path(path_type=Path))
 def list_ignored(path: Path | None) -> None:

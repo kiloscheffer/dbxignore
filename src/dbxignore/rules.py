@@ -80,6 +80,55 @@ def _resolve_to_canonical_sibling(ignore_file: Path) -> Path:
     return ignore_file
 
 
+# gitignore meta-chars that need backslash-escaping when our rule generator
+# encounters them as literal directory-name characters. The set tracks
+# pathspec.GitIgnoreSpec's interpretation: `*` and `?` are wildcards, `[`
+# and `]` delimit a character class, `\` is the escape char itself. `!` and
+# `#` only matter when they're the first non-whitespace character of the line
+# (negation marker / comment marker), so they're handled separately below.
+_META_CHARS_INLINE = frozenset("*?[]\\")
+
+
+def format_literal_rule(target: Path, rule_file: Path) -> str:
+    """Return a gitignore-anchored literal-path rule for ``target``.
+
+    The result is the rule line that, when written to ``rule_file``, matches
+    exactly ``target`` and no other path. Used by ``cli.ignore`` to compute
+    the rule to append, and by ``cli.unignore`` to compute the canonical
+    rule to compare against existing rules for removal.
+
+    Construction:
+
+    1. Compute ``target.relative_to(rule_file.parent)`` — raises ``ValueError``
+       if ``target`` is not under the rule file's directory (a caller bug;
+       rule-file selection should always pick an ancestor).
+    2. Escape gitignore inline meta-chars (``*``, ``?``, ``[``, ``]``, ``\\``)
+       per segment with a leading backslash.
+    3. If the FIRST segment starts with ``!`` (negation marker) or ``#``
+       (column-0 comment marker), prepend a backslash so pathspec parses
+       the line as an active pattern instead of a negation or comment.
+    4. Re-join segments with ``/`` (gitignore separator, regardless of
+       host OS).
+    5. If ``target.is_dir()``, append ``/`` to make the rule directory-only
+       (matches the directory itself, not all paths whose basename equals
+       the directory name).
+    """
+    relative = target.relative_to(rule_file.parent)
+    parts = relative.parts
+    escaped = [_escape_segment(p) for p in parts]
+    if escaped and escaped[0].startswith(("!", "#")):
+        escaped[0] = "\\" + escaped[0]
+    line = "/".join(escaped)
+    if target.is_dir():
+        line += "/"
+    return line
+
+
+def _escape_segment(segment: str) -> str:
+    """Backslash-escape gitignore inline meta-chars in one path segment."""
+    return "".join("\\" + c if c in _META_CHARS_INLINE else c for c in segment)
+
+
 class _CaseInsensitiveGitIgnorePattern(GitIgnoreSpecPattern):
     """GitIgnoreSpec pattern that compiles regex with re.IGNORECASE.
 

@@ -160,6 +160,24 @@ def write_file() -> WriteFile:
 
 
 @pytest.fixture
+def require_case_sensitive_fs(tmp_path: Path) -> None:
+    """Skip the test if ``tmp_path`` lives on a case-insensitive filesystem.
+
+    Probe via the alternate-name approach (write one casing, check whether
+    the other "exists"): `PosixPath.resolve()` doesn't lowercase basenames
+    on POSIX, so an equality check on resolved paths would falsely report
+    distinct files on case-insensitive macOS APFS-default. Use this for
+    tests that need both `.dropboxignore` and `.DropboxIgnore` to coexist
+    as distinct on-disk entries.
+    """
+    probe = tmp_path / "_case_probe"
+    probe.write_text("", encoding="utf-8")
+    if (tmp_path / "_CASE_PROBE").exists():
+        pytest.skip("case-insensitive FS — both names resolve to one file")
+    probe.unlink()
+
+
+@pytest.fixture
 def fake_psutil_process(monkeypatch: pytest.MonkeyPatch) -> FakePsutilProcess:
     """Factory: install a fake ``psutil.Process`` + ``pid_exists`` pair.
 

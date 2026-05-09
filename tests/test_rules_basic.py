@@ -460,7 +460,7 @@ def test_reload_file_with_mixed_case_path_updates_canonical_entry(
 
 
 def test_reload_file_preserves_canonical_precedence_when_both_files_exist(
-    tmp_path: Path, write_file: WriteFile
+    tmp_path: Path, write_file: WriteFile, require_case_sensitive_fs: None
 ) -> None:
     """When both `.dropboxignore` (canonical) and `.DropboxIgnore` (mixed
     case) exist on disk (only possible on case-sensitive Linux/macOS-APFS
@@ -474,17 +474,6 @@ def test_reload_file_preserves_canonical_precedence_when_both_files_exist(
     canonical = sub / ".dropboxignore"
     mixed = sub / ".DropboxIgnore"
     canonical.write_text("canonical_rule/\n", encoding="utf-8")
-    # Detect filesystem case sensitivity BEFORE creating the mixed-case
-    # file. On case-insensitive FS (Windows NTFS, default macOS APFS,
-    # default HFS+), `mixed` resolves to the same on-disk file as
-    # `canonical` and `mixed.exists()` returns True even though we only
-    # wrote `canonical`. Without this guard, `mixed.write_text` below
-    # would rewrite canonical's content, defeating the test setup.
-    # `PosixPath.resolve()` does NOT lowercase basenames on POSIX so an
-    # equality check against resolved paths would falsely suggest two
-    # distinct files on case-insensitive macOS.
-    if mixed.exists():
-        pytest.skip("case-insensitive FS — both names resolve to one file")
 
     cache = RuleCache()
     cache.load_root(tmp_path)
@@ -537,7 +526,7 @@ def test_remove_file_with_mixed_case_path_removes_canonical_entry(
 
 
 def test_remove_file_preserves_cache_when_canonical_sibling_exists(
-    tmp_path: Path, write_file: WriteFile
+    tmp_path: Path, write_file: WriteFile, require_case_sensitive_fs: None
 ) -> None:
     """A deletion event for `.DropboxIgnore` while a canonical
     `.dropboxignore` sibling still exists must NOT drop the cache
@@ -546,18 +535,12 @@ def test_remove_file_preserves_cache_when_canonical_sibling_exists(
     deletion side (Codex P2 catch on PR #185).
 
     Only meaningful on case-sensitive Linux/macOS-APFS-strict where
-    both files are distinct entries. On case-insensitive FS, deleting
-    one removes both names; the test skips."""
+    both files are distinct entries (the fixture skips otherwise)."""
     sub = tmp_path / "sub"
     sub.mkdir()
     canonical = sub / ".dropboxignore"
     mixed = sub / ".DropboxIgnore"
     canonical.write_text("canonical/\n", encoding="utf-8")
-    # See note in test_reload_file_preserves_canonical_precedence_*
-    # for why a probe of the alternate-cased path is the right way to
-    # detect case-insensitive filesystems on POSIX.
-    if mixed.exists():
-        pytest.skip("case-insensitive FS — both names resolve to one file")
 
     mixed.write_text("mixed/\n", encoding="utf-8")
 

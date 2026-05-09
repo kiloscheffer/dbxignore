@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 from dbxignore import markers
 from dbxignore._logging import timed_debug
-from dbxignore.rules import IGNORE_FILENAME, RuleCache
+from dbxignore.rules import RuleCache, is_ignore_filename
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +188,7 @@ def _reconcile_path(
             report.marked += 1
             return True
         if currently_ignored and not should_ignore:
-            if path.name == IGNORE_FILENAME:
+            if is_ignore_filename(path.name):
                 logger.warning(
                     ".dropboxignore at %s was marked ignored; overriding back to synced",
                     path,

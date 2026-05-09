@@ -23,6 +23,40 @@ logger = logging.getLogger(__name__)
 IGNORE_FILENAME = ".dropboxignore"
 
 
+def is_ignore_filename(name: str) -> bool:
+    """Return True if ``name`` is the canonical rule filename in any casing.
+
+    Used by ``RuleCache.match`` / ``explain``, ``daemon._classify`` /
+    ``_moved_dest_under_root`` / ``_dispatch``, ``reconcile._reconcile_path``,
+    and ``cli._walk_marked_paths`` to recognize ``.dropboxignore`` files
+    consistently with how ``RuleCache.load_root`` discovers them
+    (case-insensitively). A ``.DropboxIgnore`` is treated as a rule file
+    across discovery, watchdog events, match queries, and walks — the
+    project's "case-insensitive everywhere" posture (per
+    ``_CaseInsensitiveGitIgnorePattern``) extended end-to-end.
+    """
+    return name.lower() == IGNORE_FILENAME
+
+
+def _canonical_cache_key(path: Path) -> Path:
+    """Return the canonical cache key for a rule-file path.
+
+    Always uses the lowercase basename ``IGNORE_FILENAME`` regardless of
+    the input path's on-disk casing. This is critical on case-sensitive
+    filesystems (Linux ext4, case-sensitive APFS) where ``PosixPath``
+    equality is case-sensitive — without normalization, ``load_root``
+    storing under canonical key while ``reload_file`` / ``remove_file``
+    keying off the watchdog event's mixed-case path would create two
+    distinct cache entries for the same logical rule file.
+
+    The parent directory is resolved (handles symlinks, trailing
+    separators, etc.) but the basename is replaced with the canonical
+    spelling. Callers must hold the cache lock if mutating ``self._rules``
+    using the returned key.
+    """
+    return path.parent.resolve() / IGNORE_FILENAME
+
+
 class _CaseInsensitiveGitIgnorePattern(GitIgnoreSpecPattern):
     """GitIgnoreSpec pattern that compiles regex with re.IGNORECASE.
 
@@ -238,21 +272,40 @@ class RuleCache:
             self._recompute_conflicts(log_warnings=log_warnings)
 
     def reload_file(self, ignore_file: Path, *, log_warnings: bool = True) -> None:
-        """Re-read a single .dropboxignore file, replacing any cached version."""
+        """Re-read a single .dropboxignore file, replacing any cached version.
+
+        ``ignore_file`` may be a mixed-case spelling (e.g. ``.DropboxIgnore``)
+        as delivered by a watchdog event on a case-sensitive filesystem; the
+        cache key is normalized to canonical lowercase via
+        ``_canonical_cache_key`` so the entry stays in sync with what
+        ``load_root`` stores and ``match`` looks up. Without normalization,
+        a watchdog reload would silently create a second cache entry under
+        the on-disk casing while ``match`` continues to read the stale
+        canonical-key entry (item #92).
+        """
         # DEBUG-level boundary log for backlog item #34 timing diagnostics.
         # Measures rule-cache reload + conflict-detector recompute under the
         # write lock. Lock contention against the watchdog thread's lock-free
         # `match()` reads can in principle delay this; the log makes that
         # observable. ``timed_debug`` no-ops when DEBUG isn't enabled.
         with timed_debug(logger, "reload_file path=%s", ignore_file), self._lock:
-            self._rules.pop(ignore_file.resolve(), None)
-            self._load_file(ignore_file)
+            canonical = _canonical_cache_key(ignore_file)
+            self._rules.pop(canonical, None)
+            self._load_file(ignore_file, as_path=canonical)
             self._recompute_conflicts(log_warnings=log_warnings)
 
     def remove_file(self, ignore_file: Path, *, log_warnings: bool = True) -> None:
-        """Drop all cached state for a .dropboxignore file (e.g. after deletion)."""
+        """Drop all cached state for a .dropboxignore file (e.g. after deletion).
+
+        ``ignore_file`` may be a mixed-case spelling as delivered by a
+        watchdog deletion event; the cache key is normalized to canonical
+        lowercase via ``_canonical_cache_key`` so the entry actually
+        gets dropped (item #92). Without normalization, the lookup against
+        the watchdog's on-disk casing misses the canonical-key entry on
+        case-sensitive filesystems and the cache stays stale.
+        """
         with self._lock:
-            self._rules.pop(ignore_file.resolve(), None)
+            self._rules.pop(_canonical_cache_key(ignore_file), None)
             self._recompute_conflicts(log_warnings=log_warnings)
 
     def load_external(self, source: Path, mount_at: Path, *, log_warnings: bool = True) -> None:
@@ -284,7 +337,7 @@ class RuleCache:
     def match(self, path: Path) -> bool:
         if not path.is_absolute():
             raise ValueError(f"match() requires an absolute path; got {path!r}")
-        if path.name == IGNORE_FILENAME:
+        if is_ignore_filename(path.name):
             return False
         root = find_containing(path, self._roots)
         if root is None:
@@ -320,7 +373,7 @@ class RuleCache:
         """
         if not path.is_absolute():
             raise ValueError(f"explain() requires an absolute path; got {path!r}")
-        if path.name == IGNORE_FILENAME:
+        if is_ignore_filename(path.name):
             return []
         root = find_containing(path, self._roots)
         if root is None:
@@ -375,7 +428,7 @@ class RuleCache:
         # would crash the sweep before any of the read/parse error arms
         # could run.
         try:
-            cache_key = (as_path or ignore_file).resolve()
+            cache_key = _canonical_cache_key(as_path or ignore_file)
         except (OSError, RuntimeError) as exc:
             logger.warning("Could not resolve %s: %s", as_path or ignore_file, exc)
             return
@@ -453,7 +506,7 @@ class RuleCache:
             self._load_file(ignore_file, as_path=as_path)
             return
         if not force:
-            cached = self._rules.get((as_path or ignore_file).resolve())
+            cached = self._rules.get(_canonical_cache_key(as_path or ignore_file))
             if cached and cached.mtime_ns == st.st_mtime_ns and cached.size == st.st_size:
                 return
         self._load_file(ignore_file, st=st, as_path=as_path)

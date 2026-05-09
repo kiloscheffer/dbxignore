@@ -619,6 +619,33 @@ function Test-Daemon {
         Write-Note "5a - state=starting not observed within 5s post-readiness (small tree where sweep finished, or state.json not yet written); 5f still pins state=running"
     }
 
+    # 5a-post - gate watchdog tests on state=running (cache populated).
+    # cache.load_root runs in _initial_sweep_worker, NOT the main thread
+    # (item #53 + daemon.py:638). When the slow-sweep marker pads the
+    # worker, RuleCache stays empty until the pad expires AND load_root
+    # finishes - watchdog events arriving during that window dispatch
+    # against match()=False, so 5b would observe an unmarked file even
+    # though the rule applies. Even without the marker, a slow sweep on
+    # a real Dropbox tree could race 5b's 8-second create-and-check
+    # window - this gate makes the test deterministic in both cases.
+    # Codex P2 catch on PR #175.
+    Write-Note "5a-post - waiting up to 180s for state=running (cache populated)"
+    $cacheReady = $false
+    for ($i = 0; $i -lt 180; $i++) {
+        $probe = (dbxignore status --summary 2>$null | Select-Object -First 1)
+        if ($probe -and ($probe -match '^state=running pid=')) {
+            $cacheReady = $true; break
+        }
+        Start-Sleep -Seconds 1
+    }
+    if ($cacheReady) {
+        Write-Pass "5a-post - cache populated; safe to exercise watchdog events"
+    } else {
+        Write-Fail "5a-post - state=running never reached within 180s"
+        _Dump-DaemonDiagnostics -T $T
+        return
+    }
+
     # 5b — watchdog reacts to a new file (created AFTER observer is live)
     Write-Note "5b - watchdog reacts to new file"
     New-Item -ItemType File -Path "$T\watch-me.tmp" -Force | Out-Null

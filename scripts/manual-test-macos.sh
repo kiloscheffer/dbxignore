@@ -447,6 +447,32 @@ phase_daemon() {
         note "5a — state=starting not observed within 5s post-readiness (small tree where sweep finished, or state.json not yet written); 5f still pins state=running"
     fi
 
+    # 5a-post — gate watchdog tests on state=running (cache populated).
+    # cache.load_root runs in _initial_sweep_worker, NOT the main thread
+    # (item #53 + daemon.py:638). When the slow-sweep marker pads the
+    # worker, RuleCache stays empty until the pad expires AND load_root
+    # finishes — watchdog events arriving during that window dispatch
+    # against match()=False, so 5b would observe an unmarked file even
+    # though the rule applies. Even without the marker, a slow sweep on
+    # a real Dropbox tree could race 5b's 8-second create-and-check
+    # window — this gate makes the test deterministic in both cases.
+    # Codex P2 catch on PR #175.
+    note "5a-post — waiting up to 180s for state=running (cache populated)"
+    local cache_ready=0
+    for _ in $(seq 1 180); do
+        if dbxignore status --summary 2>/dev/null | grep -qE '^state=running pid='; then
+            cache_ready=1; break
+        fi
+        sleep 1
+    done
+    if [ "$cache_ready" -eq 1 ]; then
+        pass "5a-post — cache populated; safe to exercise watchdog events"
+    else
+        fail "5a-post — state=running never reached within 180s"
+        _dump_daemon_diagnostics "$T"
+        return
+    fi
+
     # Item 37 — verify the daemon also logged the sync mode at startup.
     if grep -qE 'sync mode detection: (legacy|file_provider|both):' "$HOME/Library/Logs/dbxignore/daemon.log"; then
         local log_line; log_line="$(grep -E 'sync mode detection:' "$HOME/Library/Logs/dbxignore/daemon.log" | head -1)"

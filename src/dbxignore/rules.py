@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from pathlib import Path
+from typing import Protocol
 
 import pathspec
 from pathspec.patterns.gitwildmatch import GitIgnoreSpecPattern  # type: ignore[attr-defined]
@@ -15,10 +17,6 @@ from dbxignore._logging import timed_debug
 from dbxignore.roots import find_containing
 from dbxignore.rules_conflicts import Conflict as Conflict
 from dbxignore.rules_conflicts import _detect_conflicts
-
-if TYPE_CHECKING:
-    import os
-    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -134,24 +132,33 @@ class RuleCache:
             if root not in self._roots:
                 self._roots.append(root)
             seen: set[Path] = set()
-            for ignore_file in root.rglob(IGNORE_FILENAME):
-                # Cooperative cancellation between rglob yields. On a tree
-                # with many `.dropboxignore` files this gives reasonable
-                # SIGTERM responsiveness during phase 1 of _sweep_once.
-                # Note: rglob's internal traversal between yields can still
-                # block (one stat per directory between matches), so a tree
-                # with few rule files but many directories has coarser
-                # cancellation granularity. Returning here skips the
-                # stale-purge step intentionally — purging against an
-                # incomplete `seen` set would corrupt the cache by dropping
-                # entries that simply weren't reached. Surfaced by Codex
-                # on PR #162.
+            for current_dir, _dirnames, _filenames in os.walk(root, followlinks=False):
+                # Cooperative cancellation per directory visited (item #86).
+                # The previous shape used `root.rglob(IGNORE_FILENAME)` and
+                # checked between yields — fine for trees with many rule
+                # files, but coarse for trees with many directories and few
+                # rule files (rglob's internal traversal between yields can
+                # do thousands of stat calls before the next yield, blocking
+                # SIGTERM observation for tens of seconds). os.walk yields
+                # one tuple per directory regardless of whether any rule
+                # file is present, so the check fires every directory.
+                # Returning here skips the stale-purge step intentionally —
+                # purging against an incomplete `seen` set would corrupt the
+                # cache by dropping entries that simply weren't reached.
                 if stop_event is not None and stop_event.is_set():
                     return
+                # `Path.is_file()` resolves case-insensitively on Windows
+                # NTFS and default macOS HFS+/APFS, matching `rglob`'s prior
+                # behavior on those filesystems — verified for parity at
+                # PR #184 prep time. A directory with `.DropboxIgnore` (mixed
+                # case) is still found.
+                ignore_file = Path(current_dir) / IGNORE_FILENAME
+                if not ignore_file.is_file():
+                    continue
                 # Same resolve-failure shape as `_load_file`: a `.dropboxignore`
-                # discovered by rglob whose path now contains a symlink loop
-                # would crash the sweep here before `_load_if_changed` runs.
-                # Skip the stale-purge tracking for unresolvable paths;
+                # whose path now contains a symlink loop would crash the
+                # sweep here before `_load_if_changed` runs. Skip the
+                # stale-purge tracking for unresolvable paths;
                 # `_load_if_changed`'s own resolve failure handler logs the
                 # underlying issue.
                 try:

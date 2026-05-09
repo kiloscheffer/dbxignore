@@ -78,41 +78,93 @@ def test_indented_hash_line_is_active_pattern(tmp_path: Path) -> None:
     assert loaded.entries[0][0] == 0
 
 
-def test_load_root_honors_stop_event_between_rglob_yields(
+def test_load_root_honors_stop_event_between_directory_visits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`RuleCache.load_root` must check stop_event between rglob yields so
-    SIGTERM during phase 1 of `_sweep_once` is observed without scanning
-    every `.dropboxignore` in a large tree. Surfaced by Codex P2 #6 on
-    PR #162."""
+    """`RuleCache.load_root` must check stop_event between directory visits
+    so SIGTERM during phase 1 of `_sweep_once` is observed without
+    scanning every `.dropboxignore` in a large tree. Surfaced by Codex P2
+    #6 on PR #162; reframed in PR #184 around per-directory granularity
+    (item #86) when the rglob loop was replaced by `os.walk`."""
+    import os
     import threading
 
-    file_a = tmp_path / "a" / ".dropboxignore"
-    file_b = tmp_path / "b" / ".dropboxignore"
-    file_a.parent.mkdir()
-    file_b.parent.mkdir()
+    dir_a = tmp_path / "a"
+    dir_b = tmp_path / "b"
+    file_a = dir_a / ".dropboxignore"
+    file_b = dir_b / ".dropboxignore"
+    dir_a.mkdir()
+    dir_b.mkdir()
     file_a.write_text("a/\n", encoding="utf-8")
     file_b.write_text("b/\n", encoding="utf-8")
 
     stop = threading.Event()
+    real_walk = os.walk
 
-    def fake_rglob(self: Path, pattern: str):  # type: ignore[no-untyped-def]
-        # Yield file_a, then set stop_event before the next yield. The
-        # next iteration of load_root's for-loop sees the set event and
-        # returns early; file_b is never processed.
-        yield file_a
-        stop.set()
-        yield file_b
+    def fake_walk(top, **kwargs):  # type: ignore[no-untyped-def]
+        # Yield root + dir_a, then set stop_event before yielding dir_b.
+        # load_root observes the set event at the top of its next iteration
+        # and returns early; dir_b's `.dropboxignore` is never processed.
+        for yielded, entry in enumerate(real_walk(top, **kwargs), start=1):
+            yield entry
+            if yielded == 2:  # root + first child consumed
+                stop.set()
 
-    monkeypatch.setattr(Path, "rglob", fake_rglob)
+    monkeypatch.setattr(os, "walk", fake_walk)
 
     cache = RuleCache()
     cache.load_root(tmp_path, stop_event=stop)
 
-    # file_a was processed (rule loaded into cache); file_b was NOT
-    # (the stop_event check fired before its iteration body).
-    assert file_a.resolve() in cache._rules, "file_a should have been processed"
-    assert file_b.resolve() not in cache._rules, (
-        "file_b should NOT have been processed — stop_event should have "
-        "broken out of the rglob loop after file_a"
+    # Exactly one of the two rule files should be loaded — the one in the
+    # directory visited before stop fired. Which one depends on os.walk's
+    # iteration order (alphabetical on most platforms; not guaranteed by
+    # contract). Assert the disjunction so the test stays portable.
+    loaded_a = file_a.resolve() in cache._rules
+    loaded_b = file_b.resolve() in cache._rules
+    assert loaded_a != loaded_b, (
+        f"expected exactly one of file_a, file_b loaded; got loaded_a={loaded_a}, "
+        f"loaded_b={loaded_b}"
+    )
+
+
+def test_load_root_observes_stop_event_in_dropboxignore_free_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item #86: per-directory cancellation is the load-bearing improvement
+    over the prior rglob-based check. Pin the case the new shape exists to
+    fix — a tree with NO `.dropboxignore` files but multiple directories
+    must still observe `stop_event` mid-traversal. The prior `rglob`-based
+    check would have visited every directory before returning (zero yields
+    for a no-rules tree), blocking SIGTERM observation."""
+    import os
+    import threading
+
+    # Six directories at root, no .dropboxignore anywhere.
+    for i in range(6):
+        (tmp_path / f"dir_{i}").mkdir()
+
+    stop = threading.Event()
+    visited: list[str] = []
+    real_walk = os.walk
+
+    def counting_walk(top, **kwargs):  # type: ignore[no-untyped-def]
+        for entry in real_walk(top, **kwargs):
+            visited.append(entry[0])
+            if len(visited) >= 2:
+                stop.set()
+            yield entry
+
+    monkeypatch.setattr(os, "walk", counting_walk)
+
+    cache = RuleCache()
+    cache.load_root(tmp_path, stop_event=stop)
+
+    # load_root must have returned without consuming all 7 dirs (root + 6).
+    # The exact count depends on the for-loop's stop check timing relative
+    # to the generator's yield: with stop set after visit 2, load_root sees
+    # the set flag at the top of iteration 3 and returns. So `visited`
+    # should be at most 3 (one over the trigger to account for the
+    # post-yield set position).
+    assert len(visited) <= 3, (
+        f"expected early cancellation (≤3 visits), got {len(visited)}: {visited}"
     )

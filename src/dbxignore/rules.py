@@ -23,6 +23,67 @@ logger = logging.getLogger(__name__)
 IGNORE_FILENAME = ".dropboxignore"
 
 
+def is_ignore_filename(name: str) -> bool:
+    """Return True if ``name`` is the canonical rule filename in any casing.
+
+    Used by ``RuleCache.match`` / ``explain``, ``daemon._classify`` /
+    ``_moved_dest_under_root`` / ``_dispatch``, ``reconcile._reconcile_path``,
+    and ``cli._walk_marked_paths`` to recognize ``.dropboxignore`` files
+    consistently with how ``RuleCache.load_root`` discovers them
+    (case-insensitively). A ``.DropboxIgnore`` is treated as a rule file
+    across discovery, watchdog events, match queries, and walks — the
+    project's "case-insensitive everywhere" posture (per
+    ``_CaseInsensitiveGitIgnorePattern``) extended end-to-end.
+    """
+    return name.lower() == IGNORE_FILENAME
+
+
+def _canonical_cache_key(path: Path) -> Path:
+    """Return the canonical cache key for a rule-file path.
+
+    Always uses the lowercase basename ``IGNORE_FILENAME`` regardless of
+    the input path's on-disk casing. This is critical on case-sensitive
+    filesystems (Linux ext4, case-sensitive APFS) where ``PosixPath``
+    equality is case-sensitive — without normalization, ``load_root``
+    storing under canonical key while ``reload_file`` / ``remove_file``
+    keying off the watchdog event's mixed-case path would create two
+    distinct cache entries for the same logical rule file.
+
+    The parent directory is resolved (handles symlinks, trailing
+    separators, etc.) but the basename is replaced with the canonical
+    spelling. Callers must hold the cache lock if mutating ``self._rules``
+    using the returned key.
+    """
+    return path.parent.resolve() / IGNORE_FILENAME
+
+
+def _resolve_to_canonical_sibling(ignore_file: Path) -> Path:
+    """If ``ignore_file`` has a mixed-case basename and a canonical
+    ``.dropboxignore`` sibling exists in the same directory, return the
+    canonical path; otherwise return ``ignore_file`` unchanged.
+
+    Mirrors ``load_root``'s prefer-exact-match selection in the
+    ``reload_file`` path so a watchdog edit to a shadowed mixed-case
+    sibling redirects to the canonical file rather than overwriting the
+    cache entry with content the active rule set never used (Codex P2
+    on PR #185).
+
+    The ``is_file()`` call is a single stat. If it returns False under
+    a transient flap (network drive EIO, AV scan, brief editor lock),
+    the redirect is skipped and the mixed-case file is loaded. The
+    cache state then reflects the mixed-case file until the next
+    watchdog event or hourly sweep — bounded transient deviation,
+    strictly better than the no-redirect shape's "always wrong when
+    both files exist" mode.
+    """
+    if ignore_file.name == IGNORE_FILENAME:
+        return ignore_file
+    canonical_path = ignore_file.parent / IGNORE_FILENAME
+    if canonical_path.is_file():
+        return canonical_path
+    return ignore_file
+
+
 class _CaseInsensitiveGitIgnorePattern(GitIgnoreSpecPattern):
     """GitIgnoreSpec pattern that compiles regex with re.IGNORECASE.
 
@@ -238,21 +299,62 @@ class RuleCache:
             self._recompute_conflicts(log_warnings=log_warnings)
 
     def reload_file(self, ignore_file: Path, *, log_warnings: bool = True) -> None:
-        """Re-read a single .dropboxignore file, replacing any cached version."""
+        """Re-read a single .dropboxignore file, replacing any cached version.
+
+        ``ignore_file`` may be a mixed-case spelling (e.g. ``.DropboxIgnore``)
+        as delivered by a watchdog event on a case-sensitive filesystem; the
+        cache key is normalized to canonical lowercase via
+        ``_canonical_cache_key`` so the entry stays in sync with what
+        ``load_root`` stores and ``match`` looks up. Without normalization,
+        a watchdog reload would silently create a second cache entry under
+        the on-disk casing while ``match`` continues to read the stale
+        canonical-key entry (item #92).
+
+        Precedence: when ``ignore_file`` has a mixed-case basename AND a
+        canonical ``.dropboxignore`` sibling exists in the same directory,
+        the canonical file is reloaded instead. Mirrors ``load_root``'s
+        prefer-exact-match selection — the cache entry under the canonical
+        key reflects the canonical file's rules; a watchdog edit to a
+        shadowed mixed-case sibling must not overwrite that with content
+        the active rule set never had (Codex P2 catch on PR #185).
+        """
         # DEBUG-level boundary log for backlog item #34 timing diagnostics.
         # Measures rule-cache reload + conflict-detector recompute under the
         # write lock. Lock contention against the watchdog thread's lock-free
         # `match()` reads can in principle delay this; the log makes that
         # observable. ``timed_debug`` no-ops when DEBUG isn't enabled.
         with timed_debug(logger, "reload_file path=%s", ignore_file), self._lock:
-            self._rules.pop(ignore_file.resolve(), None)
-            self._load_file(ignore_file)
+            ignore_file = _resolve_to_canonical_sibling(ignore_file)
+            canonical = _canonical_cache_key(ignore_file)
+            self._rules.pop(canonical, None)
+            self._load_file(ignore_file, as_path=canonical)
             self._recompute_conflicts(log_warnings=log_warnings)
 
     def remove_file(self, ignore_file: Path, *, log_warnings: bool = True) -> None:
-        """Drop all cached state for a .dropboxignore file (e.g. after deletion)."""
+        """Drop all cached state for a .dropboxignore file (e.g. after deletion).
+
+        ``ignore_file`` may be a mixed-case spelling as delivered by a
+        watchdog deletion event; the cache key is normalized to canonical
+        lowercase via ``_canonical_cache_key`` so the entry actually
+        gets dropped (item #92). Without normalization, the lookup against
+        the watchdog's on-disk casing misses the canonical-key entry on
+        case-sensitive filesystems and the cache stays stale.
+
+        Precedence: when ``ignore_file`` has a mixed-case basename AND a
+        canonical ``.dropboxignore`` sibling still exists in the same
+        directory, the deletion is a no-op — the cache entry reflects the
+        canonical file's rules (per ``load_root``'s prefer-exact-match
+        selection), which are still valid because the canonical file
+        wasn't deleted (Codex P2 catch on PR #185).
+        """
         with self._lock:
-            self._rules.pop(ignore_file.resolve(), None)
+            if not is_ignore_filename(ignore_file.name):
+                return
+            if ignore_file.name != IGNORE_FILENAME:
+                canonical_path = ignore_file.parent / IGNORE_FILENAME
+                if canonical_path.is_file():
+                    return
+            self._rules.pop(_canonical_cache_key(ignore_file), None)
             self._recompute_conflicts(log_warnings=log_warnings)
 
     def load_external(self, source: Path, mount_at: Path, *, log_warnings: bool = True) -> None:
@@ -284,7 +386,7 @@ class RuleCache:
     def match(self, path: Path) -> bool:
         if not path.is_absolute():
             raise ValueError(f"match() requires an absolute path; got {path!r}")
-        if path.name == IGNORE_FILENAME:
+        if is_ignore_filename(path.name):
             return False
         root = find_containing(path, self._roots)
         if root is None:
@@ -320,7 +422,7 @@ class RuleCache:
         """
         if not path.is_absolute():
             raise ValueError(f"explain() requires an absolute path; got {path!r}")
-        if path.name == IGNORE_FILENAME:
+        if is_ignore_filename(path.name):
             return []
         root = find_containing(path, self._roots)
         if root is None:
@@ -375,7 +477,7 @@ class RuleCache:
         # would crash the sweep before any of the read/parse error arms
         # could run.
         try:
-            cache_key = (as_path or ignore_file).resolve()
+            cache_key = _canonical_cache_key(as_path or ignore_file)
         except (OSError, RuntimeError) as exc:
             logger.warning("Could not resolve %s: %s", as_path or ignore_file, exc)
             return
@@ -453,7 +555,7 @@ class RuleCache:
             self._load_file(ignore_file, as_path=as_path)
             return
         if not force:
-            cached = self._rules.get((as_path or ignore_file).resolve())
+            cached = self._rules.get(_canonical_cache_key(as_path or ignore_file))
             if cached and cached.mtime_ns == st.st_mtime_ns and cached.size == st.st_size:
                 return
         self._load_file(ignore_file, st=st, as_path=as_path)

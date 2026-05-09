@@ -26,7 +26,7 @@ from dbxignore.debounce import DebounceKey, Debouncer, DebounceRole, EventKind
 from dbxignore.markers import detection_summary
 from dbxignore.reconcile import reconcile_subtree
 from dbxignore.roots import find_containing
-from dbxignore.rules import IGNORE_FILENAME, RuleCache
+from dbxignore.rules import RuleCache, is_ignore_filename
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -70,7 +70,7 @@ def _moved_dest_under_root(event: Any, roots: list[Path]) -> tuple[Path, Path] |
     if event.event_type != "moved" or not event.dest_path:
         return None
     dest_path = Path(event.dest_path)
-    if dest_path.name != IGNORE_FILENAME:
+    if not is_ignore_filename(dest_path.name):
         return None
     dest_root = find_containing(dest_path, roots)
     if dest_root is None:
@@ -121,7 +121,7 @@ def _classify(
             )
         return None
     root, src = located
-    if src.name == IGNORE_FILENAME:
+    if is_ignore_filename(src.name):
         # Distinguish moved-out (move event with src=rule) from single
         # (create/modify/delete on the rule file). Both key on `str(src)`
         # at the path level, but the role discriminator separates their
@@ -195,7 +195,7 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
             # and skip `cache.remove_file(src)` — there was never a real
             # cached entry on the src side to remove, and the redundant
             # call would fire `_recompute_conflicts` an extra time.
-            src_is_rules = src.name == IGNORE_FILENAME and (
+            src_is_rules = is_ignore_filename(src.name) and (
                 dest_pair is None or src != dest_pair[1]
             )
             if src_is_rules:

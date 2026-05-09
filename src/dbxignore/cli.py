@@ -15,7 +15,7 @@ import rich_click as click
 
 from dbxignore import markers, reconcile, roots, rules, state
 from dbxignore.roots import find_containing
-from dbxignore.rules import IGNORE_FILENAME, RuleCache
+from dbxignore.rules import IGNORE_FILENAME, RuleCache, is_ignore_filename
 
 click.rich_click.TEXT_MARKUP = "markdown"
 
@@ -859,7 +859,7 @@ def uninstall(purge: bool) -> None:
                     p = current_path / name
                     try:
                         if markers.is_ignored(p):
-                            if p.name == IGNORE_FILENAME:
+                            if is_ignore_filename(p.name):
                                 logger.warning(
                                     ".dropboxignore at %s was marked ignored; "
                                     "overriding back to synced",

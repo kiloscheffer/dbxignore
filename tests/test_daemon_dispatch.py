@@ -617,3 +617,45 @@ def test_timeouts_from_env_rejects_negative_values(
 
     assert timeouts[EventKind.RULES] == daemon.DEFAULT_TIMEOUTS_MS[EventKind.RULES]
     assert any("-50" in r.message for r in caplog.records)
+
+
+def test_classify_recognizes_mixed_case_rule_file(tmp_path: Path) -> None:
+    """Item #92: a watchdog event for a mixed-case `.DropboxIgnore` must
+    classify as RULES. Prior to #92 the exact-match `src.name ==
+    IGNORE_FILENAME` check filtered out mixed-case events at the daemon
+    boundary, so reload_file/remove_file were never called for them and
+    the cache stayed stale until the next hourly sweep."""
+    root = tmp_path.resolve()
+    src = root / "proj" / ".DropboxIgnore"  # mixed case
+    src.parent.mkdir(parents=True)
+    src.write_text("", encoding="utf-8")
+
+    ev = _stub_event("modified", str(src))
+    classification = daemon._classify(ev, roots=[root])
+    assert classification is not None
+    kind, _key, _root, _src, _dest = classification
+    assert kind == EventKind.RULES, (
+        "mixed-case .DropboxIgnore event must classify as RULES, not OTHER"
+    )
+
+
+def test_classify_moved_into_mixed_case_rule_file(tmp_path: Path) -> None:
+    """An atomic save (`.DropboxIgnore.tmp` -> `.DropboxIgnore`) where
+    dest has mixed casing must still be recognized via
+    `_moved_dest_under_root`. Prior to #92, the exact-match `dest_path.name
+    != IGNORE_FILENAME` filter dropped these, so atomic saves of mixed-
+    case rule files never triggered cache reloads (item #92)."""
+    root = tmp_path.resolve()
+    proj = root / "proj"
+    proj.mkdir()
+    src = proj / ".DropboxIgnore.tmp"
+    src.write_text("", encoding="utf-8")
+    dest = proj / ".DropboxIgnore"  # mixed case
+
+    ev = _stub_event("moved", str(src), dest_path=str(dest))
+    classification = daemon._classify(ev, roots=[root])
+    assert classification is not None
+    kind, _key, _root, _src, _dest_pair = classification
+    assert kind == EventKind.RULES, (
+        "moved-into a mixed-case `.DropboxIgnore` must classify as RULES"
+    )

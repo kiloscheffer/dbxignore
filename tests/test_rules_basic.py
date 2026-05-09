@@ -168,6 +168,39 @@ def test_load_root_preserves_cache_when_pre_stat_would_flap(
     )
 
 
+def test_load_root_finds_mixed_case_dropboxignore(
+    tmp_path: Path, write_file: WriteFile
+) -> None:
+    """Item #86 / Codex P2 catch on PR #184: load_root must find rule files
+    whose on-disk filename has mixed casing (e.g. `.DropboxIgnore` vs
+    `.dropboxignore`) on case-insensitive filesystems. The prior `rglob`
+    shape would have found these on Windows NTFS and default macOS
+    APFS/HFS+ because glob matching is case-insensitive there. The
+    os.walk swap must preserve that behavior.
+
+    Portable: on case-sensitive Linux, this creates a file named exactly
+    `.DropboxIgnore` (a different file from `.dropboxignore` — but the
+    fix loads it anyway, consistent with the project's
+    case-insensitive-everywhere pattern-matching posture)."""
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    rule_file = sub / ".DropboxIgnore"  # mixed case
+    rule_file.write_text("build/\n", encoding="utf-8")
+
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+
+    # Find the cache entry by lowercasing the filename — `Path.resolve()`
+    # on Windows preserves on-disk casing, so the cache key may be
+    # `.DropboxIgnore` on Windows; on Linux/macOS the literal name is
+    # whatever was created. Either way, lowercasing the basename should
+    # match `.dropboxignore`.
+    matching_keys = [k for k in cache._rules if k.name.lower() == ".dropboxignore"]
+    assert len(matching_keys) == 1, (
+        f"expected one cached rule (mixed-case file), got {matching_keys}"
+    )
+
+
 def test_load_root_observes_stop_event_in_dropboxignore_free_tree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

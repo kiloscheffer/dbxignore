@@ -158,15 +158,28 @@ class RuleCache:
                 # entry, and Dropbox would upload previously-ignored paths
                 # before the stat recovered. Using scandir's directory
                 # listing (which is one syscall per directory regardless)
-                # mirrors `rglob`'s prior behavior. Codex P2 catch on
-                # PR #184. Filename match is exact (case-sensitive); on
-                # case-insensitive filesystems users still create the file
-                # as the documented `.dropboxignore` lowercase per README
-                # — no test or beta-tester report has surfaced a mixed-case
-                # use case.
-                if IGNORE_FILENAME not in filenames:
+                # mirrors `rglob`'s prior behavior. First Codex P2 catch on
+                # PR #184.
+                #
+                # Match case-insensitively so a `.DropboxIgnore` (mixed
+                # casing on disk) is still found on case-insensitive
+                # filesystems (Windows NTFS, default macOS APFS/HFS+) —
+                # parity with the prior `rglob` behavior. On Linux (case-
+                # sensitive), this is slightly looser than rglob, but the
+                # project's pattern-matching layer is already case-
+                # insensitive everywhere via `_CaseInsensitiveGitIgnorePattern`,
+                # so the overall posture is "treat names as the lowest-
+                # common-denominator filesystem would." On-disk casing is
+                # preserved in the constructed Path so the resolved cache
+                # key matches what `rglob` produced. Second Codex P2 catch
+                # on PR #184.
+                match_name = next(
+                    (f for f in filenames if f.lower() == IGNORE_FILENAME),
+                    None,
+                )
+                if match_name is None:
                     continue
-                ignore_file = Path(current_dir) / IGNORE_FILENAME
+                ignore_file = Path(current_dir) / match_name
                 # Same resolve-failure shape as `_load_file`: a `.dropboxignore`
                 # whose path now contains a symlink loop would crash the
                 # sweep here before `_load_if_changed` runs. Skip the

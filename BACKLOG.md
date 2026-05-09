@@ -1430,6 +1430,8 @@ Touches: `src/dbxignore/daemon.py` (`run`, `_sweep_once`, `_dispatch`: thread `d
 
 ## 65. No Windows Explorer right-click context-menu integration
 
+**Blocked by item #93** — the body's `dbxignore.exe ignore "%1"` invocation assumes a path-taking CLI verb that doesn't exist yet. Resolve #93 first; the registry layer here has nothing to invoke until a path-taking ignore/unignore verb lands.
+
 dbxignore is CLI-and-daemon only on Windows; users wanting to ignore a single folder ad-hoc must `dbxignore apply` from a terminal or update `.dropboxignore` and wait for the daemon to react. A right-click context-menu verb in Explorer ("Ignore from Dropbox", "Un-ignore from Dropbox") would close that gap. Windows shell-extension verbs registered under `HKEY_CLASSES_ROOT\Directory\shell\…\command` (or per-user equivalents under `HKEY_CURRENT_USER\Software\Classes\…`) are a no-DLL way to add custom Explorer actions, calling out to a tool with `%1` substituted.
 
 The shape worth shipping:
@@ -2063,13 +2065,44 @@ Pre-existing on Windows + mixed-case files since v0.2 — the watchdog event wou
 
 Touches: `src/dbxignore/rules.py` (`match`, `explain`, `remove_file`, `reload_file`, `_load_file`, `_load_if_changed`); `src/dbxignore/daemon.py` (`_classify`, `_moved_dest_under_root`).
 
+## 93. No path-taking verb to ignore or unignore a single path ad-hoc
+
+The CLI's existing operation verbs are rule-driven and walk the entire watched-root tree: `apply` reconciles every path against the loaded `.dropboxignore` rules; `clear` removes every marker under every root. Neither takes a `<path>` argument. A user who wants to ignore a single folder ad-hoc has to either edit the relevant `.dropboxignore` and wait for the daemon's debounce window (item #57) plus subsequent reconcile, or call `markers.set_ignored(path)` from a Python REPL — neither is a one-shot CLI invocation.
+
+The daemon-coexistence constraint is load-bearing in the design. A marker set directly on a path the rules don't cover is silently undone within an hour at worst by the daemon's recovery sweep — `reconcile_subtree` walks the path, sees no rule that requires the marker, and clears it. So a path-taking verb has to either (a) also append a literal-path rule to a `.dropboxignore` so the daemon and the user agree, or (b) introduce a new "explicit override" state outside the rule system.
+
+The natural verb shape:
+
+- `dbxignore ignore <path>` — append a literal-path rule to the relevant `.dropboxignore` AND set the marker immediately. Idempotent.
+- `dbxignore unignore <path>` — remove the matching rule from the rule file AND clear the marker. Inverse of `ignore`.
+
+Both are point-in-time mutations on a single path. Like `apply` and `clear`, they cause Dropbox-side propagation (cloud-copy delete or restore-from-cloud), so the same `--yes` / confirmation ceremony applies. The daemon-alive guard that `clear` uses does NOT apply here: editing `.dropboxignore` is normal usage when the daemon is running (the RULES debounce reacts to it and confirms the same marker the verb just wrote), so no `--force` override is needed.
+
+Open design points for the spec phase:
+
+- **Which `.dropboxignore` does the rule land in?** Walking up from the target to the closest ancestor file under the same Dropbox root keeps the rule local and portable; falling back to creating a new file in the target's parent directory avoids polluting the root file with deeply-nested literal paths but silently creates a new dotfile, which surprises users. A `--rule-file <path>` override or a default-then-prompt shape may be needed.
+- **How does `unignore` find the matching rule to remove?** Match-by-equality on the literal path string is simplest; tag-comment-on-add gives an audit trail but adds noise to rule files. Whichever choice is made for `ignore` is what `unignore` matches against.
+- **Verb naming.** `ignore`/`unignore` reads as English-natural and doesn't collide with the existing global `clear`. `mark`/`unmark` is shorter and matches the "marker" terminology in the codebase but doesn't surface the rule-file mutation. `add`/`remove` is too generic.
+
+This item is a prerequisite for item #65 (Windows Explorer right-click integration) — the registry verb has nothing to invoke today because the CLI has no path-taking operation.
+
+**Fix candidates:**
+
+- **Append-rule-and-mark verbs** (preferred). ~120 LOC: two new commands in `cli.py`; helper that walks ancestors to pick the rule file; helper that appends/removes a path-relative rule. Tests in `tests/test_cli_ignore.py` covering closest-ancestor selection, new-file creation, idempotence, and post-reconcile stability when the daemon is running.
+- **Marker-only with a new `overrides.json` state.** Daemon plumbing consults it during reconcile and treats listed paths as ignored even without a `.dropboxignore` rule. ~250 LOC plus a state-schema migration; the override file becomes a parallel rule store, invisible from rule-file inspection.
+- **Defer.** Users editing `.dropboxignore` directly is the documented path; the daemon picks it up within seconds. Workaround exists; verb is a discoverability fix. Defers item #65 indefinitely.
+
+**Urgency:** low alone; medium as a prerequisite for #65 (which is itself "very low" — feature gap, no demand signal).
+
+Touches: `src/dbxignore/cli.py` (new `ignore` / `unignore` commands, ancestor-walker helper, rule-file mutation helper); new `tests/test_cli_ignore.py`; README §"CLI reference"; `BACKLOG.md` (#65 — note unblocked).
+
 ---
 
 ## Status
 
 ### Open
 
-Nine items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Ten items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2079,7 +2112,8 @@ Nine items. All passive (no concrete trigger requires action) — bundle each wi
 - **#51** — `install/__init__.py` platform dispatch duplicated across `install_service`/`uninstall_service`. Filed for the design-tension record (precedent: #40); current 6-block shape is defensible vs a factored-out helper that would introduce stringly-typed action coupling.
 - **#53** — Initial-sweep wall-clock on a fresh install (no existing markers) was 49.62s on a 27k-dir tree, blocking systemd readiness for ~50s. Candidate 1 (ready-before-sweep) shipped in PR #162 (removed the readiness-pause symptom). Candidate 3 (per-subdir worker fan-out) shipped in PR #183 (parallelizes the sweep itself across top-level subdirs). Only candidate 2 (persisted sweep-complete hint, ~80 LOC) remains open — has reliability concerns on network FS / File Provider mtime semantics; no fired trigger yet.
 - **#54** — Watchdog observer's recursive watch schedules one inotify watch per directory under `~/Dropbox`, including marked-ignored subtrees. Architectural fix (per-directory watches with mark/unmark lifecycle) is ~200 LOC of race-condition-prone state-machine work; deferred until a beta tester hits the watch ceiling on a system with limits already raised.
-- **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall.
+- **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall. **Blocked by #93** — registry verb has nothing to invoke until the path-taking ignore/unignore CLI verbs land.
+- **#93** — No path-taking verb to ignore or unignore a single path ad-hoc. `apply` and `clear` are rule-driven and walk the whole tree; neither takes a `<path>` argument. Filed as a prerequisite for #65; design points (which `.dropboxignore` to mutate, equality vs comment-tagged removal, verb naming) deferred to the spec phase.
 
 ### Resolved (reverse chronological)
 

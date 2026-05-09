@@ -2015,6 +2015,26 @@ Touches: `scripts/manual-test-ubuntu-vps.sh` (lines 442, 511, 741, 745).
 
 ---
 
+## 91. `_initial_sweep_worker` doesn't catch exceptions from the slow-sweep helper
+
+**Status: RESOLVED 2026-05-09 (PR #179).** Moved `pad_s = _slow_sweep_pad_seconds()` and the surrounding `stop_event.wait(pad_s)` inside `_initial_sweep_worker`'s existing `try/except` block in `daemon.py`. Three-LOC structural change; new regression test pins the contract.
+
+**Surfaced 2026-05-09 in PR #175 (during the slow-sweep marker hook implementation).**
+
+The `_initial_sweep_worker` worker thread wraps `_sweep_once` in a `try/except Exception:` arm that logs the failure and sets `stop_event` so the daemon shuts down via the same path SIGTERM uses. PR #175 added a `_slow_sweep_pad_seconds()` helper call (plus `stop_event.wait(pad_s)`) BEFORE the try block — meaning any exception escaping the helper kills the worker thread silently, leaving the daemon stranded in `state=starting` forever (the main thread's early state.json write already fired, but the periodic-sweep guard at `daemon.py:717` keeps deferring to the worker that's never coming back).
+
+Codex caught two concrete instances on PR #175 — both fixed at the helper's parser level: (1) `float("inf")` parses successfully and `stop_event.wait(inf)` raises `OverflowError`; (2) Non-UTF-8 marker contents raise `UnicodeDecodeError` (which derives from `ValueError`, not `OSError`, so the existing FileNotFoundError + OSError catches missed it). Each was fixed by extending the helper's parser; but the structural pattern remains — any future helper addition that introduces an unanticipated exception type would regress the same way.
+
+**Fix candidate:**
+
+- **Move the helper call AND the wait inside the worker's existing `try/except`.** Three-LOC structural change. Defense-in-depth so the next class of bug routes through the existing log-and-shutdown arm without needing a third parser-level fix. Preserves all existing behavior: the early-return-on-stop case returns through the try clause cleanly (no exception, so the except arm doesn't fire); the pad-and-sweep happy path is unchanged. Only behavioral delta is in the exception-during-helper case.
+
+**Urgency:** low. No observed bug in current code (Codex's two catches landed parser-level fixes that already prevent the known instances). Filed because the structural shape is the wrong layer — bugs of this class shouldn't need parser-level fixes if the worker's exception handling can absorb them.
+
+Touches: `src/dbxignore/daemon.py` (`_initial_sweep_worker`).
+
+---
+
 ## Status
 
 ### Open
@@ -2035,6 +2055,8 @@ Ten items. All passive (no concrete trigger requires action) — bundle each wit
 ### Resolved (reverse chronological)
 
 #### 2026-05-09
+
+- **#91** in PR #179 — wrapped the slow-sweep helper call inside `_initial_sweep_worker`'s existing `try/except`. Three-LOC structural change in `daemon.py`. PR #175 introduced the `pad_s = _slow_sweep_pad_seconds(); stop_event.wait(pad_s)` pair BEFORE the try block, meaning any exception from the helper or the wait would escape the worker thread silently and strand the daemon in `state=starting`. Codex caught two such bugs at the parser level on PR #175 (`OverflowError` from `wait(inf)`, `UnicodeDecodeError` from non-UTF-8 marker contents); this catches the structural pattern so a third class doesn't need a third parser-level fix. Filed-and-resolved in the same PR. New regression test (`test_initial_sweep_worker_routes_helper_exception_to_shutdown`) monkeypatches the helper to raise and verifies stop_event is set, _sweep_once is not called, and the existing ERROR log fires — same shape as `test_worker_failure_shuts_down_daemon` in `tests/test_daemon_initial_sweep.py`.
 
 - **#90** in PR #177 — replaced all four hardcoded `$HOME/.local/state/dbxignore/` references in `scripts/manual-test-ubuntu-vps.sh` with the `$DBXIGNORE_STATE_DIR` variable PR #175 introduced. Same XDG-divergence consolidation, four sites instead of one. Linux-only — macOS and Windows scripts have no XDG-equivalent. Filed-and-resolved across two adjacent PRs (#176 filing, #177 fix) per the project's revertability-axis split rule.
 

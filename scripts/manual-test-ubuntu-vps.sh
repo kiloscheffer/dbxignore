@@ -551,7 +551,6 @@ phase_daemon() {
     # though the rule applies. Even without the marker, a slow sweep on
     # a real ~/Dropbox tree could race 5b's 8-second create-and-check
     # window — this gate makes the test deterministic in both cases.
-    # Codex P2 catch on PR #175.
     note "5a-post — waiting up to 180s for state=running (cache populated)"
     local cache_ready=0
     for _ in $(seq 1 180); do

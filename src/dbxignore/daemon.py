@@ -863,12 +863,13 @@ def _slow_sweep_pad_seconds() -> float:
 
     Lives in production code because the manual-test scripts drive the
     *installed* daemon — bypassing the install path would change what's
-    being tested. Marker-file rather than env var because the install layer
-    forwards only ``DBXIGNORE_ROOT`` (other ``DBXIGNORE_*`` tuning vars are
-    set via unit/plist drop-ins) and Windows Task Scheduler XML has no
-    env-var forwarding mechanism at all; a marker file works uniformly
-    across all three platforms with zero install-layer surface change.
-    Validation shape mirrors ``_timeouts_from_env``.
+    being tested. Marker-file rather than env var because Windows Task
+    Scheduler XML has no per-task env-var forwarding mechanism at all,
+    so a marker file works uniformly across all three platforms with
+    zero install-layer surface change. (Linux/macOS install paths
+    forward a small allowlist of vars via `_FORWARDED_ENV_VARS`; see
+    that tuple for current scope.) Validation shape mirrors
+    ``_timeouts_from_env``.
     """
     marker = state_module.user_state_dir() / SLOW_SWEEP_MARKER_NAME
     try:
@@ -939,15 +940,10 @@ def _initial_sweep_worker(
     trees (item #89). The wait is interruptible — shutdown stays prompt
     even mid-pad.
 
-    The pad-helper call AND the wait both live inside the try/except so a
-    future helper addition that raises an unanticipated exception type
-    routes through the same shutdown arm rather than escaping the worker
-    thread silently and stranding the daemon in ``state=starting`` (item
-    #91). Codex caught two such bugs on PR #175 (`OverflowError` from
-    `wait(inf)`, `UnicodeDecodeError` from non-UTF-8 marker contents);
-    both were fixed at the helper's parser level, but the structural
-    defense-in-depth means the next class of bug routes correctly without
-    needing a parser-level fix.
+    The pad-helper call AND the wait both live inside the try/except so
+    an unanticipated exception type routes through the same shutdown arm
+    rather than escaping the worker thread silently and stranding the
+    daemon in ``state=starting`` (item #91).
     """
     try:
         pad_s = _slow_sweep_pad_seconds()

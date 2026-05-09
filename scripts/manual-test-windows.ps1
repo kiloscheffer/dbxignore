@@ -628,7 +628,6 @@ function Test-Daemon {
     # though the rule applies. Even without the marker, a slow sweep on
     # a real Dropbox tree could race 5b's 8-second create-and-check
     # window - this gate makes the test deterministic in both cases.
-    # Codex P2 catch on PR #175.
     Write-Note "5a-post - waiting up to 180s for state=running (cache populated)"
     $cacheReady = $false
     for ($i = 0; $i -lt 180; $i++) {

@@ -102,6 +102,29 @@ def _load_cache(roots: list[Path]) -> RuleCache:
     return cache
 
 
+def _select_rule_file(target: Path, root: Path) -> Path:
+    """Return the closest ``.dropboxignore`` ancestor of ``target`` under ``root``.
+
+    Walks from ``target.parent`` up to (and including) ``root``. Returns the
+    first existing ``.dropboxignore`` found, or ``root / IGNORE_FILENAME``
+    if no ancestor file exists. The returned path may not exist on disk —
+    ``append_rule`` creates it on first invocation.
+
+    ``root`` is assumed to be a Dropbox root (under which ``target`` lives).
+    Caller is responsible for verifying ``target`` is under ``root`` before
+    calling.
+    """
+    current = target.parent
+    while current != root.parent:  # walk up to and including root
+        candidate = current / IGNORE_FILENAME
+        if candidate.is_file():
+            return candidate
+        if current == root:
+            break
+        current = current.parent
+    return root / IGNORE_FILENAME
+
+
 def _resolve_gitignore_arg(path: Path) -> Path:
     """Resolve a `generate` argument to an actual file.
 

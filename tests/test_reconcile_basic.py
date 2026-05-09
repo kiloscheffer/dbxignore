@@ -145,6 +145,32 @@ def test_reconcile_subtree_honors_stop_event(
     assert report.errors == []
 
 
+def test_reconcile_subtree_descend_false_skips_walk(
+    tmp_path: Path, fake_markers: FakeMarkers, write_file: WriteFile
+) -> None:
+    # descend=False contract (item #53 candidate 3): reconcile only the
+    # subdir's own marker; do NOT descend. _sweep_once relies on this to
+    # split the root-path reconcile from the per-top-level-child fan-out.
+    write_file(tmp_path / ".dropboxignore", "build/\n")
+    (tmp_path / "build").mkdir()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "deep").mkdir()
+
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+
+    report = reconcile.reconcile_subtree(tmp_path, tmp_path, cache, descend=False)
+
+    queried = set(fake_markers.is_ignored_calls)
+    assert tmp_path.resolve() in queried, "subdir itself must be queried"
+    assert (tmp_path / "build").resolve() not in queried, "child must NOT be queried"
+    assert (tmp_path / "src").resolve() not in queried, "child must NOT be queried"
+    assert (tmp_path / "src" / "deep").resolve() not in queried, "grandchild must NOT be queried"
+    # No mutations expected — tmp_path itself doesn't match any rule.
+    assert report.marked == 0
+    assert report.cleared == 0
+
+
 def test_reconcile_subtree_stops_mid_dirnames_on_stop_event(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write_file: WriteFile
 ) -> None:

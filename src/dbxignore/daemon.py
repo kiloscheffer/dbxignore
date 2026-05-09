@@ -7,6 +7,7 @@ import datetime as dt
 import errno
 import logging
 import logging.handlers
+import math
 import os
 import signal
 import sys
@@ -893,6 +894,15 @@ def _slow_sweep_pad_seconds() -> float:
             "%s contents %s is negative; ignoring slow-sweep marker.",
             marker,
             value,
+        )
+        return 0.0
+    if not math.isfinite(value) or value > threading.TIMEOUT_MAX:
+        logger.warning(
+            "%s contents %s is non-finite or above threading.TIMEOUT_MAX (%s); "
+            "ignoring slow-sweep marker.",
+            marker,
+            value,
+            threading.TIMEOUT_MAX,
         )
         return 0.0
     if value > 0:

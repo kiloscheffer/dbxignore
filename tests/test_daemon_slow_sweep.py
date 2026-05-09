@@ -119,6 +119,52 @@ def test_pad_warns_and_returns_zero_on_negative(
     assert any("negative" in rec.message for rec in caplog.records)
 
 
+def test_pad_warns_and_returns_zero_on_inf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """``inf`` → returns 0.0, WARNING names non-finite. Without this
+    check ``stop_event.wait(inf)`` raises OverflowError, the worker
+    thread dies before the sweep, and the daemon stays in
+    ``state=starting`` forever (Codex P2 catch on PR #175)."""
+    monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
+    _write_marker(tmp_path, "inf")
+    caplog.set_level(logging.WARNING, logger="dbxignore.daemon")
+    assert daemon._slow_sweep_pad_seconds() == 0.0
+    assert any("non-finite" in rec.message for rec in caplog.records)
+
+
+def test_pad_warns_and_returns_zero_on_nan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """``nan`` → returns 0.0, WARNING names non-finite. NaN slips past
+    both the ``< 0`` and ``> 0`` arms (NaN comparisons are False), so
+    without the explicit isfinite check it would silently fall through
+    to ``return value`` and the call site's ``if pad_s > 0`` would also
+    skip — non-functional but the WARNING contract should hold."""
+    monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
+    _write_marker(tmp_path, "nan")
+    caplog.set_level(logging.WARNING, logger="dbxignore.daemon")
+    assert daemon._slow_sweep_pad_seconds() == 0.0
+    assert any("non-finite" in rec.message for rec in caplog.records)
+
+
+def test_pad_warns_and_returns_zero_above_timeout_max(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A large finite value exceeding ``threading.TIMEOUT_MAX`` →
+    returns 0.0, WARNING. ``TIMEOUT_MAX`` is much smaller on Windows
+    (~4.3M seconds) than on POSIX, so a value picked from a Linux
+    tester's environment can over-shoot Windows ``stop_event.wait``
+    (raises OverflowError)."""
+    import threading as threading_mod
+
+    monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
+    _write_marker(tmp_path, str(threading_mod.TIMEOUT_MAX + 1.0))
+    caplog.set_level(logging.WARNING, logger="dbxignore.daemon")
+    assert daemon._slow_sweep_pad_seconds() == 0.0
+    assert any("TIMEOUT_MAX" in rec.message for rec in caplog.records)
+
+
 def test_initial_sweep_worker_pads_before_sweep(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -889,3 +889,33 @@ def test_unignore_handles_mixed_case_rule_file_on_disk(
     assert "/build/" not in mixed_case_rule_file.read_text(encoding="utf-8")
     # Marker cleared.
     assert not fake_markers.is_ignored(target)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows filesystems forbid trailing space in filenames",
+)
+def test_ignore_then_unignore_round_trip_for_trailing_space_filename(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 regression: a file named `foo ` (trailing space) goes through
+    `format_literal_rule`'s trailing-space escape (commit 88a7cee). The /simplify
+    pass (d0ac827) had dropped .rstrip() from the canonical side of the
+    comparison, breaking the round-trip — the canonical `/foo\\ ` failed to
+    equal m.pattern.rstrip() (`/foo\\`). Verify ignore-then-unignore works."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "foo "  # file with trailing space
+    target.touch()
+    runner = CliRunner()
+    # ignore
+    result = runner.invoke(cli.main, ["ignore", str(target), "--yes"])
+    assert result.exit_code == 0, result.output
+    assert fake_markers.is_ignored(target)
+    # The rule on disk should have the escaped trailing space.
+    rule_content = (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert r"/foo\ " in rule_content
+    # unignore — must round-trip cleanly, NOT exit 2 with "is also matched by"
+    result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "rule removed" in result.output
+    assert not fake_markers.is_ignored(target)

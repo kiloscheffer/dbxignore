@@ -823,7 +823,7 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
     if cache.match(target):
         matches = [m for m in cache.explain(target) if not m.is_dropped]
         via_us_match = next(
-            (m for m in matches if m.pattern.rstrip() == canonical),
+            (m for m in matches if m.pattern.rstrip() == canonical.rstrip()),
             None,
         )
         if via_us_match is not None:
@@ -995,7 +995,9 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
                 click.echo(f"error: {exc}", err=True)
                 sys.exit(2)
 
-    removable = [m for m in matches if m.pattern.rstrip() == canonical_per_file[m.ignore_file]]
+    removable = [
+        m for m in matches if m.pattern.rstrip() == canonical_per_file[m.ignore_file].rstrip()
+    ]
     blockers = [m for m in matches if m not in removable]
 
     if blockers:

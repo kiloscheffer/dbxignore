@@ -59,6 +59,15 @@ def test_select_rule_file_prefers_closer_ancestor(tmp_path: Path) -> None:
     assert selected == proj / IGNORE_FILENAME
 
 
+def test_select_rule_file_target_equals_root(tmp_path: Path) -> None:
+    """Edge: target is the root itself (technically `find_containing` rejects
+    this for ignore/unignore in practice, but the helper should still terminate
+    cleanly without infinite-looping). Returns root/IGNORE_FILENAME."""
+    root = tmp_path
+    selected = cli._select_rule_file(root, root)
+    assert selected == root / IGNORE_FILENAME
+
+
 def _setup_dropbox_root(
     tmp_path: Path,
     fake_markers: FakeMarkers,
@@ -360,6 +369,33 @@ def test_unignore_fails_loud_when_only_wildcard_matches(
     assert fake_markers.is_ignored(target)
 
 
+def test_unignore_filters_dropped_negation_matches(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """is_dropped matches must be filtered before computing blockers/removable.
+    A dropped negation under an ignored ancestor is inert per the conflict
+    detector and should not appear in unignore's blocker enumeration."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    proj = root / "proj"
+    proj.mkdir()
+    target = proj / "foo"
+    target.mkdir()
+    # Root rule ignores all of proj/. Sub-rule attempts a negation but it's
+    # dropped because proj/ is itself ignored at the ancestor level.
+    (root / IGNORE_FILENAME).write_text("proj/\n", encoding="utf-8")
+    (proj / IGNORE_FILENAME).write_text("!foo/\n", encoding="utf-8")
+    fake_markers.set_ignored(target)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
+    # The dropped negation should not appear in the blocker list. Only `proj/`
+    # is a real matching rule. Verify the error message names `proj/` not `!foo/`.
+    assert result.exit_code == 2
+    assert "is also matched by" in result.output
+    assert "proj/" in result.output
+    # The dropped negation must NOT appear in the blocker list.
+    assert "!foo/" not in result.output
+
+
 def test_unignore_dry_run_does_not_mutate(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -484,7 +520,7 @@ def test_ignore_then_synthetic_rules_event_no_spurious_mutation(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Order-of-ops invariant (spec § Order of operations): after ``ignore``
-    completes, a synthetic RULES event reconciling the rule-file's mount
+    completes, a synthetic RULES event reconciling the watched root
     must not trigger a mark-or-clear. State should already be consistent."""
     root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
     target = root / "build"
@@ -500,8 +536,8 @@ def test_ignore_then_synthetic_rules_event_no_spurious_mutation(
     # the daemon does on RULES event).
     cache = RuleCache()
     cache.load_root(root)
-    # Run reconcile_subtree directly (skipping debouncer) on the rule
-    # file's mount — this is what the daemon's _dispatch does.
+    # Run reconcile_subtree directly (skipping debouncer) on the watched
+    # root — this is what the daemon's _dispatch does for a RULES event.
     reconcile.reconcile_subtree(root, root, cache)
 
     # No additional set_ignored or clear_ignored calls should have happened
@@ -510,3 +546,34 @@ def test_ignore_then_synthetic_rules_event_no_spurious_mutation(
     assert fake_markers.clear_calls == clear_calls_before
     # Final state still correct.
     assert fake_markers.is_ignored(target)
+
+
+def test_unignore_then_synthetic_rules_event_no_spurious_mutation(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Symmetric to test_ignore_then_..._no_spurious_mutation: after `unignore`
+    completes, a synthetic RULES event reconciling the watched root
+    must not trigger a mark-or-clear. Validates rule-first-then-marker order
+    in the inverse direction (Final Review test gap, filed by the PR review)."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    # Pre-state: rule + marker.
+    (root / IGNORE_FILENAME).write_text("build/\n", encoding="utf-8")
+    fake_markers.set_ignored(target)
+    runner = CliRunner()
+    runner.invoke(cli.main, ["unignore", str(target), "--yes"])
+
+    # Snapshot post-verb state.
+    set_calls_before = list(fake_markers.set_calls)
+    clear_calls_before = list(fake_markers.clear_calls)
+
+    # Build a fresh cache from the now-mutated rule file.
+    cache = RuleCache()
+    cache.load_root(root)
+    reconcile.reconcile_subtree(root, root, cache)
+
+    # No additional set/clear calls — final state is consistent.
+    assert fake_markers.set_calls == set_calls_before
+    assert fake_markers.clear_calls == clear_calls_before
+    assert not fake_markers.is_ignored(target)

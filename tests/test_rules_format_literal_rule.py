@@ -3,6 +3,7 @@
 Pure-function tests — no fixtures, no tmp_path needed, no monkeypatching.
 """
 
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -55,6 +56,20 @@ def test_question_mark_and_brackets_escaped(tmp_path: Path) -> None:
     target.relative_to.return_value = Path("weird?name[ish]")
     target.is_dir.return_value = True
     assert format_literal_rule(target, rule_file) == r"weird\?name\[ish\]/"
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows filesystems forbid backslash in filenames"
+)
+def test_literal_backslash_escaped_in_segment(tmp_path: Path) -> None:
+    r"""Backslash is in `_META_CHARS_INLINE`. A literal directory named `back\slash`
+    should produce the rule `back\\slash/`."""
+    rule_file = tmp_path / ".dropboxignore"
+    rule_file.touch()
+    target = MagicMock(spec=Path)
+    target.relative_to.return_value = Path(r"back\slash")
+    target.is_dir.return_value = True
+    assert format_literal_rule(target, rule_file) == r"back\\slash/"
 
 
 def test_leading_bang_in_first_segment_escaped(tmp_path: Path) -> None:

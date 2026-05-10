@@ -312,3 +312,98 @@ def test_unignore_rejects_nonexistent_path(
     result = runner.invoke(cli.main, ["unignore", str(root / "ghost"), "--yes"])
     assert result.exit_code == 2
     assert "does not exist" in result.output
+
+
+def test_unignore_fails_loud_on_wildcard_collision(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Q4 case 2: literal rule + wildcard. Removing literal would still leave
+    the path matched by the wildcard, so refuse to mutate."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    proj = root / "proj"
+    proj.mkdir()
+    target = proj / "build"
+    target.mkdir()
+    # Literal rule we wrote + wildcard rule the user added separately.
+    (proj / IGNORE_FILENAME).write_text("build/\n**/build/\n", encoding="utf-8")
+    fake_markers.set_ignored(target)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
+    assert result.exit_code == 2
+    assert "is also matched by" in result.output
+    assert "**/build/" in result.output
+    # Neither rule mutated; marker still set.
+    content = (proj / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert "build/\n" in content
+    assert "**/build/\n" in content
+    assert fake_markers.is_ignored(target)
+
+
+def test_unignore_fails_loud_when_only_wildcard_matches(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Q4 case 3: only a wildcard rule matches; no literal rule to remove.
+    Same fail-loud message — the user has to remove the wildcard manually."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    proj = root / "proj"
+    proj.mkdir()
+    target = proj / "build"
+    target.mkdir()
+    (proj / IGNORE_FILENAME).write_text("**/build/\n", encoding="utf-8")
+    fake_markers.set_ignored(target)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
+    assert result.exit_code == 2
+    assert "is also matched by" in result.output
+
+
+def test_unignore_dry_run_does_not_mutate(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    (root / IGNORE_FILENAME).write_text("build/\n", encoding="utf-8")
+    fake_markers.set_ignored(target)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(target), "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "would remove" in result.output
+    assert "would clear marker" in result.output
+    # No mutation.
+    assert "build/" in (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert fake_markers.is_ignored(target)
+
+
+def test_unignore_tolerates_trailing_whitespace_in_rule_line(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Manually-edited rule with trailing spaces — rstrip-equality matches
+    the canonical form, rule is removable not blocking."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    (root / IGNORE_FILENAME).write_text("build/   \n", encoding="utf-8")
+    fake_markers.set_ignored(target)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "build/" not in (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert not fake_markers.is_ignored(target)
+
+
+def test_unignore_default_prompts_then_aborts_on_no(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    (root / IGNORE_FILENAME).write_text("build/\n", encoding="utf-8")
+    fake_markers.set_ignored(target)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(target)], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    # No mutation.
+    assert "build/" in (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert fake_markers.is_ignored(target)

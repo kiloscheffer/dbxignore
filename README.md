@@ -317,19 +317,22 @@ git verb with materially different consequences.
 | `daemon`        | (none)                     | dbxignore-specific watcher + hourly sweep.                     |
 | `explain`       | `git check-ignore -v`      | Same diagnostic question; `--quiet` and exit codes match.      |
 | `generate`      | (none)                     | Translates a `.gitignore` into a `.dropboxignore`.             |
+| `ignore`        | (none)                     | Append a path-anchored rule and set the marker in one step.    |
 | `init`          | `git init` (loosely)       | Scaffolds a starter `.dropboxignore`, not a repository.        |
 | `install`       | (none)                     | Registers the daemon with the platform service manager.        |
 | `list`          | (none)                     | Lists every path currently bearing the Dropbox ignore marker.  |
 | `status`        | `git status` (loosely)     | Shows daemon state, last sweep, marker counts, conflicts.      |
+| `unignore`      | (see callout below)        | Inverse of `ignore`; refuses on wildcard-rule collision.       |
 | `uninstall`     | (none)                     | Removes the daemon registration; `--purge` also clears markers.|
 
-> **`clear` is NOT `git rm --cached`-shaped.** `git rm --cached` removes a path
-> from the git index without touching the working tree (cheap, local-only).
-> `dbxignore clear` removes the Dropbox ignore markers, which causes Dropbox
-> to **upload previously-ignored paths to the cloud** (potentially gigabytes
+> **`clear` and `unignore` are NOT `git rm --cached`-shaped.** `git rm --cached`
+> removes a path from the git index without touching the working tree (cheap,
+> local-only). Both `dbxignore clear` (whole tree) and `dbxignore unignore <path>`
+> (single path) remove Dropbox ignore markers, which causes Dropbox to
+> **upload previously-ignored paths to the cloud** (potentially gigabytes
 > for a `node_modules`-class subtree) and propagate them to other linked
-> devices. The `--yes` confirmation prompt and `--dry-run` preview exist
-> specifically because of this divergence.
+> devices. The `--yes` confirmation prompt and `--dry-run` preview exist on
+> both verbs specifically because of this divergence.
 
 ## Behaviour
 

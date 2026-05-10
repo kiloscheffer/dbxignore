@@ -412,6 +412,74 @@ def test_unignore_default_prompts_then_aborts_on_no(
     assert fake_markers.is_ignored(target)
 
 
+def test_ignore_dry_run_does_not_mutate_in_half_state(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Half-state (rule on disk, marker missing) + --dry-run: must NOT mutate
+    the marker. Caught by Final Review Finding 1 — the half-state branch's
+    early return previously bypassed the --dry-run check."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    (root / IGNORE_FILENAME).write_text("build/\n", encoding="utf-8")
+    assert not fake_markers.is_ignored(target)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(target), "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "would set marker" in result.output
+    # Marker still not set — the dry-run was honored.
+    assert not fake_markers.is_ignored(target)
+
+
+def test_ignore_marker_oserror_exits_2_with_message(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ENOTSUP / FAT32 case (Final Review Finding 2): marker write fails;
+    rule is on disk; verb exits 2 with a user-friendly message that names
+    both the failure cause and the daemon's eventual recovery path."""
+    import errno
+
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+
+    def _raise_enotsup(path: Path) -> None:
+        raise OSError(errno.ENOTSUP, "Operation not supported")
+
+    monkeypatch.setattr(fake_markers, "set_ignored", _raise_enotsup)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(target), "--yes"])
+    assert result.exit_code == 2
+    assert "Marker write failed" in result.output
+    # The rule should still be on disk (rule-first ordering).
+    assert "build/" in (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+
+
+def test_unignore_marker_oserror_exits_2_with_message(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Symmetric to the ignore case: clear_ignored OSError exits 2 with
+    a user-friendly message; the rule is already removed from disk."""
+    import errno
+
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    (root / IGNORE_FILENAME).write_text("build/\n", encoding="utf-8")
+    fake_markers.set_ignored(target)
+
+    def _raise_enotsup(path: Path) -> None:
+        raise OSError(errno.ENOTSUP, "Operation not supported")
+
+    monkeypatch.setattr(fake_markers, "clear_ignored", _raise_enotsup)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
+    assert result.exit_code == 2
+    assert "Marker clear failed" in result.output
+    # The rule should be removed even though the marker clear failed.
+    assert "build/" not in (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+
+
 def test_ignore_then_synthetic_rules_event_no_spurious_mutation(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -761,8 +761,20 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
             )
         # Half-state recovery: ensure marker is set even if rule was already on disk.
         if not markers.is_ignored(target):
-            markers.set_ignored(target)
-            click.echo(f"Set marker on {target}.")
+            if dry_run:
+                click.echo(f"would set marker on {target}")
+            else:
+                try:
+                    markers.set_ignored(target)
+                except OSError as exc:
+                    click.echo(
+                        f"Marker write failed on {target}: {exc}. "
+                        f"The rule was already in {rule_file}; the daemon will set the marker "
+                        f"when running on a filesystem that supports extended attributes.",
+                        err=True,
+                    )
+                    sys.exit(2)
+                click.echo(f"Set marker on {target}.")
         return
 
     # Confirmation
@@ -784,7 +796,16 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
     # Mutation: rule first, then marker (avoids the daemon-race documented
     # in the spec § Order of operations).
     rules.append_rule(rule_file, canonical)
-    markers.set_ignored(target)
+    try:
+        markers.set_ignored(target)
+    except OSError as exc:
+        click.echo(
+            f"Marker write failed on {target}: {exc}. "
+            f"The rule was added to {rule_file}; the daemon will set the marker "
+            f"when running on a filesystem that supports extended attributes.",
+            err=True,
+        )
+        sys.exit(2)
     click.echo(f"ignore: rule added to {rule_file}; marker set on {target}")
 
 
@@ -874,8 +895,17 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
     for m in removable:
         rules.remove_rule(m.ignore_file, m.pattern)
         affected_files.add(m.ignore_file)
-    markers.clear_ignored(target)
     files_str = ", ".join(str(f) for f in sorted(affected_files))
+    try:
+        markers.clear_ignored(target)
+    except OSError as exc:
+        click.echo(
+            f"Marker clear failed on {target}: {exc}. "
+            f"The rule was removed from {files_str}; the daemon will clear the marker "
+            f"when running on a filesystem that supports extended attributes.",
+            err=True,
+        )
+        sys.exit(2)
     click.echo(f"unignore: rule removed from {files_str}; marker cleared on {target}")
 
 

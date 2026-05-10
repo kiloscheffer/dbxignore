@@ -116,6 +116,12 @@ def _validate_target_under_root(path: Path) -> tuple[Path, Path, list[Path]]:
     are preserved — markers and rules apply to the link itself, not the link's
     target (per the project's symlink invariant). ``os.path.normpath`` folds
     ``..`` and ``.`` segments without following symlinks.
+
+    Symlinked ancestors between ``target`` and ``root`` are rejected: the daemon
+    walks with ``followlinks=False`` and would never reconcile a path whose
+    ancestor resolves through a symlink, leaving the marker permanently orphaned.
+    Operating on the symlink itself is fine; only intermediate symlinks are
+    problematic.
     """
     target = Path(os.path.normpath(path.absolute()))
     if not target.exists():
@@ -129,6 +135,21 @@ def _validate_target_under_root(path: Path) -> tuple[Path, Path, list[Path]]:
     if root is None:
         click.echo(f"Path {path} is not under any Dropbox root.", err=True)
         sys.exit(2)
+    # Reject paths whose ancestors (between target and root) are symlinks. The
+    # daemon walks with followlinks=False and would never reconcile such a path,
+    # leaving the marker permanently orphaned. The target itself being a symlink
+    # is fine — that's the intended use case (round-4 fix).
+    for ancestor in target.parents:
+        if ancestor == root:
+            break
+        if ancestor.is_symlink():
+            click.echo(
+                f"error: {path} has a symlinked ancestor {ancestor}; "
+                f"the daemon walks with followlinks=False and would never "
+                f"reconcile this path. Operate on the symlink itself instead.",
+                err=True,
+            )
+            sys.exit(2)
     return target, root, discovered
 
 
@@ -823,7 +844,7 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
     if cache.match(target):
         matches = [m for m in cache.explain(target) if not m.is_dropped]
         via_us_match = next(
-            (m for m in matches if m.pattern.rstrip() == canonical.rstrip()),
+            (m for m in matches if m.pattern.rstrip().casefold() == canonical.rstrip().casefold()),
             None,
         )
         if via_us_match is not None:
@@ -1009,7 +1030,9 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
                 sys.exit(2)
 
     removable = [
-        m for m in matches if m.pattern.rstrip() == canonical_per_file[m.ignore_file].rstrip()
+        m
+        for m in matches
+        if m.pattern.rstrip().casefold() == canonical_per_file[m.ignore_file].rstrip().casefold()
     ]
     blockers = [m for m in matches if m not in removable]
 

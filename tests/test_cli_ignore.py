@@ -956,3 +956,61 @@ def test_ignore_then_unignore_round_trip_for_trailing_space_filename(
     assert result.exit_code == 0, result.output
     assert "rule removed" in result.output
     assert not fake_markers.is_ignored(target)
+
+
+# ---------------------------------------------------------------------------
+# Codex P2 Fix: symlinked-ancestor rejection + case-insensitive rule match
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows symlink creation requires admin privileges",
+)
+def test_ignore_rejects_path_under_symlinked_ancestor(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 regression: a symlinked ancestor between target and Dropbox
+    root means the daemon (followlinks=False) would never reconcile the path,
+    leaving the marker permanently orphaned. Reject at validation time."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    # Create an external dir + a child within it.
+    external = tmp_path.parent / "external_dir"
+    external.mkdir(exist_ok=True)
+    child_in_external = external / "deep_child"
+    child_in_external.mkdir()
+    # Symlink the external dir into Dropbox.
+    link = root / "link_into_external"
+    link.symlink_to(external)
+    target_via_link = link / "deep_child"
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(target_via_link), "--yes"])
+    assert result.exit_code == 2
+    assert "symlinked ancestor" in result.output
+    # No mutation: marker not set, no rule file mutated.
+    assert not fake_markers.is_ignored(target_via_link)
+
+
+def test_ignore_then_unignore_case_insensitive_match(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 regression: on case-insensitive FS, ignore writes a rule with
+    the on-disk casing, but a subsequent unignore with different user-typed
+    casing must still match the rule (mirrors pathspec's case-insensitive
+    matching at the pattern layer). Use string casing only — no symlink or
+    actual case-insensitive FS needed since we're testing the comparison
+    logic, not filesystem behavior."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    # Pre-state: rule with capital 'B' already in the file (different casing
+    # from what canonical would produce for `build` target).
+    (root / IGNORE_FILENAME).write_text("/Build/\n", encoding="utf-8")
+    fake_markers.set_ignored(target)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "rule removed" in result.output
+    # Rule removed (case-insensitive comparison classified it as removable).
+    assert "/Build/" not in (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert not fake_markers.is_ignored(target)

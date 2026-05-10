@@ -46,7 +46,7 @@ Three layers, mirroring the project's existing CLI / rules / markers split:
 1. **CLI layer** (`src/dbxignore/cli.py`). Two new `@main.command()` blocks (`ignore`, `unignore`) that parse + validate the path argument, run the rule-file selection, branch on idempotence + redundancy + collision cases, prompt for confirmation (or skip on `--yes`/`--dry-run`), and call into the rules + markers layers. Reuses `_discover_roots()`, `find_containing()`, and `_load_cache()` already present in `cli.py`.
 
 2. **Rules layer** (`src/dbxignore/rules.py`). Three new helpers:
-   - `format_literal_rule(target: Path, rule_file: Path) -> str` — compute the canonical, gitignore-anchored, path-relative-to-`rule_file.parent` rule string for `target`. Trailing `/` if `target.is_dir()`. Backslash-escapes gitignore meta-chars (`*`, `?`, `[`, `\`) per path segment, plus a leading-segment `!` or `#`.
+   - `format_literal_rule(target: Path, rule_file: Path) -> str` — compute the canonical, gitignore-anchored, path-relative-to-`rule_file.parent` rule string for `target`. Trailing `/` if `target.is_dir()`. Backslash-escapes gitignore meta-chars (`*`, `?`, `[`, `]`, `\`) per path segment, plus a leading-segment `!` or `#`.
    - `append_rule(rule_file: Path, rule_line: str) -> bool` — atomic append-iff-missing using temp-then-replace (mirroring `state.write()`'s pattern). Returns `True` if appended, `False` if line already present. Creates the rule file with a leading comment header (`# .dropboxignore — managed by dbxignore`) if absent.
    - `remove_rule(rule_file: Path, rule_line: str) -> int` — atomic rewrite removing all lines whose `rstrip()` matches `rule_line.rstrip()`. Returns the count of removed lines.
 
@@ -61,7 +61,7 @@ Helper `_select_rule_file(target: Path, root: Path) -> Path` in `cli.py`: walks 
 Given `target = ~/Dropbox/proj/foo/bar/` (resolved) and `rule_file = ~/Dropbox/proj/.dropboxignore`:
 
 1. `relative = target.relative_to(rule_file.parent)` → `Path("foo/bar")`.
-2. Per-segment escape: each segment is scanned for `*`, `?`, `[`, `\` and the meta-char gets a backslash prefix.
+2. Per-segment escape: each segment is scanned for `*`, `?`, `[`, `]`, `\` and the meta-char gets a backslash prefix.
 3. Leading-segment escape: if the FIRST segment starts with `!` or `#`, prepend a `\` to that segment (gitignore would otherwise misread the line as a negation or comment).
 4. Re-join with `/`.
 5. If `target.is_dir()`, append `/`.
@@ -92,15 +92,22 @@ canonical = format_literal_rule(target, rule_file)
 
 # Idempotence + redundancy guards
 if cache.match(target):
-    matches = cache.explain(target)
+    # Filter dropped matches — they're negations under an ignored ancestor
+    # and inert per RuleCache._conflicts.
+    matches = [m for m in cache.explain(target) if not m.is_dropped]
     via_us = any(m.pattern.rstrip() == canonical.rstrip() for m in matches)
     if via_us:
-        ensure marker set on target  # half-state recovery
+        # Half-state recovery: ensure marker is set even if rule was already on disk.
+        # Honors --dry-run; catches OSError from is_ignored/set_ignored on
+        # filesystems without xattr support (FAT32, some SMB) and exits 2 with
+        # a message naming the file that already contains the rule.
+        ensure marker set on target
         print "<target> is already ignored"
         exit 0
     else:
         # Covered by a wildcard or other rule, not by our literal-path rule.
-        ensure marker set on target  # half-state recovery
+        # Half-state recovery: same as above.
+        ensure marker set on target
         print "<target> is already covered by <matches[0].pattern> in <matches[0].ignore_file>;"
         print "not adding redundant rule. Marker confirmed."
         exit 0
@@ -135,7 +142,8 @@ if not cache.match(target):
     exit 0
 
 # Find the rules that match target. Each Match has ignore_file + line + pattern.
-matches = cache.explain(target)
+# Filter dropped matches — they're inert per RuleCache._conflicts.
+matches = [m for m in cache.explain(target) if not m.is_dropped]
 
 # Compute canonical rule-line for each candidate ancestor file.
 # Two matches against the same target may live in different rule files (e.g.
@@ -196,6 +204,8 @@ If the daemon is **not** running, the rule lands on disk and the marker is set b
 | `_discover_roots()` returns empty | exit 2, "No Dropbox roots found. Is Dropbox installed?" — same wording as `apply` / `clear`. |
 | Rule file is read-only / disk full / parent dir unwritable | exit 2, "Failed to write <rule_file>: <OSError>". No partial state — atomic temp-then-replace ensures either the file is fully updated or unchanged. |
 | `markers.set_ignored` raises `OSError` (FAT32 / SMB / `ENOTSUP`) | exit 2, "Marker write failed on <target>: <errno>. The rule was added to <rule_file>; the daemon will set the marker when running on a filesystem that supports extended attributes." Cleanup of the rule append is **not** attempted — the rule is correct on disk and reverting would diverge from user intent (the user wanted this path ignored; the daemon will catch up when the FS permits). |
+| `markers.is_ignored` raises `OSError` in half-state branch | exit 2, "Could not read marker on <target>: <errno>. The rule is in <file_with_rule>; the daemon will set the marker when running on a filesystem that supports extended attributes." |
+| `markers.set_ignored` raises `OSError` in half-state branch | exit 2, "Marker write failed on <target>: <errno>. The rule was already in <file_with_rule>; the daemon will set the marker when running on a filesystem that supports extended attributes." |
 | `unignore` blockers exist | exit 2, list each blocker with file/line/pattern, no mutation. |
 | User declines confirmation prompt | exit 0, "Aborted." — same shape as `apply`'s confirmation flow at `cli.py:326`. |
 

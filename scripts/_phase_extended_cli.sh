@@ -138,7 +138,7 @@ phase_extended_cli() {
     fi
     assert_xattr_unset "$T/build/foo.tmp" "4n — clear removed build/foo.tmp marker"
 
-    # 4o — dbxignore ignore <path> happy path (PR #<N>)
+    # 4o — dbxignore ignore <path> happy path (PR #191)
     note "4o — dbxignore ignore (basic)"
     local target_4o="$DROPBOX_DIR/dbxignore_test_4o"
     rm -rf "$target_4o"; mkdir -p "$target_4o"
@@ -155,7 +155,7 @@ phase_extended_cli() {
     fi
     assert_xattr_set "$target_4o" "4o — marker set on target"
 
-    # 4p — dbxignore unignore <path> happy path (PR #<N>)
+    # 4p — dbxignore unignore <path> happy path (PR #191)
     note "4p — dbxignore unignore (basic)"
     if dbxignore unignore "$target_4o" --yes >/tmp/dbx-unignore.out 2>&1; then
         pass "4p — unignore (rc=0)"
@@ -171,7 +171,7 @@ phase_extended_cli() {
     assert_xattr_unset "$target_4o" "4p — marker cleared on target"
     rm -rf "$target_4o"
 
-    # 4q — dbxignore unignore wildcard collision (PR #<N>)
+    # 4q — dbxignore unignore wildcard collision (PR #191)
     note "4q — dbxignore unignore refuses wildcard blocker"
     local target_4q="$DROPBOX_DIR/dbxignore_test_4q"
     rm -rf "$target_4q"; mkdir -p "$target_4q"

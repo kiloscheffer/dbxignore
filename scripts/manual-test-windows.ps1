@@ -512,7 +512,7 @@ function Test-ExtendedCli {
     if ($LASTEXITCODE -eq 0) { Write-Pass "4n - clear (rc=0)" } else { Write-Fail "4n - clear"; Get-Content $clearOut | ForEach-Object { Write-Note "    $_" } }
     Assert-AdsUnset -Path "$T\build\foo.tmp" -Name "4n - clear removed build/foo.tmp marker"
 
-    # 4o — dbxignore ignore <path> happy path (PR #<N>)
+    # 4o — dbxignore ignore <path> happy path (PR #191)
     Write-Note "4o - dbxignore ignore (basic)"
     $target4o = Join-Path $script:DropboxDir "dbxignore_test_4o"
     if (Test-Path $target4o) { Remove-Item -Path $target4o -Recurse -Force }
@@ -528,7 +528,7 @@ function Test-ExtendedCli {
     }
     Assert-AdsSet -Path $target4o -Name "4o - marker set on target"
 
-    # 4p — dbxignore unignore <path> happy path (PR #<N>)
+    # 4p — dbxignore unignore <path> happy path (PR #191)
     Write-Note "4p - dbxignore unignore (basic)"
     $unignoreOut = "$env:TEMP\dbxignore-unignore.out"
     dbxignore unignore $target4o --yes *> $unignoreOut
@@ -541,7 +541,7 @@ function Test-ExtendedCli {
     Assert-AdsUnset -Path $target4o -Name "4p - marker cleared on target"
     Remove-Item -Path $target4o -Recurse -Force
 
-    # 4q — dbxignore unignore wildcard collision (PR #<N>)
+    # 4q — dbxignore unignore wildcard collision (PR #191)
     Write-Note "4q - dbxignore unignore refuses wildcard blocker"
     $target4q = Join-Path $script:DropboxDir "dbxignore_test_4q"
     if (Test-Path $target4q) { Remove-Item -Path $target4q -Recurse -Force }

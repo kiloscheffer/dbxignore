@@ -30,23 +30,30 @@ def test_append_to_existing_file_adds_line(tmp_path: Path) -> None:
     assert rule_file.read_text(encoding="utf-8") == "node_modules/\nbuild/\n"
 
 
-def test_append_idempotent_when_line_already_present(tmp_path: Path) -> None:
+def test_append_does_not_deduplicate(tmp_path: Path) -> None:
+    """append_rule always appends — does NOT deduplicate against existing
+    identical lines. The CLI gates calls via cache.match upstream, so a
+    re-call here is intentional (e.g., to override a later negation that
+    masked an earlier identical rule). gitignore's last-match-wins makes
+    the duplicate effective."""
     rule_file = tmp_path / ".dropboxignore"
     rule_file.write_text("build/\n", encoding="utf-8")
     appended = append_rule(rule_file, "build/")
-    assert appended is False
-    assert rule_file.read_text(encoding="utf-8") == "build/\n"
+    assert appended is True
+    # File now has TWO build/ lines.
+    assert rule_file.read_text(encoding="utf-8") == "build/\nbuild/\n"
 
 
-def test_append_idempotent_with_trailing_whitespace_on_existing_line(tmp_path: Path) -> None:
-    # Manually-typed rule with trailing whitespace — pathspec ignores trailing
-    # whitespace when matching, so we treat it as equivalent to our canonical
-    # form and do NOT add a redundant line.
+def test_append_appends_after_trailing_whitespace_existing_line(tmp_path: Path) -> None:
+    """Trailing-whitespace tolerance no longer matters for append (we always
+    append). The existing manually-typed `build/   ` stays untouched; the new
+    canonical `build/` is appended verbatim."""
     rule_file = tmp_path / ".dropboxignore"
     rule_file.write_text("build/   \n", encoding="utf-8")
     appended = append_rule(rule_file, "build/")
-    assert appended is False
-    assert rule_file.read_text(encoding="utf-8") == "build/   \n"
+    assert appended is True
+    # Both lines present.
+    assert rule_file.read_text(encoding="utf-8") == "build/   \nbuild/\n"
 
 
 def test_append_handles_existing_file_without_trailing_newline(tmp_path: Path) -> None:

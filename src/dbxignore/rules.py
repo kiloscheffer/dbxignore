@@ -182,23 +182,29 @@ _FILE_HEADER = "# .dropboxignore — managed by dbxignore\n"
 
 
 def append_rule(rule_file: Path, rule_line: str) -> bool:
-    """Atomic append-iff-missing of ``rule_line`` to ``rule_file``.
+    """Atomic append of ``rule_line`` to ``rule_file``.
 
-    Returns True if the line was appended, False if an equivalent line
-    (after ``rstrip()``) was already present. Creates the file with a
-    leading comment header if it doesn't exist.
+    Always appends — does NOT deduplicate against existing identical lines.
+    A ``.dropboxignore`` may legitimately contain duplicate or masked rules
+    (e.g., ``/build/`` followed by a later ``!/build/`` then a re-anchor),
+    and gitignore's last-match-wins semantics depend on the order. Callers
+    should gate this via ``cache.match`` upstream — the CLI's ``ignore``
+    verb only calls this helper when the path is NOT currently ignored,
+    so an extra duplicate at the end is exactly what makes the rule take
+    effect (overriding any earlier negation).
 
     Atomic via temp-then-replace, mirroring ``state.write()``: writes to
     ``<rule_file>.tmp``, then ``os.replace`` into place. Survives SIGKILL
     or power loss mid-write — the file is either fully updated or unchanged.
     Not safe against concurrent writers; intended for serial CLI invocation.
+
+    Returns True. (The previous return-False idempotent-skip semantics were
+    removed because they masked the override-via-duplicate behavior gitignore
+    requires for negation-override.)
     """
-    target_norm = rule_line.rstrip()
     if rule_file.exists():
         content = rule_file.read_text(encoding="utf-8")
         existing_lines = content.splitlines()
-        if any(line.rstrip() == target_norm for line in existing_lines):
-            return False
         if existing_lines:
             # Ensure the existing content ends with a newline so our appended
             # line lands on its own line. ``splitlines()`` already ate a

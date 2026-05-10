@@ -1198,3 +1198,35 @@ def test_ignore_does_not_set_child_marker_under_ancestor_rule(
     )
     # No new rule added either.
     assert (root / IGNORE_FILENAME).read_text(encoding="utf-8") == "/parent/\n"
+
+
+# ---------------------------------------------------------------------------
+# Codex P2 Fix: append_rule negation-override (item #93)
+# ---------------------------------------------------------------------------
+
+
+def test_ignore_overrides_negation_by_appending_duplicate(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 regression: a .dropboxignore with ``/build/\\n!/build/\\n`` (literal
+    rule then later negation) leaves cache.match=False. ``dbxignore ignore build``
+    must append a NEW ``/build/`` rule at the end so it overrides the negation
+    via gitignore's last-match-wins. Previously, ``append_rule``'s idempotent
+    skip prevented the append, leaving the verb a silent no-op."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    # Pre-state: literal rule masked by later negation.
+    (root / IGNORE_FILENAME).write_text("/build/\n!/build/\n", encoding="utf-8")
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(target), "--yes"])
+    assert result.exit_code == 0, result.output
+    # The verb appended a new /build/ rule at the end. File now ends with /build/.
+    content = (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert content.rstrip().endswith("/build/")
+    # Verify last-match-wins makes the path ignored.
+    cache = RuleCache()
+    cache.load_root(root)
+    assert cache.match(target)
+    # Marker set.
+    assert fake_markers.is_ignored(target)

@@ -222,6 +222,8 @@ target/
 | `dbxignore generate <PATH>` | Translate a `.gitignore` (or any nominated file) to a `.dropboxignore`. `<PATH>` is a file or a directory; default output is `<dir>/.dropboxignore`. Flags: `-o <path>`, `--stdout`, `--force`. |
 | `dbxignore status` | Is the daemon running? Last sweep counts, last error. Pass `--summary` for a stable single-line summary suitable for status-bar widgets — see [Status-bar integration](#status-bar-integration). |
 | `dbxignore clear [PATH]` | Clear every ignore marker under the watched roots (or under `PATH`). Inverse of `apply`. Leaves `.dropboxignore` files and `state.json` untouched — see [Clearing all markers](#clearing-all-markers). |
+| `dbxignore ignore <path>` | Append a literal-path rule to the nearest ancestor `.dropboxignore` and set the ignore marker on `<path>`. |
+| `dbxignore unignore <path>` | Remove the rule and clear the marker. Refuses if `<path>` is also matched by a wildcard rule. |
 | `dbxignore list [PATH]` | Print every path currently bearing the ignore marker. |
 | `dbxignore explain PATH` | Which `.dropboxignore` rule (if any) matches the path? |
 

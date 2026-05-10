@@ -44,6 +44,7 @@ def test_meta_char_escaping_in_segment(tmp_path: Path) -> None:
     target = MagicMock(spec=Path)
     target.relative_to.return_value = Path("foo*bar")
     target.is_dir.return_value = True
+    target.is_symlink.return_value = False
     assert format_literal_rule(target, rule_file) == r"/foo\*bar/"
 
 
@@ -55,6 +56,7 @@ def test_question_mark_and_brackets_escaped(tmp_path: Path) -> None:
     target = MagicMock(spec=Path)
     target.relative_to.return_value = Path("weird?name[ish]")
     target.is_dir.return_value = True
+    target.is_symlink.return_value = False
     assert format_literal_rule(target, rule_file) == r"/weird\?name\[ish\]/"
 
 
@@ -69,6 +71,7 @@ def test_literal_backslash_escaped_in_segment(tmp_path: Path) -> None:
     target = MagicMock(spec=Path)
     target.relative_to.return_value = Path(r"back\slash")
     target.is_dir.return_value = True
+    target.is_symlink.return_value = False
     assert format_literal_rule(target, rule_file) == r"/back\\slash/"
 
 
@@ -78,6 +81,7 @@ def test_leading_bang_in_first_segment_escaped(tmp_path: Path) -> None:
     target = tmp_path / "!important"
     target.mkdir()
     # Leading `!` would make pathspec treat the line as a negation; escape.
+    # The directory is real, not a symlink, so it gets the trailing slash.
     assert format_literal_rule(target, rule_file) == r"/\!important/"
 
 
@@ -126,6 +130,7 @@ def test_newline_in_segment_raises_value_error(tmp_path: Path) -> None:
     target = MagicMock(spec=Path)
     target.relative_to.return_value = Path("foo\n*.tmp")
     target.is_dir.return_value = False
+    target.is_symlink.return_value = False
     with pytest.raises(ValueError, match="non-space whitespace"):
         format_literal_rule(target, rule_file)
 
@@ -161,5 +166,42 @@ def test_trailing_tab_in_segment_raises_value_error(tmp_path: Path) -> None:
     target = MagicMock(spec=Path)
     target.relative_to.return_value = Path("foo\t")
     target.is_dir.return_value = False
+    target.is_symlink.return_value = False
     with pytest.raises(ValueError, match="non-space whitespace"):
         format_literal_rule(target, rule_file)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows symlink creation requires admin privileges",
+)
+def test_symlink_target_does_not_get_trailing_slash(tmp_path: Path) -> None:
+    """Codex P2 regression: a symlink to a directory must produce a rule
+    WITHOUT trailing slash (treat the link as the link object, not its
+    target). Otherwise round-trip ignore/unignore breaks for symlinks
+    because format_literal_rule disagrees with how the rule was originally
+    written/stored."""
+    rule_file = tmp_path / ".dropboxignore"
+    rule_file.touch()
+    # Real directory (target of the symlink).
+    inner = tmp_path / "inner"
+    inner.mkdir()
+    # Symlink at the same level as rule file, pointing to inner/.
+    link = tmp_path / "link_to_inner"
+    link.symlink_to(inner)
+    # canonical for the symlink should be `/link_to_inner` (no trailing slash).
+    assert format_literal_rule(link, rule_file) == "/link_to_inner"
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows symlink creation requires admin privileges",
+)
+def test_real_directory_still_gets_trailing_slash(tmp_path: Path) -> None:
+    """Companion test: real directories (not symlinks) still get the trailing
+    slash. The fix only suppresses the slash for symlinks."""
+    rule_file = tmp_path / ".dropboxignore"
+    rule_file.touch()
+    real_dir = tmp_path / "real_dir"
+    real_dir.mkdir()
+    assert format_literal_rule(real_dir, rule_file) == "/real_dir/"

@@ -149,7 +149,13 @@ def format_literal_rule(target: Path, rule_file: Path) -> str:
     if escaped and escaped[0].startswith(("!", "#")):
         escaped[0] = "\\" + escaped[0]
     line = "/" + "/".join(escaped)
-    if target.is_dir():
+    # Append trailing `/` only for real directories — NOT for symlinks
+    # (regardless of what they link to). Symlinks should produce rules
+    # matching the link object itself per the project's "markers attach
+    # to the link, not the target" invariant; gitignore's directory-only
+    # patterns (with trailing `/`) follow the link and match the target,
+    # which is the wrong semantic here.
+    if target.is_dir() and not target.is_symlink():
         line += "/"
     return line
 

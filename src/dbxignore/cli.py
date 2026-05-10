@@ -788,6 +788,97 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
     click.echo(f"ignore: rule added to {rule_file}; marker set on {target}")
 
 
+@main.command()
+@click.argument("path", type=click.Path(exists=False, path_type=Path))
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Print what would be removed/cleared without changing anything.",
+)
+@click.option(
+    "--yes",
+    is_flag=True,
+    help="Skip the confirmation prompt (for scripted use). Without --yes "
+    "and outside --dry-run, unignore previews changes and asks before "
+    "mutating — clearing a marker causes Dropbox to start syncing the "
+    "path again and re-upload its contents to cloud.",
+)
+def unignore(path: Path, dry_run: bool, yes: bool) -> None:
+    """Remove the ignore marker and rule for <PATH>.
+
+    Inverse of ``ignore``. Removes all literal-path rules in the relevant
+    .dropboxignore file(s) that match <PATH> AND clears the marker. If
+    <PATH> is also matched by a wildcard or non-literal rule, refuses
+    to mutate and names the blocking rule.
+    """
+    target = path.resolve()
+    if not target.exists():
+        click.echo(f"Path {path} does not exist.", err=True)
+        sys.exit(2)
+
+    discovered = _discover_roots()
+    if not discovered:
+        click.echo("No Dropbox roots found. Is Dropbox installed?", err=True)
+        sys.exit(2)
+
+    root = find_containing(target, discovered)
+    if root is None:
+        click.echo(f"Path {path} is not under any Dropbox root.", err=True)
+        sys.exit(2)
+
+    cache = _load_cache(discovered)
+
+    if not cache.match(target):
+        click.echo(f"{path} is not ignored; nothing to do.")
+        return
+
+    # Find all rules that match the target. Each Match has ignore_file +
+    # line + pattern. is_dropped matches are inert (under an ignored ancestor),
+    # so we only consider non-dropped matches as blockers/removable.
+    matches = [m for m in cache.explain(target) if not m.is_dropped]
+
+    # Compute canonical rule for each candidate ancestor file.
+    canonical_per_file: dict[Path, str] = {}
+    for m in matches:
+        if m.ignore_file not in canonical_per_file:
+            canonical_per_file[m.ignore_file] = rules.format_literal_rule(target, m.ignore_file)
+
+    removable = [
+        m for m in matches if m.pattern.rstrip() == canonical_per_file[m.ignore_file].rstrip()
+    ]
+    blockers = [m for m in matches if m not in removable]
+
+    if blockers:
+        click.echo(f"error: {path} is also matched by:", err=True)
+        for m in blockers:
+            click.echo(f"  line {m.line} of {m.ignore_file}: {m.pattern.rstrip()}", err=True)
+        click.echo("Remove these manually if you want to unignore this path.", err=True)
+        sys.exit(2)
+
+    # Confirmation
+    if dry_run:
+        for m in removable:
+            click.echo(f"would remove {m.pattern.rstrip()!r} from {m.ignore_file}")
+        click.echo(f"would clear marker on {target}")
+        return
+
+    if not yes:
+        click.echo(f"This will unignore {target}.")
+        click.echo("Dropbox will start syncing it again and upload local contents to cloud.")
+        if not click.confirm("Continue?"):
+            click.echo("Aborted.")
+            return
+
+    # Mutation: rules first, then marker.
+    affected_files: set[Path] = set()
+    for m in removable:
+        rules.remove_rule(m.ignore_file, m.pattern)
+        affected_files.add(m.ignore_file)
+    markers.clear_ignored(target)
+    files_str = ", ".join(str(f) for f in sorted(affected_files))
+    click.echo(f"unignore: rule removed from {files_str}; marker cleared on {target}")
+
+
 @main.command("list")
 @click.argument("path", required=False, type=click.Path(path_type=Path))
 def list_ignored(path: Path | None) -> None:

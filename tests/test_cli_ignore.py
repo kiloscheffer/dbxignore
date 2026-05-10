@@ -250,3 +250,65 @@ def test_ignore_default_prompts_then_aborts_on_no(
     # No mutation occurred.
     assert not (root / IGNORE_FILENAME).exists()
     assert not fake_markers.is_ignored(target)
+
+
+def test_unignore_happy_path(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    # Pre-state: rule + marker.
+    (root / IGNORE_FILENAME).write_text("build/\n", encoding="utf-8")
+    fake_markers.set_ignored(target)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
+    assert result.exit_code == 0, result.output
+    # Rule removed (file may be empty / header-only).
+    content = (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert "build/" not in content
+    # Marker cleared.
+    assert not fake_markers.is_ignored(target)
+
+
+def test_unignore_already_not_ignored_is_noop(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "not ignored" in result.output
+
+
+def test_unignore_removes_from_multiple_files(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    proj = root / "proj"
+    proj.mkdir()
+    target = proj / "build"
+    target.mkdir()
+    # Same target literal rule in TWO ancestor files (edge case Q4 case 5).
+    (root / IGNORE_FILENAME).write_text("proj/build/\n", encoding="utf-8")
+    (proj / IGNORE_FILENAME).write_text("build/\n", encoding="utf-8")
+    fake_markers.set_ignored(target)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
+    assert result.exit_code == 0, result.output
+    # Both rules removed.
+    assert "proj/build/" not in (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert "build/" not in (proj / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert not fake_markers.is_ignored(target)
+
+
+def test_unignore_rejects_nonexistent_path(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(root / "ghost"), "--yes"])
+    assert result.exit_code == 2
+    assert "does not exist" in result.output

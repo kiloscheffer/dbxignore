@@ -158,8 +158,12 @@ def append_rule(rule_file: Path, rule_line: str) -> bool:
         new_content = _FILE_HEADER + rule_line + "\n"
 
     tmp = rule_file.with_suffix(rule_file.suffix + ".tmp")
-    tmp.write_text(new_content, encoding="utf-8")
-    os.replace(tmp, rule_file)
+    try:
+        tmp.write_text(new_content, encoding="utf-8")
+        os.replace(tmp, rule_file)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
     return True
 
 
@@ -176,6 +180,11 @@ def remove_rule(rule_file: Path, rule_line: str) -> int:
     gitignore-trailing-whitespace semantics.
     """
     if not rule_file.exists():
+        logger.warning(
+            "remove_rule called against missing file %s; rule %r treated as already absent",
+            rule_file,
+            rule_line,
+        )
         return 0
     target_norm = rule_line.rstrip()
     content = rule_file.read_text(encoding="utf-8")
@@ -186,8 +195,12 @@ def remove_rule(rule_file: Path, rule_line: str) -> int:
         return 0
     new_content = "\n".join(kept) + ("\n" if kept else "")
     tmp = rule_file.with_suffix(rule_file.suffix + ".tmp")
-    tmp.write_text(new_content, encoding="utf-8")
-    os.replace(tmp, rule_file)
+    try:
+        tmp.write_text(new_content, encoding="utf-8")
+        os.replace(tmp, rule_file)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
     return removed_count
 
 

@@ -749,18 +749,33 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
 
     # Idempotence + redundancy guards
     if cache.match(target):
-        matches = cache.explain(target)
-        via_us = any(m.pattern.rstrip() == canonical.rstrip() for m in matches if not m.is_dropped)
-        if via_us:
+        matches = [m for m in cache.explain(target) if not m.is_dropped]
+        via_us_match = next(
+            (m for m in matches if m.pattern.rstrip() == canonical.rstrip()),
+            None,
+        )
+        if via_us_match is not None:
             click.echo(f"{path} is already ignored.")
+            file_with_rule = via_us_match.ignore_file
         else:
-            blocker = next(m for m in matches if not m.is_dropped)
+            blocker = matches[0]
             click.echo(
                 f"{path} is already covered by {blocker.pattern.rstrip()!r} "
                 f"in {blocker.ignore_file}; not adding redundant rule."
             )
+            file_with_rule = blocker.ignore_file
         # Half-state recovery: ensure marker is set even if rule was already on disk.
-        if not markers.is_ignored(target):
+        try:
+            already_marked = markers.is_ignored(target)
+        except OSError as exc:
+            click.echo(
+                f"Could not read marker on {target}: {exc}. "
+                f"The rule is in {file_with_rule}; the daemon will set the marker "
+                f"when running on a filesystem that supports extended attributes.",
+                err=True,
+            )
+            sys.exit(2)
+        if not already_marked:
             if dry_run:
                 click.echo(f"would set marker on {target}")
             else:
@@ -769,7 +784,7 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
                 except OSError as exc:
                     click.echo(
                         f"Marker write failed on {target}: {exc}. "
-                        f"The rule was already in {rule_file}; the daemon will set the marker "
+                        f"The rule was already in {file_with_rule}; the daemon will set the marker "
                         f"when running on a filesystem that supports extended attributes.",
                         err=True,
                     )
@@ -795,7 +810,14 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
 
     # Mutation: rule first, then marker (avoids the daemon-race documented
     # in the spec § Order of operations).
-    rules.append_rule(rule_file, canonical)
+    try:
+        rules.append_rule(rule_file, canonical)
+    except OSError as exc:
+        click.echo(
+            f"Failed to write {rule_file}: {exc}.",
+            err=True,
+        )
+        sys.exit(2)
     try:
         markers.set_ignored(target)
     except OSError as exc:
@@ -880,6 +902,18 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
     if dry_run:
         for m in removable:
             click.echo(f"would remove {m.pattern.rstrip()!r} from {m.ignore_file}")
+            # Preview whether removing this leaves the file comment-only.
+            try:
+                content = m.ignore_file.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            target_norm = m.pattern.rstrip()
+            kept = [line for line in content.splitlines() if line.rstrip() != target_norm]
+            non_trivial = [
+                line for line in kept if line.strip() and not line.strip().startswith("#")
+            ]
+            if not non_trivial:
+                click.echo(f"  ({m.ignore_file} would contain only comments after removal)")
         click.echo(f"would clear marker on {target}")
         return
 
@@ -893,8 +927,23 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
     # Mutation: rules first, then marker.
     affected_files: set[Path] = set()
     for m in removable:
-        rules.remove_rule(m.ignore_file, m.pattern)
-        affected_files.add(m.ignore_file)
+        try:
+            removed_count = rules.remove_rule(m.ignore_file, m.pattern)
+        except OSError as exc:
+            click.echo(
+                f"Failed to write {m.ignore_file}: {exc}.",
+                err=True,
+            )
+            sys.exit(2)
+        if removed_count > 0:
+            affected_files.add(m.ignore_file)
+    if removable and not affected_files:
+        click.echo(
+            f"error: matched rules disappeared between read and write; "
+            f"re-run `dbxignore unignore {path}`.",
+            err=True,
+        )
+        sys.exit(2)
     files_str = ", ".join(str(f) for f in sorted(affected_files))
     try:
         markers.clear_ignored(target)

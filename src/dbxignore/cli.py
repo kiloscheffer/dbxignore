@@ -777,6 +777,13 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
             err=True,
         )
         sys.exit(2)
+    if target == root:
+        click.echo(
+            f"error: {path} is a Dropbox root; refusing to mark the entire root "
+            f"ignored (Dropbox would remove the root from cloud and every linked device).",
+            err=True,
+        )
+        sys.exit(2)
     cache = _load_cache(discovered)
     rule_file = _select_rule_file(target, root)
     canonical = rules.format_literal_rule(target, rule_file)
@@ -889,10 +896,17 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
     <PATH> is also matched by a wildcard or non-literal rule, refuses
     to mutate and names the blocking rule.
     """
-    target, _root, discovered = _validate_target_under_root(path)
+    target, root, discovered = _validate_target_under_root(path)
     if is_ignore_filename(target.name):
         click.echo(
             f"error: {path} is a .dropboxignore rule file; these are never marked ignored.",
+            err=True,
+        )
+        sys.exit(2)
+    if target == root:
+        click.echo(
+            f"error: {path} is a Dropbox root; refusing to mark the entire root "
+            f"ignored (Dropbox would remove the root from cloud and every linked device).",
             err=True,
         )
         sys.exit(2)

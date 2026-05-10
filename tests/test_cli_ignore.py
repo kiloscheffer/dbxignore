@@ -673,6 +673,40 @@ def test_unignore_partial_disappearance_exits_2(
 
 
 # ---------------------------------------------------------------------------
+# Fix 4 regression: Dropbox root guard in ignore and unignore (item #93)
+# ---------------------------------------------------------------------------
+
+
+def test_ignore_refuses_dropbox_root_target(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P1 regression: `dbxignore ignore <root>` would otherwise produce
+    a degenerate `//` rule AND mark the entire Dropbox root as ignored —
+    catastrophic since Dropbox would remove the root from cloud and propagate
+    the deletion to every linked device."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(root), "--yes"])
+    assert result.exit_code == 2
+    assert "Dropbox root" in result.output
+    # No mutation: marker not set on root, no .dropboxignore created.
+    assert not fake_markers.is_ignored(root)
+    assert not (root / IGNORE_FILENAME).exists()
+
+
+def test_unignore_refuses_dropbox_root_target(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Symmetric refusal for unignore — root-as-target is rejected in both
+    directions."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(root), "--yes"])
+    assert result.exit_code == 2
+    assert "Dropbox root" in result.output
+
+
+# ---------------------------------------------------------------------------
 # Fix 5 regression: .dropboxignore filename guard in ignore and unignore
 # ---------------------------------------------------------------------------
 

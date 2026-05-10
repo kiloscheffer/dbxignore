@@ -935,7 +935,43 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
     cache = _load_cache(discovered)
 
     if not cache.match(target):
-        click.echo(f"{path} is not ignored; nothing to do.")
+        # Half-state recovery: marker may be set despite no rule (user manually
+        # edited .dropboxignore while daemon was stopped, or daemon hasn't run
+        # since rule removal). This command is the right place to clear the
+        # orphan marker — symmetric to ignore's "rule on disk, marker missing"
+        # half-state recovery.
+        try:
+            marker_set = markers.is_ignored(target)
+        except OSError as exc:
+            click.echo(
+                f"Could not read marker on {target}: {exc}. "
+                f"Re-run on a filesystem that supports extended attributes.",
+                err=True,
+            )
+            sys.exit(2)
+        if not marker_set:
+            click.echo(f"{path} is not ignored; nothing to do.")
+            return
+        # Marker is set but no rule justifies it — orphan state.
+        if dry_run:
+            click.echo(f"would clear marker on {target} (no matching rule on disk)")
+            return
+        if not yes:
+            click.echo(f"This will unignore {target} (no rule currently matches it).")
+            click.echo("Dropbox will start syncing it again and upload local contents to cloud.")
+            if not click.confirm("Continue?"):
+                click.echo("Aborted.")
+                return
+        try:
+            markers.clear_ignored(target)
+        except OSError as exc:
+            click.echo(
+                f"Marker clear failed on {target}: {exc}. "
+                f"No rule was on disk; the daemon will not re-set the marker.",
+                err=True,
+            )
+            sys.exit(2)
+        click.echo(f"unignore: marker cleared on {target} (no rule was on disk)")
         return
 
     # Non-dropped matches only — is_dropped rules are inert under an ignored ancestor.

@@ -743,6 +743,46 @@ def test_unignore_refuses_dropboxignore_filename(
 
 
 # ---------------------------------------------------------------------------
+# Codex P2 Fix 2 regression: unignore clears orphan markers with no rule
+# ---------------------------------------------------------------------------
+
+
+def test_unignore_clears_orphan_marker_with_no_rule(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 regression: marker set but no matching rule (e.g., user
+    manually edited .dropboxignore while daemon was stopped). unignore must
+    clear the orphan marker, not exit silent — symmetric to ignore's
+    half-state recovery for the inverse direction."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    # No .dropboxignore on disk. But marker IS set (orphan).
+    fake_markers.set_ignored(target)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "marker cleared" in result.output
+    assert not fake_markers.is_ignored(target)
+
+
+def test_unignore_dry_run_orphan_marker_does_not_mutate(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The orphan-marker recovery path honors --dry-run."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    fake_markers.set_ignored(target)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(target), "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "would clear marker" in result.output
+    # Marker still set — dry-run honored.
+    assert fake_markers.is_ignored(target)
+
+
+# ---------------------------------------------------------------------------
 # Codex P2 Fix 1 regression: unignore resolves canonical cache key to disk
 # ---------------------------------------------------------------------------
 

@@ -141,8 +141,21 @@ def format_literal_rule(target: Path, rule_file: Path) -> str:
 
 
 def _escape_segment(segment: str) -> str:
-    """Backslash-escape gitignore inline meta-chars in one path segment."""
-    return "".join("\\" + c if c in _META_CHARS_INLINE else c for c in segment)
+    """Backslash-escape gitignore inline meta-chars in one path segment.
+
+    Also escapes trailing whitespace per gitignore's "trailing spaces are
+    ignored unless quoted with backslash" rule — without this, a file named
+    ``foo `` would produce rule ``foo `` that pathspec parses as matching
+    ``foo``, not ``foo ``. Applies to every segment uniformly: harmless for
+    mid-path segments (the next ``/`` separator already prevents trailing-space
+    strip) and load-bearing for the last segment when the target is a file.
+    """
+    escaped = "".join("\\" + c if c in _META_CHARS_INLINE else c for c in segment)
+    stripped = escaped.rstrip(" ")
+    if stripped != escaped:
+        trailing = len(escaped) - len(stripped)
+        escaped = stripped + "\\ " * trailing
+    return escaped
 
 
 _FILE_HEADER = "# .dropboxignore — managed by dbxignore\n"

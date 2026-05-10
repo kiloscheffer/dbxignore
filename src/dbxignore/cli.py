@@ -167,6 +167,28 @@ def _select_rule_file(target: Path, root: Path) -> Path:
     return root / IGNORE_FILENAME
 
 
+def _resolve_canonical_to_disk(canonical_path: Path) -> Path:
+    """Return the actual on-disk rule file matching ``canonical_path``.
+
+    ``canonical_path`` uses the lowercase ``IGNORE_FILENAME`` (per
+    ``RuleCache``'s cache-key normalization). On case-sensitive filesystems
+    with a mixed-case rule file (e.g. ``.DropboxIgnore``), ``canonical_path``
+    does not exist on disk; this helper scans the parent dir for any
+    rule-file casing and returns the matching path. If no rule file is found
+    (e.g. the file vanished), returns ``canonical_path`` unchanged so the
+    caller's file-not-found handling still fires.
+    """
+    if canonical_path.is_file():
+        return canonical_path
+    try:
+        for entry in canonical_path.parent.iterdir():
+            if is_ignore_filename(entry.name) and entry.is_file():
+                return entry
+    except OSError:
+        pass
+    return canonical_path
+
+
 def _resolve_gitignore_arg(path: Path) -> Path:
     """Resolve a `generate` argument to an actual file.
 
@@ -934,11 +956,21 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
         click.echo("Remove these manually if you want to unignore this path.", err=True)
         sys.exit(2)
 
+    # Resolve canonical cache-key paths to actual on-disk paths once.  On a
+    # case-sensitive FS where the rule file is named `.DropboxIgnore`, the
+    # cache stores it under the lowercase canonical key, so `Match.ignore_file`
+    # is `<parent>/.dropboxignore` — a path that does not exist on disk.
+    # `_resolve_canonical_to_disk` scans the parent dir for any rule-file
+    # casing and returns the real path so `remove_rule` can open the file.
+    on_disk_per_match: dict[rules.Match, Path] = {
+        m: _resolve_canonical_to_disk(m.ignore_file) for m in removable
+    }
+
     # Confirmation
     if dry_run:
         files_to_preview: dict[Path, list[rules.Match]] = {}
         for m in removable:
-            files_to_preview.setdefault(m.ignore_file, []).append(m)
+            files_to_preview.setdefault(on_disk_per_match[m], []).append(m)
         for ignore_file, matches_in_file in files_to_preview.items():
             for m in matches_in_file:
                 click.echo(f"would remove {m.pattern.rstrip()!r} from {ignore_file}")
@@ -967,19 +999,20 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
     # Rules first, then marker: a marker-first clear would race the daemon's
     # OTHER-event 500ms debounce window — the daemon would see the still-present
     # rule and re-set the marker spuriously, producing visible marker-flap.
+    expected_files = set(on_disk_per_match.values())
     affected_files: set[Path] = set()
     for m in removable:
+        on_disk_path = on_disk_per_match[m]
         try:
-            removed_count = rules.remove_rule(m.ignore_file, m.pattern)
+            removed_count = rules.remove_rule(on_disk_path, m.pattern)
         except OSError as exc:
             click.echo(
-                f"Failed to write {m.ignore_file}: {exc}.",
+                f"Failed to write {on_disk_path}: {exc}.",
                 err=True,
             )
             sys.exit(2)
         if removed_count > 0:
-            affected_files.add(m.ignore_file)
-    expected_files = {m.ignore_file for m in removable}
+            affected_files.add(on_disk_path)
     missing = expected_files - affected_files
     if missing:
         missing_str = ", ".join(str(f) for f in sorted(missing))

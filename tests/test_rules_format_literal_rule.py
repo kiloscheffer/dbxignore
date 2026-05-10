@@ -110,3 +110,20 @@ def test_target_must_be_under_rule_file_parent(tmp_path: Path) -> None:
     target.mkdir(parents=True)
     with pytest.raises(ValueError):
         format_literal_rule(target, rule_file)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows filesystems forbid trailing spaces in filenames",
+)
+def test_file_target_with_trailing_space_escaped(tmp_path: Path) -> None:
+    """Codex P2 regression: a file named ``foo `` (trailing space) must produce
+    rule ``/foo\\ `` (escaped) so pathspec does not strip the space and fail to
+    match the literal target.  Without escaping, the marker is set on ``foo ``
+    but the rule matches ``foo`` only — the daemon clears the marker on next
+    sweep."""
+    rule_file = tmp_path / ".dropboxignore"
+    rule_file.touch()
+    target = tmp_path / "foo "
+    target.touch()
+    assert format_literal_rule(target, rule_file) == r"/foo\ "

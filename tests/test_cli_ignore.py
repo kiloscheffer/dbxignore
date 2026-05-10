@@ -740,3 +740,34 @@ def test_unignore_refuses_dropboxignore_filename(
     result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
     assert result.exit_code == 2
     assert ".dropboxignore" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Codex P2 Fix 1 regression: unignore resolves canonical cache key to disk
+# ---------------------------------------------------------------------------
+
+
+def test_unignore_handles_mixed_case_rule_file_on_disk(
+    tmp_path: Path,
+    fake_markers: FakeMarkers,
+    monkeypatch: pytest.MonkeyPatch,
+    require_case_sensitive_fs: None,
+) -> None:
+    """Codex P2 regression: on a case-sensitive FS with only ``.DropboxIgnore``
+    on disk, ``RuleCache`` stores it under the canonical lowercase cache key,
+    so ``Match.ignore_file`` refers to a non-existent path.  The verb must
+    resolve canonical-to-disk before calling ``remove_rule``, otherwise
+    ``unignore`` cannot undo paths whose rule lives in a mixed-case file."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    mixed_case_rule_file = root / ".DropboxIgnore"
+    mixed_case_rule_file.write_text("/build/\n", encoding="utf-8")
+    fake_markers.set_ignored(target)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
+    assert result.exit_code == 0, result.output
+    # Rule removed from the actual on-disk file (.DropboxIgnore), not a phantom canonical.
+    assert "/build/" not in mixed_case_rule_file.read_text(encoding="utf-8")
+    # Marker cleared.
+    assert not fake_markers.is_ignored(target)

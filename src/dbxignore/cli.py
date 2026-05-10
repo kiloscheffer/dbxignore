@@ -240,6 +240,54 @@ def _resolve_canonical_to_disk(canonical_path: Path) -> Path:
     return canonical_path
 
 
+def _matches_target_directly(target: Path, matches: list[rules.Match]) -> bool:
+    """Return True if at least one non-negation rule's pattern matches the
+    target path directly (not via subtree pruning from an ancestor match).
+
+    For the half-state recovery decision: ancestor coverage (rule matches a
+    parent directory and Dropbox prunes the subtree) means the daemon would
+    NOT create a child marker — we shouldn't either. Direct match (rule
+    pattern matches the target path itself) means the daemon WOULD set the
+    marker on next reconcile — we should mirror that synchronously.
+
+    The distinction: if a rule matches some strict ancestor of target (between
+    ignore_file.parent and target.parent), the match on target is via subtree
+    inheritance — ancestor coverage. If no strict ancestor is matched, the rule
+    directly targets the path.
+    """
+    import pathspec as _pathspec
+
+    for m in matches:
+        if m.negation:
+            continue
+        try:
+            relative = target.relative_to(m.ignore_file.parent)
+        except ValueError:
+            continue  # match's ignore_file isn't an ancestor; skip
+        spec = _pathspec.PathSpec.from_lines(rules._CaseInsensitiveGitIgnorePattern, [m.pattern])
+        # Check if any strict ancestor (between ignore_file.parent and target.parent)
+        # is matched by this rule. If so, the match on target is via subtree pruning.
+        # Walk from the immediate child of ignore_file.parent up to (but not including)
+        # target itself. relative.parts gives e.g. ("parent", "child") for parent/child;
+        # we iterate prefixes ("parent",) to test ancestor paths.
+        ancestor_matched = False
+        parts = relative.parts
+        for i in range(1, len(parts)):
+            ancestor_rel_str = "/".join(parts[:i]) + "/"
+            if spec.match_file(ancestor_rel_str):
+                ancestor_matched = True
+                break
+        if ancestor_matched:
+            continue  # ancestor coverage only; daemon prunes, we skip
+        # No strict ancestor is matched — the rule targets the path directly.
+        rel_str = str(relative).replace("\\", "/")
+        if target.is_dir() and not target.is_symlink():
+            rel_str += "/"
+        if spec.match_file(rel_str):
+            return True
+    return False
+
+
 def _resolve_gitignore_arg(path: Path) -> Path:
     """Resolve a `generate` argument to an actual file.
 
@@ -907,11 +955,25 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
         if via_us_match is not None:
             click.echo(f"{path} is already ignored.")
             file_with_rule = via_us_match.ignore_file
+            should_recover_marker = True
+        else:
+            blocker = matches[0]
+            click.echo(
+                f"{path} is already covered by {blocker.pattern.rstrip()!r} "
+                f"in {blocker.ignore_file}; not adding redundant rule."
+            )
+            file_with_rule = blocker.ignore_file
+            # Distinguish direct match (rule pattern matches the target path
+            # itself) from ancestor coverage (rule matches only a parent
+            # directory; subtree pruning applies). For direct matches the
+            # daemon would set the marker on the target via reconcile; we
+            # set it synchronously here. For ancestor coverage the daemon
+            # prunes below the parent and never creates a child marker; we
+            # follow the same convention and skip.
+            should_recover_marker = _matches_target_directly(target, matches)
+        if should_recover_marker:
             # Half-state recovery: ensure marker is set even if rule was already
-            # on disk. Only applies when the rule literally targets this path
-            # (via_us_match) — for ancestor-coverage-only matches, the daemon
-            # prunes below ignored ancestors and would never create the child
-            # marker, so we shouldn't either.
+            # on disk.
             try:
                 already_marked = markers.is_ignored(target)
             except OSError as exc:
@@ -950,15 +1012,6 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
                         )
                         sys.exit(2)
                     click.echo(f"Set marker on {target}.")
-        else:
-            blocker = matches[0]
-            click.echo(
-                f"{path} is already covered by {blocker.pattern.rstrip()!r} "
-                f"in {blocker.ignore_file}; not adding redundant rule."
-            )
-            # NOTE: no half-state recovery here. The daemon prunes below
-            # ignored ancestors and would never create a child marker; we
-            # follow the same convention.
         return
 
     # Confirmation

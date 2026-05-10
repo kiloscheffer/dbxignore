@@ -150,6 +150,10 @@ def test_ignore_half_state_marker_missing(
 def test_ignore_redundant_when_wildcard_already_matches(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The wildcard `**/build/` directly matches `proj/build/` — the daemon
+    would set the marker on next reconcile, so the half-state recovery MUST
+    set it synchronously. The marker IS set because the wildcard rule directly
+    matches the target path (not via ancestor pruning) — the daemon would too."""
     root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
     proj = root / "proj"
     proj.mkdir()
@@ -163,10 +167,9 @@ def test_ignore_redundant_when_wildcard_already_matches(
     assert "already covered" in result.output
     content = (proj / IGNORE_FILENAME).read_text(encoding="utf-8")
     assert content == "**/build/\n"  # unchanged
-    # Ancestor-coverage match only (via_us_match=None): no child marker written.
-    # The daemon prunes below ignored ancestors and never creates child-level
-    # markers, so the verb follows the same convention (Fix 2 / Codex P2).
-    assert not fake_markers.is_ignored(target)
+    # Marker IS set: the wildcard directly matches the target, so the daemon
+    # would set the marker on next reconcile; we mirror that synchronously.
+    assert fake_markers.is_ignored(target)
 
 
 def test_ignore_rejects_nonexistent_path(
@@ -1198,6 +1201,37 @@ def test_ignore_does_not_set_child_marker_under_ancestor_rule(
     )
     # No new rule added either.
     assert (root / IGNORE_FILENAME).read_text(encoding="utf-8") == "/parent/\n"
+
+
+# ---------------------------------------------------------------------------
+# Codex P2 regression: direct wildcard match vs ancestor coverage distinction
+# ---------------------------------------------------------------------------
+
+
+def test_ignore_sets_marker_for_wildcard_direct_match(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 regression: when a wildcard rule directly matches the target
+    (e.g., `**/build/` matches `proj/build/`), the half-state recovery must
+    set the marker — the daemon would too on next reconcile. Round-12's blanket
+    skip for "already covered by other rule" was over-broad: ancestor coverage
+    (subtree pruning) and direct-wildcard-match are distinguishable, and only
+    the former should skip."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    proj = root / "proj"
+    proj.mkdir()
+    target = proj / "build"
+    target.mkdir()
+    # Wildcard rule that directly matches the target.
+    (proj / IGNORE_FILENAME).write_text("**/build/\n", encoding="utf-8")
+    # Marker is missing.
+    assert not fake_markers.is_ignored(target)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(target), "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "already covered" in result.output
+    # Marker IS set — direct wildcard match on the target.
+    assert fake_markers.is_ignored(target)
 
 
 # ---------------------------------------------------------------------------

@@ -102,6 +102,31 @@ def _load_cache(roots: list[Path]) -> RuleCache:
     return cache
 
 
+def _validate_target_under_root(path: Path) -> tuple[Path, Path, list[Path]]:
+    """Resolve ``path``, verify it exists and is under a discovered Dropbox root.
+
+    Exits 2 with a user-friendly message if any check fails. Returns
+    ``(target, root, discovered)`` where ``target`` is the resolved path,
+    ``root`` is the Dropbox root containing it, and ``discovered`` is the
+    full list of roots. Used by ``ignore`` and ``unignore``; ``apply`` and
+    ``clear`` accept paths but don't pre-check existence so they don't share
+    this helper.
+    """
+    target = path.resolve()
+    if not target.exists():
+        click.echo(f"Path {path} does not exist.", err=True)
+        sys.exit(2)
+    discovered = _discover_roots()
+    if not discovered:
+        click.echo("No Dropbox roots found. Is Dropbox installed?", err=True)
+        sys.exit(2)
+    root = find_containing(target, discovered)
+    if root is None:
+        click.echo(f"Path {path} is not under any Dropbox root.", err=True)
+        sys.exit(2)
+    return target, root, discovered
+
+
 def _select_rule_file(target: Path, root: Path) -> Path:
     """Return the closest ``.dropboxignore`` ancestor of ``target`` under ``root``.
 
@@ -115,7 +140,7 @@ def _select_rule_file(target: Path, root: Path) -> Path:
     calling.
     """
     current = target.parent
-    while current != root.parent:  # walk up to and including root
+    while current != root.parent:
         candidate = current / IGNORE_FILENAME
         if candidate.is_file():
             return candidate
@@ -728,21 +753,7 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
     ignore marker on <PATH> in one synchronous invocation. Idempotent —
     safe to re-call.
     """
-    target = path.resolve()
-    if not target.exists():
-        click.echo(f"Path {path} does not exist.", err=True)
-        sys.exit(2)
-
-    discovered = _discover_roots()
-    if not discovered:
-        click.echo("No Dropbox roots found. Is Dropbox installed?", err=True)
-        sys.exit(2)
-
-    root = find_containing(target, discovered)
-    if root is None:
-        click.echo(f"Path {path} is not under any Dropbox root.", err=True)
-        sys.exit(2)
-
+    target, root, discovered = _validate_target_under_root(path)
     cache = _load_cache(discovered)
     rule_file = _select_rule_file(target, root)
     canonical = rules.format_literal_rule(target, rule_file)
@@ -751,7 +762,7 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
     if cache.match(target):
         matches = [m for m in cache.explain(target) if not m.is_dropped]
         via_us_match = next(
-            (m for m in matches if m.pattern.rstrip() == canonical.rstrip()),
+            (m for m in matches if m.pattern.rstrip() == canonical),
             None,
         )
         if via_us_match is not None:
@@ -808,8 +819,9 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
             click.echo("Aborted.")
             return
 
-    # Mutation: rule first, then marker (avoids the daemon-race documented
-    # in the spec § Order of operations).
+    # Rule first, then marker: a marker-first write would race the daemon's
+    # OTHER-event 500ms debounce window (it'd see a marker the rules don't
+    # justify and clear it spuriously).
     try:
         rules.append_rule(rule_file, canonical)
     except OSError as exc:
@@ -854,41 +866,22 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
     <PATH> is also matched by a wildcard or non-literal rule, refuses
     to mutate and names the blocking rule.
     """
-    target = path.resolve()
-    if not target.exists():
-        click.echo(f"Path {path} does not exist.", err=True)
-        sys.exit(2)
-
-    discovered = _discover_roots()
-    if not discovered:
-        click.echo("No Dropbox roots found. Is Dropbox installed?", err=True)
-        sys.exit(2)
-
-    root = find_containing(target, discovered)
-    if root is None:
-        click.echo(f"Path {path} is not under any Dropbox root.", err=True)
-        sys.exit(2)
-
+    target, _root, discovered = _validate_target_under_root(path)
     cache = _load_cache(discovered)
 
     if not cache.match(target):
         click.echo(f"{path} is not ignored; nothing to do.")
         return
 
-    # Find all rules that match the target. Each Match has ignore_file +
-    # line + pattern. is_dropped matches are inert (under an ignored ancestor),
-    # so we only consider non-dropped matches as blockers/removable.
+    # Non-dropped matches only — is_dropped rules are inert under an ignored ancestor.
     matches = [m for m in cache.explain(target) if not m.is_dropped]
 
-    # Compute canonical rule for each candidate ancestor file.
     canonical_per_file: dict[Path, str] = {}
     for m in matches:
         if m.ignore_file not in canonical_per_file:
             canonical_per_file[m.ignore_file] = rules.format_literal_rule(target, m.ignore_file)
 
-    removable = [
-        m for m in matches if m.pattern.rstrip() == canonical_per_file[m.ignore_file].rstrip()
-    ]
+    removable = [m for m in matches if m.pattern.rstrip() == canonical_per_file[m.ignore_file]]
     blockers = [m for m in matches if m not in removable]
 
     if blockers:
@@ -900,20 +893,24 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
 
     # Confirmation
     if dry_run:
+        files_to_preview: dict[Path, list[rules.Match]] = {}
         for m in removable:
-            click.echo(f"would remove {m.pattern.rstrip()!r} from {m.ignore_file}")
-            # Preview whether removing this leaves the file comment-only.
+            files_to_preview.setdefault(m.ignore_file, []).append(m)
+        for ignore_file, matches_in_file in files_to_preview.items():
+            for m in matches_in_file:
+                click.echo(f"would remove {m.pattern.rstrip()!r} from {ignore_file}")
+            # Preview whether removing all rules in this file leaves it comment-only.
             try:
-                content = m.ignore_file.read_text(encoding="utf-8")
+                content = ignore_file.read_text(encoding="utf-8")
             except OSError:
                 continue
-            target_norm = m.pattern.rstrip()
-            kept = [line for line in content.splitlines() if line.rstrip() != target_norm]
+            target_norms = {m.pattern.rstrip() for m in matches_in_file}
+            kept = [line for line in content.splitlines() if line.rstrip() not in target_norms]
             non_trivial = [
                 line for line in kept if line.strip() and not line.strip().startswith("#")
             ]
             if not non_trivial:
-                click.echo(f"  ({m.ignore_file} would contain only comments after removal)")
+                click.echo(f"  ({ignore_file} would contain only comments after removal)")
         click.echo(f"would clear marker on {target}")
         return
 
@@ -924,7 +921,9 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
             click.echo("Aborted.")
             return
 
-    # Mutation: rules first, then marker.
+    # Rules first, then marker: same ordering as ignore — rule-first avoids
+    # the daemon's OTHER-event debounce window clearing a marker the rules
+    # no longer justify before the rule removal is on disk.
     affected_files: set[Path] = set()
     for m in removable:
         try:

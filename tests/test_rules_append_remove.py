@@ -113,3 +113,14 @@ def test_remove_when_file_does_not_exist_returns_zero(tmp_path: Path) -> None:
     removed = remove_rule(rule_file, "build/")
     assert removed == 0
     assert not rule_file.exists()
+
+
+def test_append_to_existing_empty_file_starts_on_line_1(tmp_path: Path) -> None:
+    """Regression: empty existing rule file (e.g., touched by user) was producing
+    a leading blank line on first append. The empty-existing case must be
+    treated like a missing file — write header + rule, no leading blank."""
+    rule_file = tmp_path / ".dropboxignore"
+    rule_file.touch()  # empty file exists
+    appended = append_rule(rule_file, "build/")
+    assert appended is True
+    assert rule_file.read_text(encoding="utf-8") == HEADER + "build/\n"

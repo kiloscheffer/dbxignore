@@ -80,6 +80,14 @@ def _resolve_to_canonical_sibling(ignore_file: Path) -> Path:
     return ignore_file
 
 
+# Why not pathspec's GitIgnoreSpecPattern.escape()? It escapes `!` and `#`
+# everywhere, but gitignore only treats them specially at column 0 of the
+# whole line. Per-segment use of escape() would over-escape (e.g.
+# proj/!subdir/ would become proj/\!subdir/), correct-but-noisy. The
+# split design here matches gitignore semantics exactly: per-segment
+# escape for inline meta-chars (*, ?, [, ], \), then a separate
+# leading-segment guard for ! and # that fires only on the first segment.
+#
 # gitignore meta-chars that need backslash-escaping when our rule generator
 # encounters them as literal directory-name characters. The set tracks
 # pathspec.GitIgnoreSpec's interpretation: `*` and `?` are wildcards, `[`
@@ -150,10 +158,16 @@ def append_rule(rule_file: Path, rule_line: str) -> bool:
         existing_lines = content.splitlines()
         if any(line.rstrip() == target_norm for line in existing_lines):
             return False
-        # Ensure the existing content ends with a newline so our appended
-        # line lands on its own line. ``splitlines()`` already ate a trailing
-        # newline if present, so we always rebuild with explicit \n joins.
-        new_content = "\n".join(existing_lines) + "\n" + rule_line + "\n"
+        if existing_lines:
+            # Ensure the existing content ends with a newline so our appended
+            # line lands on its own line. ``splitlines()`` already ate a
+            # trailing newline if present, so we always rebuild with explicit
+            # \n joins.
+            new_content = "\n".join(existing_lines) + "\n" + rule_line + "\n"
+        else:
+            # Empty file — treat like a missing file and write header + rule
+            # so the output doesn't start with a leading blank line.
+            new_content = _FILE_HEADER + rule_line + "\n"
     else:
         new_content = _FILE_HEADER + rule_line + "\n"
 

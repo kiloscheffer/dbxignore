@@ -452,8 +452,7 @@ def test_ignore_dry_run_does_not_mutate_in_half_state(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Half-state (rule on disk, marker missing) + --dry-run: must NOT mutate
-    the marker. Caught by Final Review Finding 1 — the half-state branch's
-    early return previously bypassed the --dry-run check."""
+    the marker."""
     root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
     target = root / "build"
     target.mkdir()
@@ -470,9 +469,9 @@ def test_ignore_dry_run_does_not_mutate_in_half_state(
 def test_ignore_marker_oserror_exits_2_with_message(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """ENOTSUP / FAT32 case (Final Review Finding 2): marker write fails;
-    rule is on disk; verb exits 2 with a user-friendly message that names
-    both the failure cause and the daemon's eventual recovery path."""
+    """ENOTSUP / FAT32 case: marker write fails; rule is on disk; verb exits 2
+    with a user-friendly message that names both the failure cause and the
+    daemon's eventual recovery path."""
     import errno
 
     root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
@@ -554,7 +553,7 @@ def test_unignore_then_synthetic_rules_event_no_spurious_mutation(
     """Symmetric to test_ignore_then_..._no_spurious_mutation: after `unignore`
     completes, a synthetic RULES event reconciling the watched root
     must not trigger a mark-or-clear. Validates rule-first-then-marker order
-    in the inverse direction (Final Review test gap, filed by the PR review)."""
+    in the inverse direction."""
     root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
     target = root / "build"
     target.mkdir()

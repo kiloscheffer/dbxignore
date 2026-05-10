@@ -137,4 +137,53 @@ phase_extended_cli() {
         sed 's/^/    /' /tmp/dbx-clear.out
     fi
     assert_xattr_unset "$T/build/foo.tmp" "4n — clear removed build/foo.tmp marker"
+
+    # 4o — dbxignore ignore <path> happy path (PR #<N>)
+    note "4o — dbxignore ignore (basic)"
+    local target_4o="$DROPBOX_DIR/dbxignore_test_4o"
+    rm -rf "$target_4o"; mkdir -p "$target_4o"
+    if dbxignore ignore "$target_4o" --yes >/tmp/dbx-ignore.out 2>&1; then
+        pass "4o — ignore (rc=0)"
+    else
+        fail "4o — ignore"
+        sed 's/^/    /' /tmp/dbx-ignore.out
+    fi
+    if grep -q 'dbxignore_test_4o/' "$DROPBOX_DIR/.dropboxignore" 2>/dev/null; then
+        pass "4o — rule appended to $DROPBOX_DIR/.dropboxignore"
+    else
+        fail "4o — rule not appended to $DROPBOX_DIR/.dropboxignore"
+    fi
+    assert_xattr_set "$target_4o" "4o — marker set on target"
+
+    # 4p — dbxignore unignore <path> happy path (PR #<N>)
+    note "4p — dbxignore unignore (basic)"
+    if dbxignore unignore "$target_4o" --yes >/tmp/dbx-unignore.out 2>&1; then
+        pass "4p — unignore (rc=0)"
+    else
+        fail "4p — unignore"
+        sed 's/^/    /' /tmp/dbx-unignore.out
+    fi
+    if grep -q 'dbxignore_test_4o/' "$DROPBOX_DIR/.dropboxignore" 2>/dev/null; then
+        fail "4p — rule still present in $DROPBOX_DIR/.dropboxignore"
+    else
+        pass "4p — rule removed from $DROPBOX_DIR/.dropboxignore"
+    fi
+    assert_xattr_unset "$target_4o" "4p — marker cleared on target"
+    rm -rf "$target_4o"
+
+    # 4q — dbxignore unignore wildcard collision (PR #<N>)
+    note "4q — dbxignore unignore refuses wildcard blocker"
+    local target_4q="$DROPBOX_DIR/dbxignore_test_4q"
+    rm -rf "$target_4q"; mkdir -p "$target_4q"
+    printf 'dbxignore_test_4q/\n**/dbxignore_test_4q/\n' >> "$DROPBOX_DIR/.dropboxignore"
+    sleep 0.5  # let daemon's RULES debouncer process the edit
+    if dbxignore unignore "$target_4q" --yes >/tmp/dbx-4q.out 2>&1; then
+        fail "4q — unignore should have refused (wildcard blocker present)"
+    else
+        pass "4q — unignore refused with wildcard blocker"
+    fi
+    # Cleanup: remove the two test rules from .dropboxignore.
+    grep -v 'dbxignore_test_4q/' "$DROPBOX_DIR/.dropboxignore" > /tmp/dbx-4q-clean.tmp \
+        && mv /tmp/dbx-4q-clean.tmp "$DROPBOX_DIR/.dropboxignore"
+    rm -rf "$target_4q"
 }

@@ -355,6 +355,9 @@ def test_unignore_fails_loud_when_only_wildcard_matches(
     result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
     assert result.exit_code == 2
     assert "is also matched by" in result.output
+    # Rule file unchanged; marker still set.
+    assert (proj / IGNORE_FILENAME).read_text(encoding="utf-8") == "**/build/\n"
+    assert fake_markers.is_ignored(target)
 
 
 def test_unignore_dry_run_does_not_mutate(

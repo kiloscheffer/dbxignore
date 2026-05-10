@@ -163,7 +163,10 @@ def test_ignore_redundant_when_wildcard_already_matches(
     assert "already covered" in result.output
     content = (proj / IGNORE_FILENAME).read_text(encoding="utf-8")
     assert content == "**/build/\n"  # unchanged
-    assert fake_markers.is_ignored(target)
+    # Ancestor-coverage match only (via_us_match=None): no child marker written.
+    # The daemon prunes below ignored ancestors and never creates child-level
+    # markers, so the verb follows the same convention (Fix 2 / Codex P2).
+    assert not fake_markers.is_ignored(target)
 
 
 def test_ignore_rejects_nonexistent_path(
@@ -1129,3 +1132,69 @@ def test_ignore_then_unignore_case_insensitive_match(
     # Rule removed (case-insensitive comparison classified it as removable).
     assert "/Build/" not in (root / IGNORE_FILENAME).read_text(encoding="utf-8")
     assert not fake_markers.is_ignored(target)
+
+
+# ---------------------------------------------------------------------------
+# Codex P2 fixes (PR #191): Linux-symlink scope + ancestor-only marker write
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="Linux-only: tests symlink target acceptance for unignore (rejected for ignore)",
+)
+def test_unignore_accepts_symlink_target_on_linux(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 regression: round-9 added a shared Linux-symlink-target
+    rejection in _validate_target_under_root, but it's only justified for
+    `ignore` (marker-write fails). `unignore` should be allowed to remove a
+    stale rule for a symlink target — clear_ignored is a no-op when no xattr
+    exists, no orphan-rule risk."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    inner = root / "inner"
+    inner.mkdir()
+    link = root / "link_to_inner"
+    link.symlink_to(inner)
+    # Pre-state: rule on disk for the symlink (could be stale, manually-added).
+    (root / IGNORE_FILENAME).write_text("/link_to_inner\n", encoding="utf-8")
+    fake_markers.set_ignored(link)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(link), "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "rule removed" in result.output
+    # Rule cleaned up.
+    content = (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert "/link_to_inner" not in content
+
+
+def test_ignore_does_not_set_child_marker_under_ancestor_rule(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 regression: when cache.match is True only because an ancestor
+    rule covers the subtree (e.g., `parent/` covers `parent/child`), the
+    half-state recovery should NOT write a marker on the child. The daemon
+    prunes below ignored ancestors and never creates child-level markers,
+    so writing one creates an artifact the daemon wouldn't produce, which
+    would survive `unignore parent/` until the next reconcile."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    parent = root / "parent"
+    parent.mkdir()
+    child = parent / "child"
+    child.mkdir()
+    # Ancestor rule covers the subtree; no rule on child specifically.
+    (root / IGNORE_FILENAME).write_text("/parent/\n", encoding="utf-8")
+    # Marker on parent (would be set by daemon's reconcile).
+    fake_markers.set_ignored(parent)
+    # No marker on child (daemon prunes below).
+    assert not fake_markers.is_ignored(child)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(child), "--yes"])
+    assert result.exit_code == 0, result.output
+    # Verb noted ancestor coverage. Did NOT add a child marker.
+    assert "already covered" in result.output
+    assert not fake_markers.is_ignored(child), (
+        "must not write a child marker — daemon doesn't create one under ignored ancestors"
+    )
+    # No new rule added either.
+    assert (root / IGNORE_FILENAME).read_text(encoding="utf-8") == "/parent/\n"

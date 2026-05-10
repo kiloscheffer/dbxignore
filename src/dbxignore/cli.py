@@ -170,19 +170,6 @@ def _validate_target_under_root(path: Path) -> tuple[Path, Path, list[Path]]:
                 err=True,
             )
             sys.exit(2)
-    # Reject symlink targets on Linux: the kernel refuses user.* xattrs on
-    # symlinks (EPERM), so the marker write would fail and the rule would be
-    # left orphaned (the daemon walks with followlinks=False). On macOS the
-    # NOFOLLOW xattr path works; on Windows ADS attaches to the reparse point.
-    if sys.platform.startswith("linux") and target.is_symlink():
-        click.echo(
-            f"error: {path} is a symlink; Linux's xattr backend cannot mark "
-            f"symlinks (kernel refuses user.* xattrs on symlinks with EPERM). "
-            f"Mark the symlink's target directly, or use macOS/Windows where "
-            f"the marker can attach to the link.",
-            err=True,
-        )
-        sys.exit(2)
     return target, root, discovered
 
 
@@ -865,6 +852,19 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
             err=True,
         )
         sys.exit(2)
+    # Linux's xattr backend cannot mark symlinks (kernel refuses user.* xattrs
+    # on symlinks with EPERM). Reject before writing the rule, so we don't
+    # leave an orphan rule with no marker. unignore doesn't need this guard
+    # — clear_ignored is a no-op when no xattr exists.
+    if sys.platform.startswith("linux") and target.is_symlink():
+        click.echo(
+            f"error: {path} is a symlink; Linux's xattr backend cannot mark "
+            f"symlinks (kernel refuses user.* xattrs on symlinks with EPERM). "
+            f"Mark the symlink's target directly, or use macOS/Windows where "
+            f"the marker can attach to the link.",
+            err=True,
+        )
+        sys.exit(2)
     cache = _load_cache(discovered)
     rule_file = _select_rule_file(target, root)
     try:
@@ -883,52 +883,58 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
         if via_us_match is not None:
             click.echo(f"{path} is already ignored.")
             file_with_rule = via_us_match.ignore_file
+            # Half-state recovery: ensure marker is set even if rule was already
+            # on disk. Only applies when the rule literally targets this path
+            # (via_us_match) — for ancestor-coverage-only matches, the daemon
+            # prunes below ignored ancestors and would never create the child
+            # marker, so we shouldn't either.
+            try:
+                already_marked = markers.is_ignored(target)
+            except OSError as exc:
+                click.echo(
+                    f"Could not read marker on {target}: {exc}. "
+                    f"The rule is in {file_with_rule}; the daemon will set the marker "
+                    f"when running on a filesystem that supports extended attributes.",
+                    err=True,
+                )
+                sys.exit(2)
+            if not already_marked:
+                if dry_run:
+                    click.echo(f"would set marker on {target}")
+                else:
+                    if not yes:
+                        click.echo(
+                            f"This will mark {target} ignored "
+                            f"(rule is already in {file_with_rule}, but the marker "
+                            f"is missing — daemon may not have run since rule was added)."
+                        )
+                        click.echo(
+                            "Dropbox will remove it from cloud Dropbox and from every "
+                            "other linked device. Local copies on this device are preserved."
+                        )
+                        if not click.confirm("Continue?"):
+                            click.echo("Aborted.")
+                            return
+                    try:
+                        markers.set_ignored(target)
+                    except OSError as exc:
+                        click.echo(
+                            f"Marker write failed on {target}: {exc}. "
+                            f"The rule was already in {file_with_rule}; the daemon will set the marker "
+                            f"when running on a filesystem that supports extended attributes.",
+                            err=True,
+                        )
+                        sys.exit(2)
+                    click.echo(f"Set marker on {target}.")
         else:
             blocker = matches[0]
             click.echo(
                 f"{path} is already covered by {blocker.pattern.rstrip()!r} "
                 f"in {blocker.ignore_file}; not adding redundant rule."
             )
-            file_with_rule = blocker.ignore_file
-        # Half-state recovery: ensure marker is set even if rule was already on disk.
-        try:
-            already_marked = markers.is_ignored(target)
-        except OSError as exc:
-            click.echo(
-                f"Could not read marker on {target}: {exc}. "
-                f"The rule is in {file_with_rule}; the daemon will set the marker "
-                f"when running on a filesystem that supports extended attributes.",
-                err=True,
-            )
-            sys.exit(2)
-        if not already_marked:
-            if dry_run:
-                click.echo(f"would set marker on {target}")
-            else:
-                if not yes:
-                    click.echo(
-                        f"This will mark {target} ignored "
-                        f"(rule is already in {file_with_rule}, but the marker "
-                        f"is missing — daemon may not have run since rule was added)."
-                    )
-                    click.echo(
-                        "Dropbox will remove it from cloud Dropbox and from every "
-                        "other linked device. Local copies on this device are preserved."
-                    )
-                    if not click.confirm("Continue?"):
-                        click.echo("Aborted.")
-                        return
-                try:
-                    markers.set_ignored(target)
-                except OSError as exc:
-                    click.echo(
-                        f"Marker write failed on {target}: {exc}. "
-                        f"The rule was already in {file_with_rule}; the daemon will set the marker "
-                        f"when running on a filesystem that supports extended attributes.",
-                        err=True,
-                    )
-                    sys.exit(2)
-                click.echo(f"Set marker on {target}.")
+            # NOTE: no half-state recovery here. The daemon prunes below
+            # ignored ancestors and would never create a child marker; we
+            # follow the same convention.
         return
 
     # Confirmation

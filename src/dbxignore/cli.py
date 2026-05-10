@@ -1067,7 +1067,15 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
         for m in matches
         if m.pattern.rstrip().casefold() == canonical_per_file[m.ignore_file].rstrip().casefold()
     ]
-    blockers = [m for m in matches if m not in removable]
+    # Simulate post-removal state via gitignore last-match-wins. cache.explain
+    # returns matches in evaluation order (root .dropboxignore first, then
+    # progressively-deeper files; within each file, top-to-bottom). After
+    # removing the canonical-equal rules, if the LAST remaining match is a
+    # negation (or no matches remain), the path becomes unignored — no
+    # blocker. Otherwise the last-remaining positive rule still ignores the
+    # path, so refuse and report the blockers for the user to fix manually.
+    remaining = [m for m in matches if m not in removable]
+    blockers = remaining if remaining and not remaining[-1].negation else []
 
     if blockers:
         click.echo(f"error: {path} is also matched by:", err=True)

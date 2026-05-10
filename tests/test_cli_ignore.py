@@ -396,6 +396,52 @@ def test_unignore_filters_dropped_negation_matches(
     assert "!foo/" not in result.output
 
 
+def test_unignore_succeeds_when_only_blocker_is_a_negation(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 regression: a negation rule preceding the literal rule that
+    currently ignores the path is NOT a blocker. Removing the literal rule
+    leaves the negation, which un-ignores the path."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    # Rules order matters: !build/ first, then /build/. Last match wins → ignored.
+    (root / IGNORE_FILENAME).write_text("!build/\n/build/\n", encoding="utf-8")
+    fake_markers.set_ignored(target)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
+    assert result.exit_code == 0, result.output
+    # The literal rule was removed; the negation stays.
+    content = (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert "/build/" not in content
+    assert "!build/" in content
+    assert not fake_markers.is_ignored(target)
+
+
+def test_unignore_blocks_when_positive_rule_remains_after_negation(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Companion test: a wildcard positive rule AFTER a negation IS a blocker
+    (last-match-wins; the wildcard wins). Removing the literal canonical rule
+    leaves wildcard + negation in original order, last is positive → blocker."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    # !build/ first, /build/ (canonical), then **/build/ (wildcard, last).
+    # Removing /build/ leaves !build/ then **/build/. Last = positive blocker.
+    (root / IGNORE_FILENAME).write_text("!build/\n/build/\n**/build/\n", encoding="utf-8")
+    fake_markers.set_ignored(target)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
+    assert result.exit_code == 2
+    assert "is also matched by" in result.output
+    # File unchanged.
+    content = (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert "!build/" in content
+    assert "/build/" in content
+    assert "**/build/" in content
+
+
 def test_unignore_dry_run_does_not_mutate(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:

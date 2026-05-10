@@ -218,6 +218,29 @@ def _select_rule_file(target: Path, root: Path) -> Path:
     return root / IGNORE_FILENAME
 
 
+def _check_rule_file_parses(rule_file: Path) -> str | None:
+    """Return None if ``rule_file`` parses cleanly (or doesn't exist yet),
+    otherwise the parse-error message.
+
+    Used by ``ignore``/``unignore`` to refuse mutating a `.dropboxignore`
+    that has invalid syntax (e.g., unterminated character class). Without
+    this guard, the verb's append/remove leaves the broken line in place
+    and the daemon's next reconcile drops the whole file from its cache,
+    silently undoing the verb's apparent success.
+    """
+    if not rule_file.is_file():
+        return None  # Will be created on append; not a parse error.
+    try:
+        lines = rule_file.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        return f"cannot read: {exc}"
+    try:
+        rules._build_spec(lines)
+    except (ValueError, TypeError, re.error) as exc:
+        return str(exc)
+    return None
+
+
 def _resolve_canonical_to_disk(canonical_path: Path) -> Path:
     """Return the actual on-disk rule file matching ``canonical_path``.
 
@@ -920,6 +943,14 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
         sys.exit(2)
     cache = _load_cache(discovered)
     rule_file = _select_rule_file(target, root)
+    parse_err = _check_rule_file_parses(rule_file)
+    if parse_err is not None:
+        click.echo(
+            f"error: existing rule file {rule_file} has invalid syntax: {parse_err}. "
+            f"Fix the file (or check the daemon log for context) before re-running.",
+            err=True,
+        )
+        sys.exit(2)
     try:
         canonical = rules.format_literal_rule(target, rule_file)
     except ValueError as exc:
@@ -1135,6 +1166,22 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
 
     # Non-dropped matches only — is_dropped rules are inert under an ignored ancestor.
     matches = [m for m in cache.explain(target) if not m.is_dropped]
+
+    # Validate that each rule file containing a match parses cleanly. A
+    # poisoned rule file would have been dropped from the cache, so its
+    # matches wouldn't be in the list — but if a match IS present, the
+    # file parsed successfully at cache-load time. The check below catches
+    # the TOCTOU case where the file has since become invalid (manually
+    # edited between cache load and mutation).
+    for m in matches:
+        parse_err = _check_rule_file_parses(m.ignore_file)
+        if parse_err is not None:
+            click.echo(
+                f"error: rule file {m.ignore_file} has invalid syntax: {parse_err}. "
+                f"Fix the file before re-running.",
+                err=True,
+            )
+            sys.exit(2)
 
     canonical_per_file: dict[Path, str] = {}
     for m in matches:

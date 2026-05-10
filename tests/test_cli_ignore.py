@@ -1322,3 +1322,82 @@ def test_unignore_accepts_broken_symlink(
     # Stale rule cleaned up.
     content = (root / IGNORE_FILENAME).read_text(encoding="utf-8")
     assert "/broken_link" not in content
+
+
+# ---------------------------------------------------------------------------
+# Codex P2 regression: refuse mutation when rule file has invalid syntax
+# ---------------------------------------------------------------------------
+
+
+def test_ignore_refuses_when_existing_rule_file_invalid(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 regression: an existing `.dropboxignore` with invalid syntax
+    is silently dropped from the rule cache, so cache.match returns False and
+    the verb would otherwise proceed to append a new rule and set the marker
+    — but the daemon will drop the file on reconcile too and clear the marker.
+    Surface the error and refuse before mutating.
+
+    pathspec is liberal and accepts most malformed patterns without raising
+    (see CLAUDE.md gotcha). Monkeypatch rules._build_spec to raise, as the
+    CLAUDE.md recommends for testing the (ValueError, TypeError, re.error) arm.
+    """
+    from dbxignore import rules
+
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    rule_file_content = "[bad-syntax\n"
+    (root / IGNORE_FILENAME).write_text(rule_file_content, encoding="utf-8")
+    target = root / "build"
+    target.mkdir()
+
+    # Simulate pathspec raising ValueError for the bad pattern.
+    def _raise_on_bad(lines: list[str]) -> object:
+        if any("bad-syntax" in (ln or "") for ln in lines):
+            raise ValueError("simulated: unterminated character class")
+        import pathspec
+
+        from dbxignore.rules import _CaseInsensitiveGitIgnorePattern
+
+        return pathspec.PathSpec.from_lines(_CaseInsensitiveGitIgnorePattern, lines)
+
+    monkeypatch.setattr(rules, "_build_spec", _raise_on_bad)
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(target), "--yes"])
+    assert result.exit_code == 2
+    assert "invalid syntax" in result.output
+    # No mutation: file unchanged, no marker set.
+    assert (root / IGNORE_FILENAME).read_text(encoding="utf-8") == rule_file_content
+    assert not fake_markers.is_ignored(target)
+
+
+def test_unignore_refuses_when_match_file_invalid(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Companion test for unignore: TOCTOU-style scenario where a rule file
+    parses fine at cache-load but is mutated to invalid before the mutation
+    step. We verify the symmetric behavior — refuse to mutate."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    rule_file = root / IGNORE_FILENAME
+    rule_file.write_text("/build/\n", encoding="utf-8")
+    fake_markers.set_ignored(target)
+
+    # After cache load, simulate the rule file becoming invalid mid-flight.
+    real_check = cli._check_rule_file_parses
+
+    def faulty_check(path: Path) -> str | None:
+        if path == rule_file:
+            return "simulated TOCTOU parse error"
+        return real_check(path)
+
+    monkeypatch.setattr(cli, "_check_rule_file_parses", faulty_check)
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
+    assert result.exit_code == 2
+    assert "invalid syntax" in result.output
+    # No mutation: file unchanged, marker still set.
+    assert rule_file.read_text(encoding="utf-8") == "/build/\n"
+    assert fake_markers.is_ignored(target)

@@ -471,8 +471,8 @@ def test_ignore_rejects_newline_in_path_component(
 
 
 @pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="Windows symlink creation requires admin privileges",
+    sys.platform != "darwin",
+    reason="symlinks-as-target only supported on macOS (Linux refuses user.* xattrs on symlinks; Windows symlink creation requires admin)",
 )
 def test_ignore_preserves_symlink_path(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
@@ -502,8 +502,8 @@ def test_ignore_preserves_symlink_path(
 
 
 @pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="Windows symlink creation requires admin privileges",
+    sys.platform != "darwin",
+    reason="symlinks-as-target only supported on macOS (Linux refuses user.* xattrs on symlinks; Windows symlink creation requires admin)",
 )
 def test_ignore_symlink_target_inside_dropbox_marks_link_not_target(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
@@ -989,6 +989,33 @@ def test_ignore_rejects_path_under_symlinked_ancestor(
     assert "symlinked ancestor" in result.output
     # No mutation: marker not set, no rule file mutated.
     assert not fake_markers.is_ignored(target_via_link)
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="Linux-only: kernel refuses user.* xattrs on symlinks",
+)
+def test_ignore_rejects_symlink_target_on_linux(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 regression: on Linux, symlink targets must be rejected at
+    validation time. Otherwise the verb would write the rule successfully but
+    fail the marker write (EPERM), and the daemon (followlinks=False) would
+    never recover the orphan rule."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    inner = root / "inner"
+    inner.mkdir()
+    link = root / "link_to_inner"
+    link.symlink_to(inner)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(link), "--yes"])
+    assert result.exit_code == 2
+    assert "is a symlink" in result.output
+    assert "EPERM" in result.output
+    # No mutation: rule file not created, marker not set on link or target.
+    assert not (root / IGNORE_FILENAME).exists()
+    assert not fake_markers.is_ignored(link)
+    assert not fake_markers.is_ignored(inner)
 
 
 def test_ignore_then_unignore_case_insensitive_match(

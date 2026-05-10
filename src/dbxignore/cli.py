@@ -150,6 +150,19 @@ def _validate_target_under_root(path: Path) -> tuple[Path, Path, list[Path]]:
                 err=True,
             )
             sys.exit(2)
+    # Reject symlink targets on Linux: the kernel refuses user.* xattrs on
+    # symlinks (EPERM), so the marker write would fail and the rule would be
+    # left orphaned (the daemon walks with followlinks=False). On macOS the
+    # NOFOLLOW xattr path works; on Windows ADS attaches to the reparse point.
+    if sys.platform.startswith("linux") and target.is_symlink():
+        click.echo(
+            f"error: {path} is a symlink; Linux's xattr backend cannot mark "
+            f"symlinks (kernel refuses user.* xattrs on symlinks with EPERM). "
+            f"Mark the symlink's target directly, or use macOS/Windows where "
+            f"the marker can attach to the link.",
+            err=True,
+        )
+        sys.exit(2)
     return target, root, discovered
 
 

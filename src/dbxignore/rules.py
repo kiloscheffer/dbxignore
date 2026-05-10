@@ -80,6 +80,194 @@ def _resolve_to_canonical_sibling(ignore_file: Path) -> Path:
     return ignore_file
 
 
+# Why not pathspec's GitIgnoreSpecPattern.escape()? It escapes `!` and `#`
+# everywhere, but gitignore only treats them specially at column 0 of the
+# whole line. Per-segment use of escape() would over-escape (e.g.
+# proj/!subdir/ would become proj/\!subdir/), correct-but-noisy. The
+# split design here matches gitignore semantics exactly: per-segment
+# escape for inline meta-chars (*, ?, [, ], \), then a separate
+# leading-segment guard for ! and # that fires only on the first segment.
+#
+# gitignore meta-chars that need backslash-escaping when our rule generator
+# encounters them as literal directory-name characters. The set tracks
+# pathspec.GitIgnoreSpec's interpretation: `*` and `?` are wildcards, `[`
+# and `]` delimit a character class, `\` is the escape char itself. `!` and
+# `#` only matter when they're the first non-whitespace character of the line
+# (negation marker / comment marker), so they're handled separately below.
+_META_CHARS_INLINE = frozenset("*?[]\\")
+
+
+def format_literal_rule(target: Path, rule_file: Path) -> str:
+    """Return a gitignore-anchored literal-path rule for ``target``.
+
+    The result is the rule line that, when written to ``rule_file``, matches
+    exactly ``target`` and no other path. Used by ``cli.ignore`` to compute
+    the rule to append, and by ``cli.unignore`` to compute the canonical
+    rule to compare against existing rules for removal.
+
+    Construction:
+
+    1. Compute ``target.relative_to(rule_file.parent)`` — raises ``ValueError``
+       if ``target`` is not under the rule file's directory (a caller bug;
+       rule-file selection should always pick an ancestor).
+    2. Escape gitignore inline meta-chars (``*``, ``?``, ``[``, ``]``, ``\\``)
+       per segment with a leading backslash.
+    3. If the FIRST segment starts with ``!`` (negation marker) or ``#``
+       (column-0 comment marker), prepend a backslash so pathspec parses
+       the line as an active pattern instead of a negation or comment.
+    4. Re-join segments with ``/`` (gitignore separator, regardless of
+       host OS) and prepend a leading ``/``.
+    5. If ``target.is_dir()``, append ``/`` to make the rule directory-only
+       (matches the directory itself, not all paths whose basename equals
+       the directory name).
+
+    The leading ``/`` anchors the rule to the rule file's directory. Without
+    it, a single-segment rule like ``build/`` matches every ``build/``
+    directory anywhere under the rule file's mount per gitignore's "no
+    separator before/within the pattern" semantics — Dropbox would mark
+    unrelated subtrees ignored. Multi-segment rules are already anchored by
+    their mid-pattern slash; the leading ``/`` is redundant but harmless for
+    them.
+    """
+    relative = target.relative_to(rule_file.parent)
+    parts = relative.parts
+    for p in parts:
+        # Reject any whitespace character except space. Newline-class
+        # separators (ASCII \r/\n/\v/\f, FS/GS/RS at \x1c-\x1e, NEL \x85,
+        # Unicode line separators U+2028/U+2029) would split the rule line
+        # via str.splitlines() at read-back time, effectively injecting
+        # extra rules. Tabs/FF/VT are silently stripped by pathspec at
+        # end-of-line with no reliable escape. Other Unicode whitespace
+        # (NBSP, etc.) has the same end-of-line strip risk. Space is the
+        # only whitespace gitignore can safely encode (via backslash escape
+        # in _escape_segment).
+        bad = sorted(c for c in set(p) if c.isspace() and c != " ")
+        if bad:
+            chars = ", ".join(repr(c) for c in bad)
+            raise ValueError(
+                f"path component {p!r} contains non-space whitespace ({chars}); "
+                "cannot be safely encoded as a gitignore rule"
+            )
+    escaped = [_escape_segment(p) for p in parts]
+    if escaped and escaped[0].startswith(("!", "#")):
+        escaped[0] = "\\" + escaped[0]
+    line = "/" + "/".join(escaped)
+    # Append trailing `/` only for real directories — NOT for symlinks
+    # (regardless of what they link to). Symlinks should produce rules
+    # matching the link object itself per the project's "markers attach
+    # to the link, not the target" invariant; gitignore's directory-only
+    # patterns (with trailing `/`) follow the link and match the target,
+    # which is the wrong semantic here.
+    if target.is_dir() and not target.is_symlink():
+        line += "/"
+    return line
+
+
+def _escape_segment(segment: str) -> str:
+    """Backslash-escape gitignore inline meta-chars in one path segment.
+
+    Also escapes trailing whitespace per gitignore's "trailing spaces are
+    ignored unless quoted with backslash" rule — without this, a file named
+    ``foo `` would produce rule ``foo `` that pathspec parses as matching
+    ``foo``, not ``foo ``. Applies to every segment uniformly: harmless for
+    mid-path segments (the next ``/`` separator already prevents trailing-space
+    strip) and load-bearing for the last segment when the target is a file.
+    """
+    escaped = "".join("\\" + c if c in _META_CHARS_INLINE else c for c in segment)
+    stripped = escaped.rstrip(" ")
+    if stripped != escaped:
+        trailing = len(escaped) - len(stripped)
+        escaped = stripped + "\\ " * trailing
+    return escaped
+
+
+_FILE_HEADER = "# .dropboxignore — managed by dbxignore\n"
+
+
+def append_rule(rule_file: Path, rule_line: str) -> bool:
+    """Atomic append of ``rule_line`` to ``rule_file``.
+
+    Always appends — does NOT deduplicate against existing identical lines.
+    A ``.dropboxignore`` may legitimately contain duplicate or masked rules
+    (e.g., ``/build/`` followed by a later ``!/build/`` then a re-anchor),
+    and gitignore's last-match-wins semantics depend on the order. Callers
+    should gate this via ``cache.match`` upstream — the CLI's ``ignore``
+    verb only calls this helper when the path is NOT currently ignored,
+    so an extra duplicate at the end is exactly what makes the rule take
+    effect (overriding any earlier negation).
+
+    Atomic via temp-then-replace, mirroring ``state.write()``: writes to
+    ``<rule_file>.tmp``, then ``os.replace`` into place. Survives SIGKILL
+    or power loss mid-write — the file is either fully updated or unchanged.
+    Not safe against concurrent writers; intended for serial CLI invocation.
+
+    Returns True. (The previous return-False idempotent-skip semantics were
+    removed because they masked the override-via-duplicate behavior gitignore
+    requires for negation-override.)
+    """
+    if rule_file.exists():
+        content = rule_file.read_text(encoding="utf-8")
+        existing_lines = content.splitlines()
+        if existing_lines:
+            # Ensure the existing content ends with a newline so our appended
+            # line lands on its own line. ``splitlines()`` already ate a
+            # trailing newline if present, so we always rebuild with explicit
+            # \n joins.
+            new_content = "\n".join(existing_lines) + "\n" + rule_line + "\n"
+        else:
+            # Empty file — treat like a missing file and write header + rule
+            # so the output doesn't start with a leading blank line.
+            new_content = _FILE_HEADER + rule_line + "\n"
+    else:
+        new_content = _FILE_HEADER + rule_line + "\n"
+
+    tmp = rule_file.with_suffix(rule_file.suffix + ".tmp")
+    try:
+        tmp.write_text(new_content, encoding="utf-8")
+        os.replace(tmp, rule_file)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+    return True
+
+
+def remove_rule(rule_file: Path, rule_line: str) -> int:
+    """Atomic remove-all-rstrip-matches of ``rule_line`` from ``rule_file``.
+
+    Returns the count of removed lines. Returns 0 (and does not error) if
+    the file doesn't exist or the line is not present. Atomic via
+    temp-then-replace; the file is either fully rewritten or untouched.
+    Not safe against concurrent writers; intended for serial CLI invocation.
+
+    rstrip-equality (rather than exact-string equality) tolerates manually-
+    typed rules with trailing whitespace, mirroring pathspec's
+    gitignore-trailing-whitespace semantics.
+    """
+    if not rule_file.exists():
+        logger.warning(
+            "remove_rule called against missing file %s; rule %r treated as already absent",
+            rule_file,
+            rule_line,
+        )
+        return 0
+    target_norm = rule_line.rstrip()
+    content = rule_file.read_text(encoding="utf-8")
+    existing_lines = content.splitlines()
+    kept = [line for line in existing_lines if line.rstrip() != target_norm]
+    removed_count = len(existing_lines) - len(kept)
+    if removed_count == 0:
+        return 0
+    new_content = "\n".join(kept) + ("\n" if kept else "")
+    tmp = rule_file.with_suffix(rule_file.suffix + ".tmp")
+    try:
+        tmp.write_text(new_content, encoding="utf-8")
+        os.replace(tmp, rule_file)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+    return removed_count
+
+
 class _CaseInsensitiveGitIgnorePattern(GitIgnoreSpecPattern):
     """GitIgnoreSpec pattern that compiles regex with re.IGNORECASE.
 

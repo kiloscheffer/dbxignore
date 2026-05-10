@@ -102,6 +102,215 @@ def _load_cache(roots: list[Path]) -> RuleCache:
     return cache
 
 
+def _validate_target_under_root(path: Path) -> tuple[Path, Path, list[Path]]:
+    """Normalize ``path`` and verify it exists under a discovered Dropbox root.
+
+    Exits 2 with a user-friendly message if any check fails. Returns
+    ``(target, root, discovered)`` where ``target`` is the normalized path,
+    ``root`` is the Dropbox root containing it, and ``discovered`` is the
+    full list of roots. Used by ``ignore`` and ``unignore``; ``apply`` and
+    ``clear`` accept paths but don't pre-check existence so they don't share
+    this helper.
+
+    ``path.absolute()`` is used instead of ``path.resolve()`` so that symlinks
+    are preserved — markers and rules apply to the link itself, not the link's
+    target (per the project's symlink invariant). ``os.path.normpath`` folds
+    ``..`` and ``.`` segments without following symlinks.
+
+    If the unresolved path is not under any Dropbox root, the validation
+    falls back to the resolved path — this handles out-of-Dropbox symlink
+    aliases that reach into Dropbox. For example, ``/alias/Dropbox/file``
+    where ``/alias`` symlinks to the actual Dropbox root will fail the
+    unresolved containment check (lexical prefix mismatch), then succeed
+    using the canonical resolved path.
+
+    Symlinked ancestors between ``target`` and ``root`` are rejected: the daemon
+    walks with ``followlinks=False`` and would never reconcile a path whose
+    ancestor resolves through a symlink, leaving the marker permanently orphaned.
+    Operating on the symlink itself is fine; only intermediate symlinks are
+    problematic.
+    """
+    # Path.absolute() preserves symlinks (round-4: the new verbs operate
+    # on the link itself, not its target). os.path.normpath folds `..`/`.`.
+    target_unresolved = Path(os.path.normpath(path.absolute()))
+    # `exists()` follows symlinks — a broken symlink would be rejected even
+    # though the link object itself exists and is what dbxignore manages.
+    # `os.path.lexists` checks the link itself, so broken symlinks pass.
+    # macOS xattrs attach via NOFOLLOW (work on link regardless of target);
+    # Linux's ignore-side rejection in cli.ignore catches symlinks anyway.
+    if not os.path.lexists(target_unresolved):
+        click.echo(f"Path {path} does not exist.", err=True)
+        sys.exit(2)
+    discovered = _discover_roots()
+    if not discovered:
+        click.echo("No Dropbox roots found. Is Dropbox installed?", err=True)
+        sys.exit(2)
+    # Try unresolved first (in-Dropbox symlink-as-target semantic). If that's
+    # not under any root, fall back to resolved (handles out-of-Dropbox
+    # symlink aliases that reach into Dropbox — `_discover_roots` returns
+    # resolved roots, so the unresolved-path lexical-prefix check would
+    # reject them otherwise).
+    root = find_containing(target_unresolved, discovered)
+    if root is not None:
+        target = target_unresolved
+    else:
+        target_resolved = path.resolve()
+        root = find_containing(target_resolved, discovered)
+        if root is None:
+            click.echo(f"Path {path} is not under any Dropbox root.", err=True)
+            sys.exit(2)
+        target = target_resolved
+    # Reject paths whose ancestors (between target and root) are symlinks. The
+    # daemon walks with followlinks=False and would never reconcile such a path,
+    # leaving the marker permanently orphaned. The target itself being a symlink
+    # is fine — that's the intended use case (round-4 fix).
+    for ancestor in target.parents:
+        if ancestor == root:
+            break
+        if ancestor.is_symlink():
+            click.echo(
+                f"error: {path} has a symlinked ancestor {ancestor}; "
+                f"the daemon walks with followlinks=False and would never "
+                f"reconcile this path. Operate on the symlink itself instead.",
+                err=True,
+            )
+            sys.exit(2)
+    return target, root, discovered
+
+
+def _select_rule_file(target: Path, root: Path) -> Path:
+    """Return the closest ``.dropboxignore`` ancestor of ``target`` under ``root``.
+
+    Walks from ``target.parent`` up to (and including) ``root``. At each level,
+    scans ``iterdir()`` case-insensitively (per ``is_ignore_filename``) — a
+    mixed-case rule file like ``.DropboxIgnore`` is treated as the same rule
+    file the ``RuleCache`` already loaded under its canonical lowercase key.
+    Prefers the canonical name when both exist (mirrors ``RuleCache.load_root``).
+    Returns ``root / IGNORE_FILENAME`` as a fallback if no rule file exists
+    along the ancestor chain.
+
+    Caller is responsible for verifying ``target`` is under ``root``.
+    """
+    current = target.parent
+    while current != root.parent:
+        canonical: Path | None = None
+        mixed_case: Path | None = None
+        try:
+            entries = list(current.iterdir())
+        except OSError:
+            entries = []
+        for entry in entries:
+            if not is_ignore_filename(entry.name):
+                continue
+            if not entry.is_file():
+                continue
+            if entry.name == IGNORE_FILENAME:
+                canonical = entry
+            elif mixed_case is None:
+                mixed_case = entry
+        if canonical is not None:
+            return canonical
+        if mixed_case is not None:
+            return mixed_case
+        if current == root:
+            break
+        current = current.parent
+    return root / IGNORE_FILENAME
+
+
+def _check_rule_file_parses(rule_file: Path) -> str | None:
+    """Return None if ``rule_file`` parses cleanly (or doesn't exist yet),
+    otherwise the parse-error message.
+
+    Used by ``ignore``/``unignore`` to refuse mutating a `.dropboxignore`
+    that has invalid syntax (e.g., unterminated character class). Without
+    this guard, the verb's append/remove leaves the broken line in place
+    and the daemon's next reconcile drops the whole file from its cache,
+    silently undoing the verb's apparent success.
+    """
+    if not rule_file.is_file():
+        return None  # Will be created on append; not a parse error.
+    try:
+        lines = rule_file.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        return f"cannot read: {exc}"
+    try:
+        rules._build_spec(lines)
+    except (ValueError, TypeError, re.error) as exc:
+        return str(exc)
+    return None
+
+
+def _resolve_canonical_to_disk(canonical_path: Path) -> Path:
+    """Return the actual on-disk rule file matching ``canonical_path``.
+
+    ``canonical_path`` uses the lowercase ``IGNORE_FILENAME`` (per
+    ``RuleCache``'s cache-key normalization). On case-sensitive filesystems
+    with a mixed-case rule file (e.g. ``.DropboxIgnore``), ``canonical_path``
+    does not exist on disk; this helper scans the parent dir for any
+    rule-file casing and returns the matching path. If no rule file is found
+    (e.g. the file vanished), returns ``canonical_path`` unchanged so the
+    caller's file-not-found handling still fires.
+    """
+    if canonical_path.is_file():
+        return canonical_path
+    try:
+        for entry in canonical_path.parent.iterdir():
+            if is_ignore_filename(entry.name) and entry.is_file():
+                return entry
+    except OSError:
+        pass
+    return canonical_path
+
+
+def _matches_target_directly(target: Path, matches: list[rules.Match]) -> bool:
+    """Return True if at least one non-negation rule's pattern matches the
+    target path directly (not via subtree pruning from an ancestor match).
+
+    For the half-state recovery decision: ancestor coverage (rule matches a
+    parent directory and Dropbox prunes the subtree) means the daemon would
+    NOT create a child marker — we shouldn't either. Direct match (rule
+    pattern matches the target path itself) means the daemon WOULD set the
+    marker on next reconcile — we should mirror that synchronously.
+
+    The distinction: if a rule matches some strict ancestor of target (between
+    ignore_file.parent and target.parent), the match on target is via subtree
+    inheritance — ancestor coverage. If no strict ancestor is matched, the rule
+    directly targets the path.
+    """
+    import pathspec as _pathspec
+
+    for m in matches:
+        if m.negation:
+            continue
+        try:
+            relative = target.relative_to(m.ignore_file.parent)
+        except ValueError:
+            continue  # match's ignore_file isn't an ancestor; skip
+        spec = _pathspec.PathSpec.from_lines(rules._CaseInsensitiveGitIgnorePattern, [m.pattern])
+        # Check if any strict ancestor (between ignore_file.parent and target.parent)
+        # is matched by this rule. If so, the match on target is via subtree pruning.
+        # Walk from the immediate child of ignore_file.parent up to (but not including)
+        # target itself. relative.parts gives e.g. ("parent", "child") for parent/child;
+        # we iterate prefixes ("parent",) to test ancestor paths.
+        ancestor_matched = False
+        parts = relative.parts
+        for i in range(1, len(parts)):
+            ancestor_rel_str = "/".join(parts[:i]) + "/"
+            if spec.match_file(ancestor_rel_str):
+                ancestor_matched = True
+                break
+        if ancestor_matched:
+            continue  # ancestor coverage only; daemon prunes, we skip
+        # No strict ancestor is matched — the rule targets the path directly.
+        rel_str = str(relative).replace("\\", "/")
+        if target.is_dir() and not target.is_symlink():
+            rel_str += "/"
+        if spec.match_file(rel_str):
+            return True
+    return False
+
+
 def _resolve_gitignore_arg(path: Path) -> Path:
     """Resolve a `generate` argument to an actual file.
 
@@ -680,6 +889,409 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
     click.echo(f"clear: cleared={cleared} errors={len(errors)}")
     for p, msg in errors[:10]:
         click.echo(f"  error: {p} - {msg}", err=True)
+
+
+@main.command()
+@click.argument("path", type=click.Path(exists=False, path_type=Path))
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Print what would be added/marked without changing anything.",
+)
+@click.option(
+    "--yes",
+    is_flag=True,
+    help="Skip the confirmation prompt (for scripted use). Without --yes "
+    "and outside --dry-run, ignore previews changes and asks before "
+    "mutating — marking a previously-synced path causes Dropbox to "
+    "remove it from cloud and from every linked device.",
+)
+def ignore(path: Path, dry_run: bool, yes: bool) -> None:
+    """Mark <PATH> ignored persistently.
+
+    Appends a literal-path rule to the nearest ancestor .dropboxignore
+    (creating one at the Dropbox root if no ancestor exists) AND sets the
+    ignore marker on <PATH> in one synchronous invocation. Idempotent —
+    safe to re-call.
+    """
+    target, root, discovered = _validate_target_under_root(path)
+    if is_ignore_filename(target.name):
+        click.echo(
+            f"error: {path} is a .dropboxignore rule file; these are never marked ignored.",
+            err=True,
+        )
+        sys.exit(2)
+    if target == root:
+        click.echo(
+            f"error: {path} is a Dropbox root; refusing to mark the entire root "
+            f"ignored (Dropbox would remove the root from cloud and every linked device).",
+            err=True,
+        )
+        sys.exit(2)
+    # Linux's xattr backend cannot mark symlinks (kernel refuses user.* xattrs
+    # on symlinks with EPERM). Reject before writing the rule, so we don't
+    # leave an orphan rule with no marker. unignore doesn't need this guard
+    # — clear_ignored is a no-op when no xattr exists.
+    if sys.platform.startswith("linux") and target.is_symlink():
+        click.echo(
+            f"error: {path} is a symlink; Linux's xattr backend cannot mark "
+            f"symlinks (kernel refuses user.* xattrs on symlinks with EPERM). "
+            f"Mark the symlink's target directly, or use macOS/Windows where "
+            f"the marker can attach to the link.",
+            err=True,
+        )
+        sys.exit(2)
+    cache = _load_cache(discovered)
+    rule_file = _select_rule_file(target, root)
+    parse_err = _check_rule_file_parses(rule_file)
+    if parse_err is not None:
+        click.echo(
+            f"error: existing rule file {rule_file} has invalid syntax: {parse_err}. "
+            f"Fix the file (or check the daemon log for context) before re-running.",
+            err=True,
+        )
+        sys.exit(2)
+    try:
+        canonical = rules.format_literal_rule(target, rule_file)
+    except ValueError as exc:
+        click.echo(f"error: {exc}", err=True)
+        sys.exit(2)
+
+    # Idempotence + redundancy guards
+    if cache.match(target):
+        matches = [m for m in cache.explain(target) if not m.is_dropped]
+        # Compute canonical for each candidate ancestor file (mirrors unignore).
+        # The literal-target rule may live in any ancestor file, not just the
+        # selected rule_file; we need to recognize it as via_us regardless of
+        # which ancestor it lives in.
+        canonical_per_file: dict[Path, str] = {}
+        for m in matches:
+            if m.ignore_file not in canonical_per_file:
+                try:
+                    canonical_per_file[m.ignore_file] = rules.format_literal_rule(
+                        target, m.ignore_file
+                    )
+                except ValueError as exc:
+                    click.echo(f"error: {exc}", err=True)
+                    sys.exit(2)
+        via_us_match = next(
+            (
+                m
+                for m in matches
+                if m.pattern.rstrip().casefold()
+                == canonical_per_file[m.ignore_file].rstrip().casefold()
+            ),
+            None,
+        )
+        if via_us_match is not None:
+            click.echo(f"{path} is already ignored.")
+            file_with_rule = via_us_match.ignore_file
+            should_recover_marker = True
+        else:
+            blocker = matches[0]
+            click.echo(
+                f"{path} is already covered by {blocker.pattern.rstrip()!r} "
+                f"in {blocker.ignore_file}; not adding redundant rule."
+            )
+            file_with_rule = blocker.ignore_file
+            # Distinguish direct match (rule pattern matches the target path
+            # itself) from ancestor coverage (rule matches only a parent
+            # directory; subtree pruning applies). For direct matches the
+            # daemon would set the marker on the target via reconcile; we
+            # set it synchronously here. For ancestor coverage the daemon
+            # prunes below the parent and never creates a child marker; we
+            # follow the same convention and skip.
+            should_recover_marker = _matches_target_directly(target, matches)
+        if should_recover_marker:
+            # Half-state recovery: ensure marker is set even if rule was already
+            # on disk.
+            try:
+                already_marked = markers.is_ignored(target)
+            except OSError as exc:
+                click.echo(
+                    f"Could not read marker on {target}: {exc}. "
+                    f"The rule is in {file_with_rule}; the daemon will set the marker "
+                    f"when running on a filesystem that supports extended attributes.",
+                    err=True,
+                )
+                sys.exit(2)
+            if not already_marked:
+                if dry_run:
+                    click.echo(f"would set marker on {target}")
+                else:
+                    if not yes:
+                        click.echo(
+                            f"This will mark {target} ignored "
+                            f"(rule is already in {file_with_rule}, but the marker "
+                            f"is missing — daemon may not have run since rule was added)."
+                        )
+                        click.echo(
+                            "Dropbox will remove it from cloud Dropbox and from every "
+                            "other linked device. Local copies on this device are preserved."
+                        )
+                        if not click.confirm("Continue?"):
+                            click.echo("Aborted.")
+                            return
+                    try:
+                        markers.set_ignored(target)
+                    except OSError as exc:
+                        click.echo(
+                            f"Marker write failed on {target}: {exc}. "
+                            f"The rule was already in {file_with_rule}; the daemon will set the marker "
+                            f"when running on a filesystem that supports extended attributes.",
+                            err=True,
+                        )
+                        sys.exit(2)
+                    click.echo(f"Set marker on {target}.")
+        return
+
+    # Confirmation
+    if dry_run:
+        click.echo(f"would append {canonical!r} to {rule_file}")
+        click.echo(f"would set marker on {target}")
+        return
+
+    if not yes:
+        click.echo(f"This will mark {target} ignored.")
+        click.echo(
+            "Dropbox will remove it from cloud Dropbox and from every "
+            "other linked device. Local copies on this device are preserved."
+        )
+        if not click.confirm("Continue?"):
+            click.echo("Aborted.")
+            return
+
+    # Rule first, then marker: a marker-first write would race the daemon's
+    # OTHER-event 500ms debounce window (it'd see a marker the rules don't
+    # justify and clear it spuriously).
+    try:
+        rules.append_rule(rule_file, canonical)
+    except OSError as exc:
+        click.echo(
+            f"Failed to write {rule_file}: {exc}.",
+            err=True,
+        )
+        sys.exit(2)
+    try:
+        markers.set_ignored(target)
+    except OSError as exc:
+        click.echo(
+            f"Marker write failed on {target}: {exc}. "
+            f"The rule was added to {rule_file}; the daemon will set the marker "
+            f"when running on a filesystem that supports extended attributes.",
+            err=True,
+        )
+        sys.exit(2)
+    click.echo(f"ignore: rule added to {rule_file}; marker set on {target}")
+
+
+@main.command()
+@click.argument("path", type=click.Path(exists=False, path_type=Path))
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Print what would be removed/cleared without changing anything.",
+)
+@click.option(
+    "--yes",
+    is_flag=True,
+    help="Skip the confirmation prompt (for scripted use). Without --yes "
+    "and outside --dry-run, unignore previews changes and asks before "
+    "mutating — clearing a marker causes Dropbox to start syncing the "
+    "path again and re-upload its contents to cloud.",
+)
+def unignore(path: Path, dry_run: bool, yes: bool) -> None:
+    """Remove the ignore marker and rule for <PATH>.
+
+    Inverse of ``ignore``. Removes all literal-path rules in the relevant
+    .dropboxignore file(s) that match <PATH> AND clears the marker. If
+    <PATH> is also matched by a wildcard or non-literal rule, refuses
+    to mutate and names the blocking rule.
+    """
+    target, root, discovered = _validate_target_under_root(path)
+    if is_ignore_filename(target.name):
+        click.echo(
+            f"error: {path} is a .dropboxignore rule file; these are never marked ignored.",
+            err=True,
+        )
+        sys.exit(2)
+    if target == root:
+        click.echo(
+            f"error: {path} is a Dropbox root; refusing to mark the entire root "
+            f"ignored (Dropbox would remove the root from cloud and every linked device).",
+            err=True,
+        )
+        sys.exit(2)
+    cache = _load_cache(discovered)
+
+    if not cache.match(target):
+        # Half-state recovery: marker may be set despite no rule (user manually
+        # edited .dropboxignore while daemon was stopped, or daemon hasn't run
+        # since rule removal). This command is the right place to clear the
+        # orphan marker — symmetric to ignore's "rule on disk, marker missing"
+        # half-state recovery.
+        try:
+            marker_set = markers.is_ignored(target)
+        except OSError as exc:
+            click.echo(
+                f"Could not read marker on {target}: {exc}. "
+                f"Re-run on a filesystem that supports extended attributes.",
+                err=True,
+            )
+            sys.exit(2)
+        if not marker_set:
+            click.echo(f"{path} is not ignored; nothing to do.")
+            return
+        # Marker is set but no rule justifies it — orphan state.
+        if dry_run:
+            click.echo(f"would clear marker on {target} (no matching rule on disk)")
+            return
+        if not yes:
+            click.echo(f"This will unignore {target} (no rule currently matches it).")
+            click.echo("Dropbox will start syncing it again and upload local contents to cloud.")
+            if not click.confirm("Continue?"):
+                click.echo("Aborted.")
+                return
+        try:
+            markers.clear_ignored(target)
+        except OSError as exc:
+            click.echo(
+                f"Marker clear failed on {target}: {exc}. "
+                f"No rule was on disk; the daemon will not re-set the marker.",
+                err=True,
+            )
+            sys.exit(2)
+        click.echo(f"unignore: marker cleared on {target} (no rule was on disk)")
+        return
+
+    # Non-dropped matches only — is_dropped rules are inert under an ignored ancestor.
+    matches = [m for m in cache.explain(target) if not m.is_dropped]
+
+    # Validate that each rule file containing a match parses cleanly. A
+    # poisoned rule file would have been dropped from the cache, so its
+    # matches wouldn't be in the list — but if a match IS present, the
+    # file parsed successfully at cache-load time. The check below catches
+    # the TOCTOU case where the file has since become invalid (manually
+    # edited between cache load and mutation).
+    for m in matches:
+        parse_err = _check_rule_file_parses(m.ignore_file)
+        if parse_err is not None:
+            click.echo(
+                f"error: rule file {m.ignore_file} has invalid syntax: {parse_err}. "
+                f"Fix the file before re-running.",
+                err=True,
+            )
+            sys.exit(2)
+
+    canonical_per_file: dict[Path, str] = {}
+    for m in matches:
+        if m.ignore_file not in canonical_per_file:
+            try:
+                canonical_per_file[m.ignore_file] = rules.format_literal_rule(target, m.ignore_file)
+            except ValueError as exc:
+                click.echo(f"error: {exc}", err=True)
+                sys.exit(2)
+
+    removable = [
+        m
+        for m in matches
+        if m.pattern.rstrip().casefold() == canonical_per_file[m.ignore_file].rstrip().casefold()
+    ]
+    # Simulate post-removal state via gitignore last-match-wins. cache.explain
+    # returns matches in evaluation order (root .dropboxignore first, then
+    # progressively-deeper files; within each file, top-to-bottom). After
+    # removing the canonical-equal rules, if the LAST remaining match is a
+    # negation (or no matches remain), the path becomes unignored — no
+    # blocker. Otherwise the last-remaining positive rule still ignores the
+    # path, so refuse and report the blockers for the user to fix manually.
+    remaining = [m for m in matches if m not in removable]
+    blockers = remaining if remaining and not remaining[-1].negation else []
+
+    if blockers:
+        click.echo(f"error: {path} is also matched by:", err=True)
+        for m in blockers:
+            click.echo(f"  line {m.line} of {m.ignore_file}: {m.pattern.rstrip()}", err=True)
+        click.echo("Remove these manually if you want to unignore this path.", err=True)
+        sys.exit(2)
+
+    # Resolve canonical cache-key paths to actual on-disk paths once.  On a
+    # case-sensitive FS where the rule file is named `.DropboxIgnore`, the
+    # cache stores it under the lowercase canonical key, so `Match.ignore_file`
+    # is `<parent>/.dropboxignore` — a path that does not exist on disk.
+    # `_resolve_canonical_to_disk` scans the parent dir for any rule-file
+    # casing and returns the real path so `remove_rule` can open the file.
+    on_disk_per_match: dict[rules.Match, Path] = {
+        m: _resolve_canonical_to_disk(m.ignore_file) for m in removable
+    }
+
+    # Confirmation
+    if dry_run:
+        files_to_preview: dict[Path, list[rules.Match]] = {}
+        for m in removable:
+            files_to_preview.setdefault(on_disk_per_match[m], []).append(m)
+        for ignore_file, matches_in_file in files_to_preview.items():
+            for m in matches_in_file:
+                click.echo(f"would remove {m.pattern.rstrip()!r} from {ignore_file}")
+            # Preview whether removing all rules in this file leaves it comment-only.
+            try:
+                content = ignore_file.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            target_norms = {m.pattern.rstrip() for m in matches_in_file}
+            kept = [line for line in content.splitlines() if line.rstrip() not in target_norms]
+            non_trivial = [
+                line for line in kept if line.strip() and not line.strip().startswith("#")
+            ]
+            if not non_trivial:
+                click.echo(f"  ({ignore_file} would contain only comments after removal)")
+        click.echo(f"would clear marker on {target}")
+        return
+
+    if not yes:
+        click.echo(f"This will unignore {target}.")
+        click.echo("Dropbox will start syncing it again and upload local contents to cloud.")
+        if not click.confirm("Continue?"):
+            click.echo("Aborted.")
+            return
+
+    # Rules first, then marker: a marker-first clear would race the daemon's
+    # OTHER-event 500ms debounce window — the daemon would see the still-present
+    # rule and re-set the marker spuriously, producing visible marker-flap.
+    expected_files = set(on_disk_per_match.values())
+    affected_files: set[Path] = set()
+    for m in removable:
+        on_disk_path = on_disk_per_match[m]
+        try:
+            removed_count = rules.remove_rule(on_disk_path, m.pattern)
+        except OSError as exc:
+            click.echo(
+                f"Failed to write {on_disk_path}: {exc}.",
+                err=True,
+            )
+            sys.exit(2)
+        if removed_count > 0:
+            affected_files.add(on_disk_path)
+    missing = expected_files - affected_files
+    if missing:
+        missing_str = ", ".join(str(f) for f in sorted(missing))
+        click.echo(
+            f"error: matched rules disappeared between read and write in "
+            f"{missing_str}; re-run `dbxignore unignore {path}`.",
+            err=True,
+        )
+        sys.exit(2)
+    files_str = ", ".join(str(f) for f in sorted(affected_files))
+    try:
+        markers.clear_ignored(target)
+    except OSError as exc:
+        click.echo(
+            f"Marker clear failed on {target}: {exc}. "
+            f"The rule was removed from {files_str}; the daemon will clear the marker "
+            f"when running on a filesystem that supports extended attributes.",
+            err=True,
+        )
+        sys.exit(2)
+    click.echo(f"unignore: rule removed from {files_str}; marker cleared on {target}")
 
 
 @main.command("list")

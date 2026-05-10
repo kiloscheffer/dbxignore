@@ -511,6 +511,61 @@ function Test-ExtendedCli {
     dbxignore clear "$T" --yes *> $clearOut
     if ($LASTEXITCODE -eq 0) { Write-Pass "4n - clear (rc=0)" } else { Write-Fail "4n - clear"; Get-Content $clearOut | ForEach-Object { Write-Note "    $_" } }
     Assert-AdsUnset -Path "$T\build\foo.tmp" -Name "4n - clear removed build/foo.tmp marker"
+
+    # 4o — dbxignore ignore <path> happy path (PR #191)
+    Write-Note "4o - dbxignore ignore (basic)"
+    $target4o = Join-Path $script:DropboxDir "dbxignore_test_4o"
+    if (Test-Path $target4o) { Remove-Item -Path $target4o -Recurse -Force }
+    New-Item -ItemType Directory -Path $target4o -Force | Out-Null
+    $ignoreOut = "$env:TEMP\dbxignore-ignore.out"
+    dbxignore ignore $target4o --yes *> $ignoreOut
+    if ($LASTEXITCODE -eq 0) { Write-Pass "4o - ignore (rc=0)" } else { Write-Fail "4o - ignore"; Get-Content $ignoreOut | ForEach-Object { Write-Note "    $_" } }
+    $rootIgnoreFile = Join-Path $script:DropboxDir ".dropboxignore"
+    if ((Test-Path $rootIgnoreFile) -and ((Get-Content $rootIgnoreFile -Raw) -match 'dbxignore_test_4o/')) {
+        Write-Pass "4o - rule appended to $rootIgnoreFile"
+    } else {
+        Write-Fail "4o - rule not appended to $rootIgnoreFile"
+    }
+    Assert-AdsSet -Path $target4o -Name "4o - marker set on target"
+
+    # 4p — dbxignore unignore <path> happy path (PR #191)
+    Write-Note "4p - dbxignore unignore (basic)"
+    $unignoreOut = "$env:TEMP\dbxignore-unignore.out"
+    dbxignore unignore $target4o --yes *> $unignoreOut
+    if ($LASTEXITCODE -eq 0) { Write-Pass "4p - unignore (rc=0)" } else { Write-Fail "4p - unignore"; Get-Content $unignoreOut | ForEach-Object { Write-Note "    $_" } }
+    if ((Test-Path $rootIgnoreFile) -and ((Get-Content $rootIgnoreFile -Raw) -match 'dbxignore_test_4o/')) {
+        Write-Fail "4p - rule still present in $rootIgnoreFile"
+    } else {
+        Write-Pass "4p - rule removed from $rootIgnoreFile"
+    }
+    Assert-AdsUnset -Path $target4o -Name "4p - marker cleared on target"
+    Remove-Item -Path $target4o -Recurse -Force
+
+    # 4q — dbxignore unignore wildcard collision (PR #191)
+    Write-Note "4q - dbxignore unignore refuses wildcard blocker"
+    $target4q = Join-Path $script:DropboxDir "dbxignore_test_4q"
+    if (Test-Path $target4q) { Remove-Item -Path $target4q -Recurse -Force }
+    New-Item -ItemType Directory -Path $target4q -Force | Out-Null
+    Add-Content -Path $rootIgnoreFile -Value "dbxignore_test_4q/" -Encoding utf8
+    Add-Content -Path $rootIgnoreFile -Value "**/dbxignore_test_4q/" -Encoding utf8
+    $collision4qOut = "$env:TEMP\dbxignore-4q.out"
+    dbxignore unignore $target4q --yes *> $collision4qOut
+    if ($LASTEXITCODE -ne 0) {
+        Write-Pass "4q - unignore refused with wildcard blocker (rc=$LASTEXITCODE)"
+    } else {
+        Write-Fail "4q - unignore should have refused (wildcard blocker present)"
+    }
+    # Cleanup: remove the two test rules from .dropboxignore.
+    $cleaned = Get-Content $rootIgnoreFile | Where-Object { $_ -notmatch 'dbxignore_test_4q/' }
+    Set-Content -Path $rootIgnoreFile -Value $cleaned -Encoding utf8
+    # Clean up the root .dropboxignore if Phase 4.5 was its only contents.
+    if (Test-Path $rootIgnoreFile) {
+        $nonTrivialLines = Get-Content $rootIgnoreFile | Where-Object { $_ -and $_ -notmatch '^\s*#' -and $_ -notmatch '^\s*$' }
+        if (-not $nonTrivialLines) {
+            Remove-Item $rootIgnoreFile -Force
+        }
+    }
+    Remove-Item -Path $target4q -Recurse -Force
 }
 
 # ---------------------------------------------------------------------------

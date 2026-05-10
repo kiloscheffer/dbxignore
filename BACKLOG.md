@@ -1430,7 +1430,7 @@ Touches: `src/dbxignore/daemon.py` (`run`, `_sweep_once`, `_dispatch`: thread `d
 
 ## 65. No Windows Explorer right-click context-menu integration
 
-**Blocked by item #93** — the body's `dbxignore.exe ignore "%1"` invocation assumes a path-taking CLI verb that doesn't exist yet. Resolve #93 first; the registry layer here has nothing to invoke until a path-taking ignore/unignore verb lands.
+**Resolved-prerequisite: item #93** (path-taking `ignore` / `unignore` verbs landed in PR #191). The shell-integration registry verb has working CLI verbs to invoke: `dbxignore.exe ignore --yes "%1"` and `dbxignore.exe unignore --yes "%1"`. #65's spec/plan/PR cycle can resume.
 
 dbxignore is CLI-and-daemon only on Windows; users wanting to ignore a single folder ad-hoc must `dbxignore apply` from a terminal or update `.dropboxignore` and wait for the daemon to react. A right-click context-menu verb in Explorer ("Ignore from Dropbox", "Un-ignore from Dropbox") would close that gap. Windows shell-extension verbs registered under `HKEY_CLASSES_ROOT\Directory\shell\…\command` (or per-user equivalents under `HKEY_CURRENT_USER\Software\Classes\…`) are a no-DLL way to add custom Explorer actions, calling out to a tool with `%1` substituted.
 
@@ -2067,6 +2067,8 @@ Touches: `src/dbxignore/rules.py` (`match`, `explain`, `remove_file`, `reload_fi
 
 ## 93. No path-taking verb to ignore or unignore a single path ad-hoc
 
+**Status: RESOLVED 2026-05-10 (PR #191).** Took fix candidate (1) — append-rule-and-mark verbs. Implementation matches the design spec (see `docs/superpowers/specs/2026-05-10-93-path-taking-ignore-verbs-design.md`); see `docs/superpowers/plans/2026-05-10-93-path-taking-ignore-verbs-implementation.md` for the realized task decomposition.
+
 The CLI's existing operation verbs are rule-driven and walk the entire watched-root tree: `apply` reconciles every path against the loaded `.dropboxignore` rules; `clear` removes every marker under every root. Neither takes a `<path>` argument. A user who wants to ignore a single folder ad-hoc has to either edit the relevant `.dropboxignore` and wait for the daemon's debounce window (item #57) plus subsequent reconcile, or call `markers.set_ignored(path)` from a Python REPL — neither is a one-shot CLI invocation.
 
 The daemon-coexistence constraint is load-bearing in the design. A marker set directly on a path the rules don't cover is silently undone within an hour at worst by the daemon's recovery sweep — `reconcile_subtree` walks the path, sees no rule that requires the marker, and clears it. So a path-taking verb has to either (a) also append a literal-path rule to a `.dropboxignore` so the daemon and the user agree, or (b) introduce a new "explicit override" state outside the rule system.
@@ -2102,7 +2104,7 @@ Touches: `src/dbxignore/cli.py` (new `ignore` / `unignore` commands, ancestor-wa
 
 ### Open
 
-Ten items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Nine items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2112,10 +2114,13 @@ Ten items. All passive (no concrete trigger requires action) — bundle each wit
 - **#51** — `install/__init__.py` platform dispatch duplicated across `install_service`/`uninstall_service`. Filed for the design-tension record (precedent: #40); current 6-block shape is defensible vs a factored-out helper that would introduce stringly-typed action coupling.
 - **#53** — Initial-sweep wall-clock on a fresh install (no existing markers) was 49.62s on a 27k-dir tree, blocking systemd readiness for ~50s. Candidate 1 (ready-before-sweep) shipped in PR #162 (removed the readiness-pause symptom). Candidate 3 (per-subdir worker fan-out) shipped in PR #183 (parallelizes the sweep itself across top-level subdirs). Only candidate 2 (persisted sweep-complete hint, ~80 LOC) remains open — has reliability concerns on network FS / File Provider mtime semantics; no fired trigger yet.
 - **#54** — Watchdog observer's recursive watch schedules one inotify watch per directory under `~/Dropbox`, including marked-ignored subtrees. Architectural fix (per-directory watches with mark/unmark lifecycle) is ~200 LOC of race-condition-prone state-machine work; deferred until a beta tester hits the watch ceiling on a system with limits already raised.
-- **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall. **Blocked by #93** — registry verb has nothing to invoke until the path-taking ignore/unignore CLI verbs land.
-- **#93** — No path-taking verb to ignore or unignore a single path ad-hoc. `apply` and `clear` are rule-driven and walk the whole tree; neither takes a `<path>` argument. Filed as a prerequisite for #65; design points (which `.dropboxignore` to mutate, equality vs comment-tagged removal, verb naming) deferred to the spec phase.
+- **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall. Path-taking verbs landed in PR #191 (item #93); spec/plan/PR cycle for #65 can resume.
 
 ### Resolved (reverse chronological)
+
+#### 2026-05-10
+
+- **#93** in PR #191 — path-taking `ignore` / `unignore` CLI verbs. Took fix candidate (1) — append-rule-and-mark. New helpers in `rules.py` (`format_literal_rule`, `append_rule`, `remove_rule`); two new `@main.command()` blocks in `cli.py` plus `_select_rule_file` helper. Order of operations is rule-first-then-marker (avoids the daemon-race where marker-first could trigger a spurious clear in the OTHER debouncer's 500ms window). `unignore` fails loud on wildcard collisions naming the blocking rule and file. rstrip-equality on rule-line comparisons tolerates manually-typed rules with trailing whitespace, mirroring pathspec's gitignore-trailing-whitespace semantics. Unblocks item #65 (Windows Explorer right-click integration).
 
 #### 2026-05-09
 

@@ -130,20 +130,37 @@ def _validate_target_under_root(path: Path) -> tuple[Path, Path, list[Path]]:
 def _select_rule_file(target: Path, root: Path) -> Path:
     """Return the closest ``.dropboxignore`` ancestor of ``target`` under ``root``.
 
-    Walks from ``target.parent`` up to (and including) ``root``. Returns the
-    first existing ``.dropboxignore`` found, or ``root / IGNORE_FILENAME``
-    if no ancestor file exists. The returned path may not exist on disk —
-    ``append_rule`` creates it on first invocation.
+    Walks from ``target.parent`` up to (and including) ``root``. At each level,
+    scans ``iterdir()`` case-insensitively (per ``is_ignore_filename``) — a
+    mixed-case rule file like ``.DropboxIgnore`` is treated as the same rule
+    file the ``RuleCache`` already loaded under its canonical lowercase key.
+    Prefers the canonical name when both exist (mirrors ``RuleCache.load_root``).
+    Returns ``root / IGNORE_FILENAME`` as a fallback if no rule file exists
+    along the ancestor chain.
 
-    ``root`` is assumed to be a Dropbox root (under which ``target`` lives).
-    Caller is responsible for verifying ``target`` is under ``root`` before
-    calling.
+    Caller is responsible for verifying ``target`` is under ``root``.
     """
     current = target.parent
     while current != root.parent:
-        candidate = current / IGNORE_FILENAME
-        if candidate.is_file():
-            return candidate
+        canonical: Path | None = None
+        mixed_case: Path | None = None
+        try:
+            entries = list(current.iterdir())
+        except OSError:
+            entries = []
+        for entry in entries:
+            if not is_ignore_filename(entry.name):
+                continue
+            if not entry.is_file():
+                continue
+            if entry.name == IGNORE_FILENAME:
+                canonical = entry
+            elif mixed_case is None:
+                mixed_case = entry
+        if canonical is not None:
+            return canonical
+        if mixed_case is not None:
+            return mixed_case
         if current == root:
             break
         current = current.parent
@@ -754,6 +771,12 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
     safe to re-call.
     """
     target, root, discovered = _validate_target_under_root(path)
+    if is_ignore_filename(target.name):
+        click.echo(
+            f"error: {path} is a .dropboxignore rule file; these are never marked ignored.",
+            err=True,
+        )
+        sys.exit(2)
     cache = _load_cache(discovered)
     rule_file = _select_rule_file(target, root)
     canonical = rules.format_literal_rule(target, rule_file)
@@ -867,6 +890,12 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
     to mutate and names the blocking rule.
     """
     target, _root, discovered = _validate_target_under_root(path)
+    if is_ignore_filename(target.name):
+        click.echo(
+            f"error: {path} is a .dropboxignore rule file; these are never marked ignored.",
+            err=True,
+        )
+        sys.exit(2)
     cache = _load_cache(discovered)
 
     if not cache.match(target):
@@ -921,9 +950,9 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
             click.echo("Aborted.")
             return
 
-    # Rules first, then marker: same ordering as ignore — rule-first avoids
-    # the daemon's OTHER-event debounce window clearing a marker the rules
-    # no longer justify before the rule removal is on disk.
+    # Rules first, then marker: a marker-first clear would race the daemon's
+    # OTHER-event 500ms debounce window — the daemon would see the still-present
+    # rule and re-set the marker spuriously, producing visible marker-flap.
     affected_files: set[Path] = set()
     for m in removable:
         try:
@@ -936,10 +965,13 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
             sys.exit(2)
         if removed_count > 0:
             affected_files.add(m.ignore_file)
-    if removable and not affected_files:
+    expected_files = {m.ignore_file for m in removable}
+    missing = expected_files - affected_files
+    if missing:
+        missing_str = ", ".join(str(f) for f in sorted(missing))
         click.echo(
-            f"error: matched rules disappeared between read and write; "
-            f"re-run `dbxignore unignore {path}`.",
+            f"error: matched rules disappeared between read and write in "
+            f"{missing_str}; re-run `dbxignore unignore {path}`.",
             err=True,
         )
         sys.exit(2)

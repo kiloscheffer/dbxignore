@@ -17,7 +17,7 @@ def test_dir_target_gets_trailing_slash(tmp_path: Path) -> None:
     rule_file.touch()
     target = tmp_path / "build"
     target.mkdir()
-    assert format_literal_rule(target, rule_file) == "build/"
+    assert format_literal_rule(target, rule_file) == "/build/"
 
 
 def test_file_target_no_trailing_slash(tmp_path: Path) -> None:
@@ -25,7 +25,7 @@ def test_file_target_no_trailing_slash(tmp_path: Path) -> None:
     rule_file.touch()
     target = tmp_path / "notes.txt"
     target.touch()
-    assert format_literal_rule(target, rule_file) == "notes.txt"
+    assert format_literal_rule(target, rule_file) == "/notes.txt"
 
 
 def test_multi_segment_relative_path(tmp_path: Path) -> None:
@@ -33,7 +33,7 @@ def test_multi_segment_relative_path(tmp_path: Path) -> None:
     rule_file.touch()
     target = tmp_path / "proj" / "foo" / "bar"
     target.mkdir(parents=True)
-    assert format_literal_rule(target, rule_file) == "proj/foo/bar/"
+    assert format_literal_rule(target, rule_file) == "/proj/foo/bar/"
 
 
 def test_meta_char_escaping_in_segment(tmp_path: Path) -> None:
@@ -44,7 +44,7 @@ def test_meta_char_escaping_in_segment(tmp_path: Path) -> None:
     target = MagicMock(spec=Path)
     target.relative_to.return_value = Path("foo*bar")
     target.is_dir.return_value = True
-    assert format_literal_rule(target, rule_file) == r"foo\*bar/"
+    assert format_literal_rule(target, rule_file) == r"/foo\*bar/"
 
 
 def test_question_mark_and_brackets_escaped(tmp_path: Path) -> None:
@@ -55,7 +55,7 @@ def test_question_mark_and_brackets_escaped(tmp_path: Path) -> None:
     target = MagicMock(spec=Path)
     target.relative_to.return_value = Path("weird?name[ish]")
     target.is_dir.return_value = True
-    assert format_literal_rule(target, rule_file) == r"weird\?name\[ish\]/"
+    assert format_literal_rule(target, rule_file) == r"/weird\?name\[ish\]/"
 
 
 @pytest.mark.skipif(
@@ -69,7 +69,7 @@ def test_literal_backslash_escaped_in_segment(tmp_path: Path) -> None:
     target = MagicMock(spec=Path)
     target.relative_to.return_value = Path(r"back\slash")
     target.is_dir.return_value = True
-    assert format_literal_rule(target, rule_file) == r"back\\slash/"
+    assert format_literal_rule(target, rule_file) == r"/back\\slash/"
 
 
 def test_leading_bang_in_first_segment_escaped(tmp_path: Path) -> None:
@@ -78,7 +78,7 @@ def test_leading_bang_in_first_segment_escaped(tmp_path: Path) -> None:
     target = tmp_path / "!important"
     target.mkdir()
     # Leading `!` would make pathspec treat the line as a negation; escape.
-    assert format_literal_rule(target, rule_file) == r"\!important/"
+    assert format_literal_rule(target, rule_file) == r"/\!important/"
 
 
 def test_leading_hash_in_first_segment_escaped(tmp_path: Path) -> None:
@@ -88,7 +88,7 @@ def test_leading_hash_in_first_segment_escaped(tmp_path: Path) -> None:
     target.mkdir()
     # Leading `#` at column 0 makes pathspec treat the line as a comment;
     # escape it so the rule stays an active pattern.
-    assert format_literal_rule(target, rule_file) == r"\#literal/"
+    assert format_literal_rule(target, rule_file) == r"/\#literal/"
 
 
 def test_leading_bang_only_escaped_at_first_segment(tmp_path: Path) -> None:
@@ -97,7 +97,7 @@ def test_leading_bang_only_escaped_at_first_segment(tmp_path: Path) -> None:
     # `!` in a non-leading segment is just a literal character to gitignore.
     target = tmp_path / "proj" / "!subdir"
     target.mkdir(parents=True)
-    assert format_literal_rule(target, rule_file) == "proj/!subdir/"
+    assert format_literal_rule(target, rule_file) == "/proj/!subdir/"
 
 
 def test_target_must_be_under_rule_file_parent(tmp_path: Path) -> None:

@@ -137,7 +137,7 @@ def test_ignore_half_state_marker_missing(
     root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
     target = root / "build"
     target.mkdir()
-    (root / IGNORE_FILENAME).write_text("build/\n", encoding="utf-8")
+    (root / IGNORE_FILENAME).write_text("/build/\n", encoding="utf-8")
     assert not fake_markers.is_ignored(target)
     runner = CliRunner()
     result = runner.invoke(cli.main, ["ignore", str(target), "--yes"])
@@ -268,7 +268,7 @@ def test_unignore_happy_path(
     target = root / "build"
     target.mkdir()
     # Pre-state: rule + marker.
-    (root / IGNORE_FILENAME).write_text("build/\n", encoding="utf-8")
+    (root / IGNORE_FILENAME).write_text("/build/\n", encoding="utf-8")
     fake_markers.set_ignored(target)
     runner = CliRunner()
     result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
@@ -301,8 +301,8 @@ def test_unignore_removes_from_multiple_files(
     target = proj / "build"
     target.mkdir()
     # Same target literal rule in TWO ancestor files (edge case Q4 case 5).
-    (root / IGNORE_FILENAME).write_text("proj/build/\n", encoding="utf-8")
-    (proj / IGNORE_FILENAME).write_text("build/\n", encoding="utf-8")
+    (root / IGNORE_FILENAME).write_text("/proj/build/\n", encoding="utf-8")
+    (proj / IGNORE_FILENAME).write_text("/build/\n", encoding="utf-8")
     fake_markers.set_ignored(target)
     runner = CliRunner()
     result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
@@ -334,7 +334,7 @@ def test_unignore_fails_loud_on_wildcard_collision(
     target = proj / "build"
     target.mkdir()
     # Literal rule we wrote + wildcard rule the user added separately.
-    (proj / IGNORE_FILENAME).write_text("build/\n**/build/\n", encoding="utf-8")
+    (proj / IGNORE_FILENAME).write_text("/build/\n**/build/\n", encoding="utf-8")
     fake_markers.set_ignored(target)
     runner = CliRunner()
     result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
@@ -343,7 +343,7 @@ def test_unignore_fails_loud_on_wildcard_collision(
     assert "**/build/" in result.output
     # Neither rule mutated; marker still set.
     content = (proj / IGNORE_FILENAME).read_text(encoding="utf-8")
-    assert "build/\n" in content
+    assert "/build/\n" in content
     assert "**/build/\n" in content
     assert fake_markers.is_ignored(target)
 
@@ -402,7 +402,7 @@ def test_unignore_dry_run_does_not_mutate(
     root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
     target = root / "build"
     target.mkdir()
-    (root / IGNORE_FILENAME).write_text("build/\n", encoding="utf-8")
+    (root / IGNORE_FILENAME).write_text("/build/\n", encoding="utf-8")
     fake_markers.set_ignored(target)
     runner = CliRunner()
     result = runner.invoke(cli.main, ["unignore", str(target), "--dry-run"])
@@ -422,7 +422,7 @@ def test_unignore_tolerates_trailing_whitespace_in_rule_line(
     root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
     target = root / "build"
     target.mkdir()
-    (root / IGNORE_FILENAME).write_text("build/   \n", encoding="utf-8")
+    (root / IGNORE_FILENAME).write_text("/build/   \n", encoding="utf-8")
     fake_markers.set_ignored(target)
     runner = CliRunner()
     result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
@@ -437,7 +437,7 @@ def test_unignore_default_prompts_then_aborts_on_no(
     root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
     target = root / "build"
     target.mkdir()
-    (root / IGNORE_FILENAME).write_text("build/\n", encoding="utf-8")
+    (root / IGNORE_FILENAME).write_text("/build/\n", encoding="utf-8")
     fake_markers.set_ignored(target)
     runner = CliRunner()
     result = runner.invoke(cli.main, ["unignore", str(target)], input="n\n")
@@ -456,7 +456,7 @@ def test_ignore_dry_run_does_not_mutate_in_half_state(
     root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
     target = root / "build"
     target.mkdir()
-    (root / IGNORE_FILENAME).write_text("build/\n", encoding="utf-8")
+    (root / IGNORE_FILENAME).write_text("/build/\n", encoding="utf-8")
     assert not fake_markers.is_ignored(target)
     runner = CliRunner()
     result = runner.invoke(cli.main, ["ignore", str(target), "--dry-run"])
@@ -500,7 +500,7 @@ def test_unignore_marker_oserror_exits_2_with_message(
     root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
     target = root / "build"
     target.mkdir()
-    (root / IGNORE_FILENAME).write_text("build/\n", encoding="utf-8")
+    (root / IGNORE_FILENAME).write_text("/build/\n", encoding="utf-8")
     fake_markers.set_ignored(target)
 
     def _raise_enotsup(path: Path) -> None:
@@ -558,7 +558,7 @@ def test_unignore_then_synthetic_rules_event_no_spurious_mutation(
     target = root / "build"
     target.mkdir()
     # Pre-state: rule + marker.
-    (root / IGNORE_FILENAME).write_text("build/\n", encoding="utf-8")
+    (root / IGNORE_FILENAME).write_text("/build/\n", encoding="utf-8")
     fake_markers.set_ignored(target)
     runner = CliRunner()
     runner.invoke(cli.main, ["unignore", str(target), "--yes"])
@@ -576,3 +576,133 @@ def test_unignore_then_synthetic_rules_event_no_spurious_mutation(
     assert fake_markers.set_calls == set_calls_before
     assert fake_markers.clear_calls == clear_calls_before
     assert not fake_markers.is_ignored(target)
+
+
+# ---------------------------------------------------------------------------
+# Fix 1 (Codex P1) regression: anchored rule must not match unrelated subtrees
+# ---------------------------------------------------------------------------
+
+
+def test_ignore_rule_does_not_match_unrelated_subtree(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P1 regression: a rule generated for ``root/build`` must NOT match
+    ``root/proj/build``. Without leading-``/`` anchoring, gitignore treats
+    ``build/`` as matching every ``build/`` anywhere under the rule file's
+    mount, causing Dropbox to mark unrelated subtrees ignored."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    # An unrelated `build/` that must NOT be matched after the ignore.
+    other_build = root / "proj" / "build"
+    other_build.mkdir(parents=True)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(target), "--yes"])
+    assert result.exit_code == 0, result.output
+    # Verify match scope via the cache, not just rule text.
+    cache = RuleCache()
+    cache.load_root(root)
+    assert cache.match(target)
+    assert not cache.match(other_build), (
+        "rule must be anchored — should not match unrelated `proj/build/`"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fix 2 (Codex P2) regression: _select_rule_file must find mixed-case ancestor
+# ---------------------------------------------------------------------------
+
+
+def test_select_rule_file_finds_mixed_case_ancestor(
+    tmp_path: Path, require_case_sensitive_fs: None
+) -> None:
+    """Codex P2 regression: existing ``.DropboxIgnore`` ancestor must be reused
+    by ``_select_rule_file``, not silently bypassed (creating a duplicate
+    canonical-cased file would cause the ancestor's rules to stop applying)."""
+    root = tmp_path
+    proj = root / "proj"
+    proj.mkdir()
+    mixed_case_file = proj / ".DropboxIgnore"
+    mixed_case_file.touch()
+    target = proj / "build"
+    target.mkdir()
+    selected = cli._select_rule_file(target, root)
+    assert selected == mixed_case_file
+
+
+# ---------------------------------------------------------------------------
+# Fix 3 regression: partial-disappear TOCTOU — exit 2 and preserve marker
+# ---------------------------------------------------------------------------
+
+
+def test_unignore_partial_disappearance_exits_2(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review-finding regression: when removable spans 2 files and one file's
+    ``remove_rule`` returns 0 (rule already vanished — TOCTOU) while another
+    succeeded, the verb must exit 2 — NOT silently clear the marker, which
+    would let the daemon re-set it from the residual rule."""
+    from dbxignore import rules
+
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    proj = root / "proj"
+    proj.mkdir()
+    target = proj / "build"
+    target.mkdir()
+    (root / IGNORE_FILENAME).write_text("/proj/build/\n", encoding="utf-8")
+    (proj / IGNORE_FILENAME).write_text("/build/\n", encoding="utf-8")
+    fake_markers.set_ignored(target)
+
+    # Simulate file2's rule vanishing between cache load and unignore.
+    proj_ignore = proj / IGNORE_FILENAME
+    real_remove_rule = rules.remove_rule
+
+    def fake_remove_rule(rule_file: Path, rule_line: str) -> int:
+        if rule_file == proj_ignore:
+            return 0  # TOCTOU: file or rule already disappeared.
+        return real_remove_rule(rule_file, rule_line)
+
+    monkeypatch.setattr(rules, "remove_rule", fake_remove_rule)
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
+    assert result.exit_code == 2
+    assert "disappeared between read and write" in result.output
+    # Marker MUST still be set — we refused to clear it because residual rule remains.
+    assert fake_markers.is_ignored(target)
+
+
+# ---------------------------------------------------------------------------
+# Fix 5 regression: .dropboxignore filename guard in ignore and unignore
+# ---------------------------------------------------------------------------
+
+
+def test_ignore_refuses_dropboxignore_filename(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: ``.dropboxignore`` files are never marked ignored per the
+    project invariant. The verb must refuse before writing a self-referential
+    rule that the daemon would then have to clean up."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / IGNORE_FILENAME
+    target.touch()
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(target), "--yes"])
+    assert result.exit_code == 2
+    assert ".dropboxignore" in result.output
+    assert not target.read_text(encoding="utf-8")  # no self-referential rule was written
+    assert not fake_markers.is_ignored(target)
+
+
+def test_unignore_refuses_dropboxignore_filename(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Symmetric refusal for unignore — the project invariant rules out
+    .dropboxignore-as-target regardless of direction."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / IGNORE_FILENAME
+    target.touch()
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(target), "--yes"])
+    assert result.exit_code == 2
+    assert ".dropboxignore" in result.output

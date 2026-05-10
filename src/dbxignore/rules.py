@@ -116,17 +116,25 @@ def format_literal_rule(target: Path, rule_file: Path) -> str:
        (column-0 comment marker), prepend a backslash so pathspec parses
        the line as an active pattern instead of a negation or comment.
     4. Re-join segments with ``/`` (gitignore separator, regardless of
-       host OS).
+       host OS) and prepend a leading ``/``.
     5. If ``target.is_dir()``, append ``/`` to make the rule directory-only
        (matches the directory itself, not all paths whose basename equals
        the directory name).
+
+    The leading ``/`` anchors the rule to the rule file's directory. Without
+    it, a single-segment rule like ``build/`` matches every ``build/``
+    directory anywhere under the rule file's mount per gitignore's "no
+    separator before/within the pattern" semantics — Dropbox would mark
+    unrelated subtrees ignored. Multi-segment rules are already anchored by
+    their mid-pattern slash; the leading ``/`` is redundant but harmless for
+    them.
     """
     relative = target.relative_to(rule_file.parent)
     parts = relative.parts
     escaped = [_escape_segment(p) for p in parts]
     if escaped and escaped[0].startswith(("!", "#")):
         escaped[0] = "\\" + escaped[0]
-    line = "/".join(escaped)
+    line = "/" + "/".join(escaped)
     if target.is_dir():
         line += "/"
     return line

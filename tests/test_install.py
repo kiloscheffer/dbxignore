@@ -455,6 +455,31 @@ def test_purge_removes_state_json(
     assert not state_json.exists()
 
 
+def test_purge_clears_marker_on_discovered_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
+) -> None:
+    """A marker on the Dropbox root itself is part of purge's cleanup surface."""
+    import click.testing
+
+    from dbxignore import cli, state
+
+    root = tmp_path / "Dropbox"
+    root.mkdir()
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    fake_markers.set_ignored(root)
+
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+    monkeypatch.setattr("dbxignore.install.uninstall_service", lambda: None)
+
+    result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
+
+    assert result.exit_code == 0, result.output
+    assert "Cleared 1 ignore markers" in result.output
+    assert not fake_markers.is_ignored(root)
+
+
 def test_purge_removes_daemon_log_and_rotations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
 ) -> None:

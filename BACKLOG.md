@@ -2098,13 +2098,190 @@ This item is a prerequisite for item #65 (Windows Explorer right-click integrati
 
 Touches: `src/dbxignore/cli.py` (new `ignore` / `unignore` commands, ancestor-walker helper, rule-file mutation helper); new `tests/test_cli_ignore.py`; README §"CLI reference"; `BACKLOG.md` (#65 — note unblocked).
 
+## 94. `clear`, `list`, and `uninstall --purge` miss a marker on the target itself
+
+**Status: RESOLVED 2026-05-10.** Took fix candidate (1). `_walk_marked_paths()` now checks the target itself before entering `os.walk`; if the target is marked, it returns that one path and preserves the pruning contract for marked directories. `uninstall --purge` now checks each discovered root before walking its children, so a marker on the Dropbox root itself is cleared as part of purge. Four regression tests cover `clear <marked-file>`, `clear <marked-dir>` with child pruning, `list <marked-dir>`, and purge clearing a root marker.
+
+`cli._walk_marked_paths(target)` starts at `os.walk(target)` but only checks `dirnames` and `filenames` yielded under each visited directory. It never checks whether `target` itself bears the marker. Consequences:
+
+- `dbxignore clear <marked-file>` reports "No markers to clear."
+- `dbxignore clear <marked-dir>` clears marked children but can leave the directory marker in place.
+- `dbxignore list <marked-dir>` omits the directory itself.
+- `dbxignore uninstall --purge` never checks a Dropbox root's own marker before walking its children.
+
+This is a correctness gap in the destructive cleanup surface: the command can report successful cleanup while the marker that motivated the command remains. It is also easy to miss in tests because most existing clear tests put markers on children beneath the walked root.
+
+**Fix candidates:**
+
+- **Pre-check target/root marker before walking** (preferred). In `_walk_marked_paths`, call `markers.is_ignored(target)` before `os.walk`; if true, include `target` and skip descending when it is a directory, matching the pruning contract. In `uninstall --purge`, apply the same root pre-check for every discovered root before the child loop.
+- **Inline root handling at each caller.** Keep `_walk_marked_paths` child-only and have `clear`, `list`, and purge each check their own top-level target. Less reusable; higher drift risk.
+- **Defer.** Existing rule-driven `apply` eventually repairs rule-covered half-states, but `clear` / purge are explicitly the manual cleanup tools, so deferring leaves the user-facing command misleading.
+
+**Urgency:** medium. User-visible correctness bug in cleanup commands; small fix with low blast radius.
+
+Touches: `src/dbxignore/cli.py` (`_walk_marked_paths`, `list_ignored`, `clear`, `uninstall --purge`); `tests/test_cli_clear.py`; `tests/test_cli_status_list_explain.py` (list command tests); `tests/test_install.py` (purge marker coverage).
+
+## 95. Path-taking commands outside `ignore` / `unignore` resolve symlinks and can operate on the wrong object
+
+`ignore` and `unignore` use `_validate_target_under_root()`, which intentionally preserves the symlink object (`Path.absolute()` + `os.path.normpath`) and only falls back to `resolve()` for out-of-root aliases. Several older path-taking commands still call `path.resolve()` directly:
+
+- `apply <path>`
+- `clear <path>`
+- `list <path>`
+- `explain` / `check-ignore`
+
+On macOS and Windows, ignore markers attach to the symlink object itself; resolving first switches semantics to the symlink target. On Linux, symlink marking is rejected for `ignore`, but `unignore` can still clear stale state on a symlink object; the other verbs should be equally explicit about link-vs-target behavior. The current shape also rejects valid in-Dropbox symlink objects whose targets live outside the Dropbox root, because containment is checked after resolution.
+
+**Fix candidates:**
+
+- **Share the non-following CLI target normalizer** (preferred). Extract the reusable parts of `_validate_target_under_root()` into a helper that returns `(target, root, discovered)` without the `ignore` / `unignore`-specific existence and Linux-symlink write policy. Use it from `apply`, `clear`, `list`, and `_explain`.
+- **Per-command local fixes.** Replace `path.resolve()` with `Path(os.path.normpath(path.absolute()))` in each command and add command-specific root containment fallback. Lower up-front refactor, but likely to drift.
+- **Defer.** Existing behavior is predictable for non-symlink paths, but the project has documented symlink semantics and already fixed this class for the newer verbs.
+
+**Urgency:** medium. Cross-platform semantic bug for symlink-heavy trees; tests can pin this without real Dropbox.
+
+Touches: `src/dbxignore/cli.py` (`apply`, `clear`, `list_ignored`, `_explain`, target-validation helpers); `tests/test_cli_apply.py`; `tests/test_cli_clear.py`; `tests/test_cli_status_list_explain.py`.
+
+## 96. Windows ADS path construction is invalid for UNC paths
+
+`_backends/windows_ads.py:_stream_path()` blindly prefixes every absolute path with `\\?\`. That is correct for drive-letter paths (`C:\...`) but not for UNC paths (`\\server\share\...`). The long-path form for UNC is `\\?\UNC\server\share\...`; the current string becomes `\\?\\\server\share\...:com.dropbox.ignored`, which Windows APIs do not interpret as a valid long path.
+
+This matters for users whose Dropbox root is on a network share, redirected profile, or other UNC-backed location. It also affects future shell integration if right-click actions pass UNC paths through unchanged.
+
+**Fix candidates:**
+
+- **UNC-aware conversion in `_stream_path`** (preferred). Detect `path.drive` / raw string forms for UNC and emit `\\?\UNC\...`; keep the current form for drive-letter absolute paths.
+- **Reject UNC roots explicitly.** Fail with a clear unsupported-path message. Safer than silent invalid paths, but unnecessarily limits Windows users if ADS works on the underlying filesystem.
+- **Defer.** Most Dropbox installs use drive-letter paths, but this is a small, well-contained correctness fix.
+
+**Urgency:** medium-low. Likely uncommon but a real Windows path bug with a tiny fix.
+
+Touches: `src/dbxignore/_backends/windows_ads.py`; `tests/test_ads_unit.py`; optional Windows integration coverage if a UNC-capable test seam is practical.
+
+## 97. `state.read()` can raise `OSError` on unreadable state files
+
+`state._read_at()` catches JSON syntax and shape errors, but it does not catch `OSError` from `path.exists()` or `path.read_text()`. A permission-denied, locked, cloud-placeholder, or transiently unavailable `state.json` can therefore crash callers that expect state reads to be best-effort:
+
+- `dbxignore status`
+- `dbxignore clear`'s daemon-alive guard
+- `daemon.run`'s legacy-state migration guard
+- Windows uninstall's synchronous daemon-exit wait setup
+
+This is the same failure family the state module already handles for malformed JSON: stale or broken state should degrade to "unknown/no usable state" with a warning, not abort unrelated user commands.
+
+**Fix candidates:**
+
+- **Catch `OSError` in `_read_at`** (preferred). Wrap the exists/read/decode block, log `WARNING`, and return `None`. Consider avoiding the pre-`exists()` check and just catch `FileNotFoundError` from `read_text()` to reduce TOCTOU.
+- **Catch at each caller.** More boilerplate and easy to miss.
+- **Defer.** State files are usually local and readable, but the project already treats state as advisory outside the daemon lock.
+
+**Urgency:** medium. Defensive error-handling gap in common CLI paths.
+
+Touches: `src/dbxignore/state.py`; `tests/test_state.py`; possibly CLI tests that assert graceful status/clear behavior.
+
+## 98. `uninstall --purge` hides marker clear failures
+
+The purge path catches every `OSError` while reading or clearing markers and continues silently, then prints `Cleared <N> ignore markers.` A permission failure, unsupported xattr/ADS operation, transient EIO, or symlink xattr edge can leave markers behind with no indication to the user.
+
+That weakens the command's contract. `--purge` is documented as leaving no dbxignore-authored artifacts on disk; a silent marker-clear failure means Dropbox may continue ignoring paths after the user believes the tool was fully removed.
+
+**Fix candidates:**
+
+- **Accumulate and report purge marker errors** (preferred). Keep best-effort traversal, but collect `(path, operation, message)` for failures, print a bounded error list, and exit 2 if any clear failed. Continue purging local state only after making the marker failure visible.
+- **Warn but exit zero.** Better observability, but scripts still cannot detect incomplete purge.
+- **Defer.** The current best-effort shape avoids blocking uninstall on one bad path, but it overstates cleanup success.
+
+**Urgency:** medium. Destructive cleanup command should not silently leave the dangerous half of the state behind.
+
+Touches: `src/dbxignore/cli.py` (`uninstall --purge` marker loop); `tests/test_install.py`.
+
+## 99. macOS sync-mode detection is process-global, not root/account-specific
+
+`_backends/macos_xattr.py:_detect()` returns one cached list of attribute names for the whole process. Its multi-account rule is "any account path under `~/Library/CloudStorage/` means File Provider." That is safe for a single active sync stack, but a mixed setup can have one Dropbox account/root still in legacy mode and another in File Provider mode.
+
+In that case, selecting only `com.apple.fileprovider.ignore#P` because one account is under CloudStorage can make marker writes under a legacy root no-op from Dropbox's perspective. The reverse can happen if detection falls to legacy while a File Provider root is actually active. Dual-attribute mode exists, but only for the pluginkit-unknown/no-decisive-path branch, not for mixed decisive paths.
+
+**Fix candidates:**
+
+- **Detect per root/path** (best correctness). Thread the path/root into marker operations or expose a root-to-attribute decision cache. More invasive because the marker facade currently has only `Path -> operation`.
+- **Write/read both attributes for mixed-account decisive cases** (preferred minimal fix). If info.json reports both legacy-shaped and File-Provider-shaped account paths, return `[ATTR_LEGACY, ATTR_FILEPROVIDER]` instead of a single attr. This preserves the current facade and favors correctness over metadata cleanliness.
+- **Defer.** Mixed macOS account modes may be rare, but the current "any CloudStorage path wins" rule is too coarse for a multi-root tool.
+
+**Urgency:** medium-low. Cross-platform correctness gap limited to macOS mixed-account/migration setups.
+
+Touches: `src/dbxignore/_backends/macos_xattr.py`; `tests/test_macos_xattr_unit.py`; possibly `markers.detection_summary()` wording.
+
+## 100. Windows non-frozen install assumes `pythonw.exe` exists
+
+`install._common.detect_invocation()` returns `Path(sys.executable).with_name("pythonw.exe")` on Windows non-frozen installs without checking that file exists. The intent is good: Task Scheduler should use the windowless interpreter to avoid console flash. But custom, embedded, Store, or otherwise unusual Python environments may not have a sibling `pythonw.exe`.
+
+The failure mode is poor: `dbxignore install` can successfully register a scheduled task pointing at a nonexistent executable, and the daemon simply never starts at logon or `/Run`.
+
+**Fix candidates:**
+
+- **Validate `pythonw.exe` and fall back or fail clearly** (preferred). If the sibling exists, keep current behavior. If not, either fall back to `sys.executable` with a warning about console behavior, or raise `RuntimeError` so install fails before writing a broken task.
+- **Probe `shutil.which("pythonw")` as fallback.** Helps some installs, but using a different interpreter than the current environment can lose the installed package.
+- **Defer.** Standard CPython venvs include `pythonw.exe`, and tests pin the common branch.
+
+**Urgency:** low-medium. Packaging/install reliability bug for nonstandard Windows Python installs.
+
+Touches: `src/dbxignore/install/_common.py`; `tests/test_install_common.py`; optionally README Windows install troubleshooting.
+
+## 101. Rule-file read-modify-write helpers use a fixed temp filename
+
+`rules.append_rule()` and `rules.remove_rule()` both write through `<rule_file>.tmp` and the docstrings explicitly note they are "Not safe against concurrent writers." That was acceptable when rule files were mostly manually edited, but `ignore` / `unignore` made these helpers first-class CLI mutation paths. Two concurrent CLI invocations against the same `.dropboxignore` can overwrite each other's temp file or lose one read-modify-write update. A user or editor-created `.dropboxignore.tmp` can also be clobbered.
+
+The daemon's rule reload is convergent after the file lands, but it cannot recover a lost rule-line update.
+
+**Fix candidates:**
+
+- **Use unique same-directory temp files** (preferred minimal fix). Create a `tempfile.NamedTemporaryFile(delete=False, dir=rule_file.parent, prefix=f"{rule_file.name}.", suffix=".tmp")`, write/fsync if desired, then `os.replace`. This prevents temp-name collisions but does not solve lost updates.
+- **Add an advisory per-rule-file lock around read-modify-write.** Stronger protection against lost updates; more platform code and lock cleanup concerns.
+- **Defer.** Concurrent `ignore` / `unignore` invocations are uncommon, but the new verbs make the race easier to hit from shell integrations.
+
+**Urgency:** medium-low. Race condition in CLI rule mutation; more important if item #65 adds Explorer integration.
+
+Touches: `src/dbxignore/rules.py`; `tests/test_rules_append_remove.py`; `tests/test_cli_ignore.py`.
+
+## 102. Rule cache can miss same-size edits with preserved mtimes
+
+`RuleCache._load_if_changed()` skips reparse when `mtime_ns` and size match the cached `_LoadedRules`. That is a common fast path, but it can miss real content changes when an editor/tool preserves timestamps or on filesystems with coarse/unstable mtime semantics. The daemon then keeps applying stale rules until a watchdog `reload_file()` event happens or until a later edit changes size/mtime.
+
+The project already leans on convergent periodic sweeps for xattr loss and watchdog gaps; stale rule parsing in the recovery sweep undercuts that safety net.
+
+**Fix candidates:**
+
+- **Store a content hash for rule files** (preferred correctness). On stat match, optionally skip; on stat mismatch, parse and store hash. To catch preserved-mtime edits, periodically force a hash/read during recovery sweeps or add a cheap "trust stat for N sweeps" policy.
+- **Always read rule files during hourly sweeps.** Simpler and safest, but loses the current performance optimization on large trees with many rule files.
+- **Defer.** Watchdog explicit reloads cover normal editor saves; this is mostly a preserved-metadata / unusual filesystem edge.
+
+**Urgency:** low-medium. Filesystem edge case in the daemon recovery path.
+
+Touches: `src/dbxignore/rules.py`; `tests/test_rules_load_caching.py`; possibly daemon sweep tests if a forced-refresh policy is added.
+
+## 103. CI uses `uv run pytest` despite the documented canonical `python -m pytest` workaround
+
+The repo's own instructions warn that plain `uv run pytest` can fail in stale environments with `ModuleNotFoundError` or `uv trampoline failed to canonicalize`, and list `uv run python -m pytest` as the canonical full-suite command. `.github/workflows/test.yml` still uses `uv run pytest` for the cross-platform and platform-specific test steps.
+
+CI is freshly provisioned today, so this is not an observed failure in the current workflow. The risk is drift: the public canonical command and CI command disagree, and future workflow reuse, cache changes, or local CI reproduction can hit the exact gotcha already documented.
+
+**Fix candidates:**
+
+- **Switch CI test steps to `uv run python -m pytest ...`** (preferred). Mechanical workflow change; keeps CI and docs aligned.
+- **Document why CI intentionally differs.** Only reasonable if there is a measurable CI-specific reason to keep the trampoline form.
+- **Defer.** Fresh CI currently works, but the divergence is avoidable.
+
+**Urgency:** low. Packaging/test-infra hygiene; bundle with next workflow-touching PR.
+
+Touches: `.github/workflows/test.yml`; optionally README/AGENTS command snippets if any still mention the noncanonical form.
+
 ---
 
 ## Status
 
 ### Open
 
-Nine items. All passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Eighteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Items #95, #97, and #98 are user-facing correctness/error-handling fixes and should be prioritized ahead of purely polish work.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2115,10 +2292,21 @@ Nine items. All passive (no concrete trigger requires action) — bundle each wi
 - **#53** — Initial-sweep wall-clock on a fresh install (no existing markers) was 49.62s on a 27k-dir tree, blocking systemd readiness for ~50s. Candidate 1 (ready-before-sweep) shipped in PR #162 (removed the readiness-pause symptom). Candidate 3 (per-subdir worker fan-out) shipped in PR #183 (parallelizes the sweep itself across top-level subdirs). Only candidate 2 (persisted sweep-complete hint, ~80 LOC) remains open — has reliability concerns on network FS / File Provider mtime semantics; no fired trigger yet.
 - **#54** — Watchdog observer's recursive watch schedules one inotify watch per directory under `~/Dropbox`, including marked-ignored subtrees. Architectural fix (per-directory watches with mark/unmark lifecycle) is ~200 LOC of race-condition-prone state-machine work; deferred until a beta tester hits the watch ceiling on a system with limits already raised.
 - **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall. Path-taking verbs landed in PR #191 (item #93); spec/plan/PR cycle for #65 can resume.
+- **#95** — Older path-taking commands (`apply`, `clear`, `list`, `explain`) still call `resolve()` and can operate on symlink targets instead of symlink objects. Share the non-following target-normalization seam from `ignore` / `unignore`.
+- **#96** — Windows ADS `_stream_path()` emits invalid long-path syntax for UNC paths. Add UNC-aware `\\?\UNC\...` conversion.
+- **#97** — `state.read()` can raise `OSError` on unreadable/locked state files. Treat unreadable advisory state like corrupt state: warning + `None`.
+- **#98** — `uninstall --purge` silently ignores marker I/O failures while claiming cleanup. Accumulate/report errors and exit nonzero on incomplete marker cleanup.
+- **#99** — macOS sync-mode detection is process-global; mixed legacy/File-Provider account setups may need per-root or write-both behavior.
+- **#100** — Windows non-frozen install assumes sibling `pythonw.exe` exists. Validate before registering a Task Scheduler command.
+- **#101** — Rule-file mutation helpers use fixed `.dropboxignore.tmp`, unsafe for concurrent `ignore` / `unignore` or user/editor temp-file collisions.
+- **#102** — Rule cache can miss same-size edits with preserved mtimes. Consider a hash or forced periodic re-read policy.
+- **#103** — CI uses `uv run pytest` despite the documented canonical `uv run python -m pytest` workaround. Mechanical workflow alignment.
 
 ### Resolved (reverse chronological)
 
 #### 2026-05-10
+
+- **#94** — `clear`, `list`, and `uninstall --purge` now include markers on the top-level target/root itself. `_walk_marked_paths()` checks `target` before `os.walk` and returns `[target]` immediately when it is marked, preserving the existing "marked directories prune descendants" behavior. `uninstall --purge` performs the same root pre-check before traversing children. Regression coverage added for marked file target, marked directory target with redundant child marker left pruned, `list <marked-dir>`, and purge clearing a marker on the discovered root.
 
 - **#93** in PR #191 — path-taking `ignore` / `unignore` CLI verbs. Took fix candidate (1) — append-rule-and-mark. New helpers in `rules.py` (`format_literal_rule`, `append_rule`, `remove_rule`); two new `@main.command()` blocks in `cli.py` plus `_select_rule_file` helper. Order of operations is rule-first-then-marker (avoids the daemon-race where marker-first could trigger a spurious clear in the OTHER debouncer's 500ms window). `unignore` fails loud on wildcard collisions naming the blocking rule and file. rstrip-equality on rule-line comparisons tolerates manually-typed rules with trailing whitespace, mirroring pathspec's gitignore-trailing-whitespace semantics. Unblocks item #65 (Windows Explorer right-click integration).
 
@@ -2279,3 +2467,4 @@ How items entered this tracker:
 - **Item 85** added 2026-05-08 from observing the codex-followup workflow's run on PR #160 — the bot diagnosed correctly and staged a fix, but `git push` failed with "refusing to allow a GitHub App to update workflow without 'workflows' permission". One observed occurrence; filed at low urgency to bundle with the next `codex-followup.yml` edit. The trade is between expanding the bot's permission scope (more autonomy) vs. teaching the prompt to skip workflow-file fixes (preserves the maintainer-in-the-loop guardrail).
 - **Item 53 reframe note** added 2026-05-08 in PR #157 — the original framing (filed 2026-05-03) proposed a "marker-present + match-still-positive" pruning fix; tracing `reconcile.py:81-85` + `_reconcile_path`'s `return currently_ignored` tail revealed the proposed behavior was already implemented. PR #157 added `tests/test_reconcile_basic.py::test_does_not_descend_into_marked_subtree` to pin the contract and reframed the body around the actual remaining concern: the *initial* sweep on a fresh tree without markers, where pruning can't help by definition. Three new fix candidates filed (ready-before-sweep, persisted hint, finer-grained parallelism). Reframe-in-place rather than close-and-refile because the underlying perf pain is still real and the item-number identity is useful — same shape as item #33's validation-note pattern.
 - **Item 86** added 2026-05-08 in PR #163 — the workflow-retirement PR. PR #162's six Codex P2 findings on the `daemon.run` reorder included (as the seventh, after #6's cancellable rule scan landed) "Keep initial-sweep shutdown bounded": even with `RuleCache.load_root` checking `stop_event` between rglob yields, a tree with many directories but few `.dropboxignore` files has coarse-grained cancellation, and the unbounded outer `worker.join()` (the singleton-invariant guard from PR #162's fix #2) blocks shutdown until rglob completes. Real concern bounded operationally by systemd's TimeoutStopSec=90s default; the architectural fix needed (manual os.walk in load_root, OR different singleton-protection) is too big for an incremental patch — filed as a backlog item rather than blocking the daemon refactor on it. Surfaced via Codex auto-review of PR #162; reply documenting the deferral lives at https://github.com/kiloscheffer/dbxignore/pull/162#discussion_r3210571638.
+- **Items 94-103** added 2026-05-10 from a read-only whole-codebase local review requested explicitly for correctness, cross-platform behavior, filesystem edge cases, races, error handling, tests, and packaging/installation. Ten findings were filed rather than patched in-place per the user's read-only constraint: four user-facing correctness/error-handling gaps (#94, #95, #97, #98), three platform/install edge cases (#96, #99, #100), two rule-cache/rule-write race or filesystem-edge concerns (#101, #102), and one CI command-alignment item (#103). No tests were run; evidence came from static inspection of `src/dbxignore/`, `.github/workflows/test.yml`, and the relevant tests.

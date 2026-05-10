@@ -93,6 +93,25 @@ def test_list_prints_paths_with_ads_set(
     assert str(tmp_path / "b") not in result.output
 
 
+def test_list_path_arg_prints_marked_target_itself(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])
+    target = tmp_path / "build"
+    target.mkdir()
+    child = target / "child.tmp"
+    child.touch()
+    fake_markers.set_ignored(target)
+    fake_markers.set_ignored(child)
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["list", str(target)])
+
+    assert result.exit_code == 0
+    assert str(target) in result.output
+    assert str(child) not in result.output
+
+
 def test_explain_prints_matching_rule(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".dropboxignore").write_text("# h\nbuild/\n", encoding="utf-8")
     (tmp_path / "build").mkdir()

@@ -775,6 +775,11 @@ def _walk_marked_paths(target: Path) -> list[Path]:
     user-visible outcome at vastly lower walk cost on big trees).
     """
     found: list[Path] = []
+    try:
+        if markers.is_ignored(target):
+            return [target]
+    except OSError:
+        pass
     for current, dirnames, filenames in os.walk(target, followlinks=False):
         current_path = Path(current)
         kept_dirs: list[str] = []
@@ -1465,6 +1470,12 @@ def uninstall(purge: bool) -> None:
         discovered = _discover_roots()
         cleared = 0
         for r in discovered:
+            try:
+                if markers.is_ignored(r):
+                    markers.clear_ignored(r)
+                    cleared += 1
+            except OSError:
+                pass
             for current, dirnames, filenames in os.walk(r, followlinks=False):
                 current_path = Path(current)
                 for name in dirnames + filenames:

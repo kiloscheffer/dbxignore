@@ -1257,3 +1257,34 @@ def test_ignore_recognizes_literal_target_rule_in_ancestor_file(
     # Half-state recovery sets the marker.
     assert "already ignored" in result.output
     assert fake_markers.is_ignored(target)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows symlink creation requires admin privileges",
+)
+def test_unignore_accepts_broken_symlink(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 regression: a broken symlink (target doesn't exist) is still
+    a valid object dbxignore manages — the link itself exists. The verb must
+    accept it so users can clean up stale rules referencing broken links.
+    `os.path.lexists` checks the link, not its target."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    # Set up a broken symlink: link points to a target that doesn't exist.
+    nonexistent_target = root / "vanished_target"
+    broken_link = root / "broken_link"
+    broken_link.symlink_to(nonexistent_target)
+    assert not nonexistent_target.exists()
+    assert broken_link.is_symlink()
+    # Pre-state: stale rule on disk referencing the broken link.
+    (root / IGNORE_FILENAME).write_text("/broken_link\n", encoding="utf-8")
+    fake_markers.set_ignored(broken_link)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(broken_link), "--yes"])
+    # On Linux/macOS, unignore should succeed — broken link doesn't trigger
+    # round-9's Linux ignore-side rejection (that's in cli.ignore, not _validate).
+    assert result.exit_code == 0, result.output
+    # Stale rule cleaned up.
+    content = (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert "/broken_link" not in content

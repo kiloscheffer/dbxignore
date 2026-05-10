@@ -133,7 +133,12 @@ def _validate_target_under_root(path: Path) -> tuple[Path, Path, list[Path]]:
     # Path.absolute() preserves symlinks (round-4: the new verbs operate
     # on the link itself, not its target). os.path.normpath folds `..`/`.`.
     target_unresolved = Path(os.path.normpath(path.absolute()))
-    if not target_unresolved.exists():
+    # `exists()` follows symlinks — a broken symlink would be rejected even
+    # though the link object itself exists and is what dbxignore manages.
+    # `os.path.lexists` checks the link itself, so broken symlinks pass.
+    # macOS xattrs attach via NOFOLLOW (work on link regardless of target);
+    # Linux's ignore-side rejection in cli.ignore catches symlinks anyway.
+    if not os.path.lexists(target_unresolved):
         click.echo(f"Path {path} does not exist.", err=True)
         sys.exit(2)
     discovered = _discover_roots()

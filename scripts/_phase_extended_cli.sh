@@ -176,14 +176,18 @@ phase_extended_cli() {
     local target_4q="$DROPBOX_DIR/dbxignore_test_4q"
     rm -rf "$target_4q"; mkdir -p "$target_4q"
     printf 'dbxignore_test_4q/\n**/dbxignore_test_4q/\n' >> "$DROPBOX_DIR/.dropboxignore"
-    sleep 0.5  # let daemon's RULES debouncer process the edit
     if dbxignore unignore "$target_4q" --yes >/tmp/dbx-4q.out 2>&1; then
         fail "4q — unignore should have refused (wildcard blocker present)"
     else
         pass "4q — unignore refused with wildcard blocker"
     fi
     # Cleanup: remove the two test rules from .dropboxignore.
-    grep -v 'dbxignore_test_4q/' "$DROPBOX_DIR/.dropboxignore" > /tmp/dbx-4q-clean.tmp \
-        && mv /tmp/dbx-4q-clean.tmp "$DROPBOX_DIR/.dropboxignore"
+    { grep -v 'dbxignore_test_4q/' "$DROPBOX_DIR/.dropboxignore" || true; } > /tmp/dbx-4q-clean.tmp
+    mv /tmp/dbx-4q-clean.tmp "$DROPBOX_DIR/.dropboxignore"
+    # Clean up the root .dropboxignore if Phase 4.5 was its only contents.
+    if [ -f "$DROPBOX_DIR/.dropboxignore" ] && \
+       ! grep -v -E '^(#.*|\s*)$' "$DROPBOX_DIR/.dropboxignore" >/dev/null 2>&1; then
+        rm -f "$DROPBOX_DIR/.dropboxignore"
+    fi
     rm -rf "$target_4q"
 }

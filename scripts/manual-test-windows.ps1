@@ -548,7 +548,6 @@ function Test-ExtendedCli {
     New-Item -ItemType Directory -Path $target4q -Force | Out-Null
     Add-Content -Path $rootIgnoreFile -Value "dbxignore_test_4q/" -Encoding utf8
     Add-Content -Path $rootIgnoreFile -Value "**/dbxignore_test_4q/" -Encoding utf8
-    Start-Sleep -Milliseconds 500
     $collision4qOut = "$env:TEMP\dbxignore-4q.out"
     dbxignore unignore $target4q --yes *> $collision4qOut
     if ($LASTEXITCODE -ne 0) {
@@ -559,6 +558,13 @@ function Test-ExtendedCli {
     # Cleanup: remove the two test rules from .dropboxignore.
     $cleaned = Get-Content $rootIgnoreFile | Where-Object { $_ -notmatch 'dbxignore_test_4q/' }
     Set-Content -Path $rootIgnoreFile -Value $cleaned -Encoding utf8
+    # Clean up the root .dropboxignore if Phase 4.5 was its only contents.
+    if (Test-Path $rootIgnoreFile) {
+        $nonTrivialLines = Get-Content $rootIgnoreFile | Where-Object { $_ -and $_ -notmatch '^\s*#' -and $_ -notmatch '^\s*$' }
+        if (-not $nonTrivialLines) {
+            Remove-Item $rootIgnoreFile -Force
+        }
+    }
     Remove-Item -Path $target4q -Recurse -Force
 }
 

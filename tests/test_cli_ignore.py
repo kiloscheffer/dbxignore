@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from dbxignore import cli, state
-from dbxignore.rules import IGNORE_FILENAME
+from dbxignore import cli, reconcile, state
+from dbxignore.rules import IGNORE_FILENAME, RuleCache
 from tests.conftest import FakeMarkers
 
 
@@ -409,4 +409,36 @@ def test_unignore_default_prompts_then_aborts_on_no(
     assert "Aborted" in result.output
     # No mutation.
     assert "build/" in (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert fake_markers.is_ignored(target)
+
+
+def test_ignore_then_synthetic_rules_event_no_spurious_mutation(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Order-of-ops invariant (spec § Order of operations): after ``ignore``
+    completes, a synthetic RULES event reconciling the rule-file's mount
+    must not trigger a mark-or-clear. State should already be consistent."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    runner = CliRunner()
+    runner.invoke(cli.main, ["ignore", str(target), "--yes"])
+
+    # Snapshot post-verb state.
+    set_calls_before = list(fake_markers.set_calls)
+    clear_calls_before = list(fake_markers.clear_calls)
+
+    # Build a fresh cache from the now-mutated rule file (mirroring what
+    # the daemon does on RULES event).
+    cache = RuleCache()
+    cache.load_root(root)
+    # Run reconcile_subtree directly (skipping debouncer) on the rule
+    # file's mount — this is what the daemon's _dispatch does.
+    reconcile.reconcile_subtree(root, root, cache)
+
+    # No additional set_ignored or clear_ignored calls should have happened
+    # — the marker is already correct.
+    assert fake_markers.set_calls == set_calls_before
+    assert fake_markers.clear_calls == clear_calls_before
+    # Final state still correct.
     assert fake_markers.is_ignored(target)

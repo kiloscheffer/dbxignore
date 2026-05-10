@@ -464,7 +464,7 @@ def test_ignore_rejects_newline_in_path_component(
     runner = CliRunner()
     result = runner.invoke(cli.main, ["ignore", str(target), "--yes"])
     assert result.exit_code == 2
-    assert "line separator" in result.output
+    assert "non-space whitespace" in result.output
     # No mutation occurred.
     assert not (root / IGNORE_FILENAME).exists()
     assert not fake_markers.is_ignored(target)

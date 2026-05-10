@@ -126,7 +126,7 @@ def test_newline_in_segment_raises_value_error(tmp_path: Path) -> None:
     target = MagicMock(spec=Path)
     target.relative_to.return_value = Path("foo\n*.tmp")
     target.is_dir.return_value = False
-    with pytest.raises(ValueError, match="line separator"):
+    with pytest.raises(ValueError, match="non-space whitespace"):
         format_literal_rule(target, rule_file)
 
 
@@ -145,3 +145,21 @@ def test_file_target_with_trailing_space_escaped(tmp_path: Path) -> None:
     target = tmp_path / "foo "
     target.touch()
     assert format_literal_rule(target, rule_file) == r"/foo\ "
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows filesystems forbid tab in filenames",
+)
+def test_trailing_tab_in_segment_raises_value_error(tmp_path: Path) -> None:
+    """Codex P2 regression: a path component ending in a tab can't be encoded
+    as a gitignore rule — pathspec strips the trailing tab regardless of
+    backslash escape, so the rule would match the wrong path while the marker
+    is set on the user-supplied path."""
+    rule_file = tmp_path / ".dropboxignore"
+    rule_file.touch()
+    target = MagicMock(spec=Path)
+    target.relative_to.return_value = Path("foo\t")
+    target.is_dir.return_value = False
+    with pytest.raises(ValueError, match="non-space whitespace"):
+        format_literal_rule(target, rule_file)

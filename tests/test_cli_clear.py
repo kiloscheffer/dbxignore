@@ -166,6 +166,52 @@ def test_clear_path_arg_scopes_to_subtree(
     assert fake_markers.is_ignored(file_b)
 
 
+def test_clear_path_arg_clears_marked_file_target(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A PATH that is itself marked must be cleared, not treated as an empty walk."""
+    root = tmp_path
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+    monkeypatch.setattr(state, "default_path", lambda: root / "_state.json")
+    monkeypatch.setattr(state, "is_daemon_alive", lambda pid, create_time=None: False)
+
+    target = root / "scratch.tmp"
+    target.touch()
+    fake_markers.set_ignored(target)
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["clear", str(target), "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert "cleared=1" in result.output
+    assert not fake_markers.is_ignored(target)
+
+
+def test_clear_path_arg_clears_marked_directory_target_without_descending(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A marked directory target is the marker to clear; descendants stay pruned."""
+    root = tmp_path
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+    monkeypatch.setattr(state, "default_path", lambda: root / "_state.json")
+    monkeypatch.setattr(state, "is_daemon_alive", lambda pid, create_time=None: False)
+
+    target = root / "build"
+    target.mkdir()
+    child = target / "redundant-child-marker"
+    child.touch()
+    fake_markers.set_ignored(target)
+    fake_markers.set_ignored(child)
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["clear", str(target), "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert "cleared=1" in result.output
+    assert not fake_markers.is_ignored(target)
+    assert fake_markers.is_ignored(child)
+
+
 def test_clear_path_outside_roots_errors(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -117,24 +117,44 @@ def _validate_target_under_root(path: Path) -> tuple[Path, Path, list[Path]]:
     target (per the project's symlink invariant). ``os.path.normpath`` folds
     ``..`` and ``.`` segments without following symlinks.
 
+    If the unresolved path is not under any Dropbox root, the validation
+    falls back to the resolved path — this handles out-of-Dropbox symlink
+    aliases that reach into Dropbox. For example, ``/alias/Dropbox/file``
+    where ``/alias`` symlinks to the actual Dropbox root will fail the
+    unresolved containment check (lexical prefix mismatch), then succeed
+    using the canonical resolved path.
+
     Symlinked ancestors between ``target`` and ``root`` are rejected: the daemon
     walks with ``followlinks=False`` and would never reconcile a path whose
     ancestor resolves through a symlink, leaving the marker permanently orphaned.
     Operating on the symlink itself is fine; only intermediate symlinks are
     problematic.
     """
-    target = Path(os.path.normpath(path.absolute()))
-    if not target.exists():
+    # Path.absolute() preserves symlinks (round-4: the new verbs operate
+    # on the link itself, not its target). os.path.normpath folds `..`/`.`.
+    target_unresolved = Path(os.path.normpath(path.absolute()))
+    if not target_unresolved.exists():
         click.echo(f"Path {path} does not exist.", err=True)
         sys.exit(2)
     discovered = _discover_roots()
     if not discovered:
         click.echo("No Dropbox roots found. Is Dropbox installed?", err=True)
         sys.exit(2)
-    root = find_containing(target, discovered)
-    if root is None:
-        click.echo(f"Path {path} is not under any Dropbox root.", err=True)
-        sys.exit(2)
+    # Try unresolved first (in-Dropbox symlink-as-target semantic). If that's
+    # not under any root, fall back to resolved (handles out-of-Dropbox
+    # symlink aliases that reach into Dropbox — `_discover_roots` returns
+    # resolved roots, so the unresolved-path lexical-prefix check would
+    # reject them otherwise).
+    root = find_containing(target_unresolved, discovered)
+    if root is not None:
+        target = target_unresolved
+    else:
+        target_resolved = path.resolve()
+        root = find_containing(target_resolved, discovered)
+        if root is None:
+            click.echo(f"Path {path} is not under any Dropbox root.", err=True)
+            sys.exit(2)
+        target = target_resolved
     # Reject paths whose ancestors (between target and root) are symlinks. The
     # daemon walks with followlinks=False and would never reconcile such a path,
     # leaving the marker permanently orphaned. The target itself being a symlink

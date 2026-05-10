@@ -1018,6 +1018,48 @@ def test_ignore_rejects_symlink_target_on_linux(
     assert not fake_markers.is_ignored(inner)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows symlink creation requires admin privileges",
+)
+def test_ignore_accepts_path_via_outside_dropbox_alias(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 regression: when the user supplies a path through an
+    out-of-Dropbox symlink alias to a file that's actually inside Dropbox,
+    the verb must accept and operate on the canonical path. The unresolved
+    path fails lexical containment (alias is outside Dropbox); the verb
+    falls back to the resolved path which is canonically inside Dropbox."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    # Create an out-of-Dropbox symlink that aliases the Dropbox root.
+    alias_root = tmp_path.parent / "alias_to_dropbox"
+    if alias_root.exists() or alias_root.is_symlink():
+        alias_root.unlink()
+    try:
+        alias_root.symlink_to(root)
+    except OSError as e:
+        # Symlink creation failed; skip the test (e.g., older Windows without admin).
+        pytest.skip(f"cannot create symlink: {e}")
+    # User types the path via the alias.
+    aliased_target = alias_root / "build"
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(aliased_target), "--yes"])
+    assert result.exit_code == 0, result.output
+    # The rule + marker landed on the canonical path (root / "build"), not
+    # the alias path. Verify by checking the rule file content references
+    # the canonical relative path.
+    content = (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert "/build/" in content
+    # FakeMarkers normalizes paths via resolve, so set_calls should record
+    # the resolved canonical path. The verb's set_ignored argument was the
+    # canonical target.
+    assert fake_markers.is_ignored(target)
+    # Cleanup the alias.
+    alias_root.unlink()
+
+
 def test_ignore_then_unignore_case_insensitive_match(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:

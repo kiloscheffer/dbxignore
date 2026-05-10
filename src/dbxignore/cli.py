@@ -851,6 +851,19 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
             if dry_run:
                 click.echo(f"would set marker on {target}")
             else:
+                if not yes:
+                    click.echo(
+                        f"This will mark {target} ignored "
+                        f"(rule is already in {file_with_rule}, but the marker "
+                        f"is missing — daemon may not have run since rule was added)."
+                    )
+                    click.echo(
+                        "Dropbox will remove it from cloud Dropbox and from every "
+                        "other linked device. Local copies on this device are preserved."
+                    )
+                    if not click.confirm("Continue?"):
+                        click.echo("Aborted.")
+                        return
                 try:
                     markers.set_ignored(target)
                 except OSError as exc:

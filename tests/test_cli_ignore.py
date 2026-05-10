@@ -544,6 +544,43 @@ def test_ignore_dry_run_does_not_mutate_in_half_state(
     assert not fake_markers.is_ignored(target)
 
 
+def test_ignore_half_state_prompts_when_yes_omitted(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P1 regression: half-state recovery (rule on disk, marker missing)
+    must show the destructive-action confirmation when --yes is not passed.
+    Setting the marker has the same Dropbox-side consequences as the main
+    mutation path; the user must have the same opportunity to abort."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    # Pre-state: rule on disk, marker not set (half-state).
+    (root / IGNORE_FILENAME).write_text("/build/\n", encoding="utf-8")
+    assert not fake_markers.is_ignored(target)
+    runner = CliRunner()
+    # No --yes; user types "n" to abort.
+    result = runner.invoke(cli.main, ["ignore", str(target)], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    # Marker MUST still be unset — abort honored.
+    assert not fake_markers.is_ignored(target)
+
+
+def test_ignore_half_state_prompts_then_proceeds_on_yes(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Confirmation flow with user typing 'y' completes the half-state recovery."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "build"
+    target.mkdir()
+    (root / IGNORE_FILENAME).write_text("/build/\n", encoding="utf-8")
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(target)], input="y\n")
+    assert result.exit_code == 0, result.output
+    assert "Set marker on" in result.output
+    assert fake_markers.is_ignored(target)
+
+
 def test_ignore_marker_oserror_exits_2_with_message(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:

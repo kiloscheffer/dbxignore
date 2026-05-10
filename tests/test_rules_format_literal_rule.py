@@ -195,6 +195,25 @@ def test_symlink_target_does_not_get_trailing_slash(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(
     sys.platform == "win32",
+    reason="Windows filesystems forbid Unicode line separators in filenames",
+)
+def test_unicode_line_separator_in_segment_raises_value_error(tmp_path: Path) -> None:
+    """Codex P2 regression: U+2028 (LINE SEPARATOR) is a `str.splitlines()`
+    separator, so a filename containing it would split into multiple rule
+    lines on read-back. The rejection check must use `c.isspace() and c != ' '`
+    to catch Unicode line separators beyond the ASCII set."""
+    rule_file = tmp_path / ".dropboxignore"
+    rule_file.touch()
+    target = MagicMock(spec=Path)
+    target.relative_to.return_value = Path("foo bar")
+    target.is_dir.return_value = False
+    target.is_symlink.return_value = False
+    with pytest.raises(ValueError, match="non-space whitespace"):
+        format_literal_rule(target, rule_file)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
     reason="Windows symlink creation requires admin privileges",
 )
 def test_real_directory_still_gets_trailing_slash(tmp_path: Path) -> None:

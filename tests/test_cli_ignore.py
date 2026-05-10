@@ -1230,3 +1230,30 @@ def test_ignore_overrides_negation_by_appending_duplicate(
     assert cache.match(target)
     # Marker set.
     assert fake_markers.is_ignored(target)
+
+
+def test_ignore_recognizes_literal_target_rule_in_ancestor_file(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 regression: when a literal-target rule lives in an ancestor
+    .dropboxignore (not the closest one), via_us_match must still recognize
+    it via per-file canonical comparison. Otherwise the half-state recovery
+    is skipped and the documented synchronous marker write doesn't happen."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    proj = root / "proj"
+    proj.mkdir()
+    target = proj / "build"
+    target.mkdir()
+    # Closer ancestor exists but has unrelated content.
+    (proj / IGNORE_FILENAME).write_text("# placeholder\n", encoding="utf-8")
+    # The literal-target rule is in the FARTHER ancestor (root file).
+    (root / IGNORE_FILENAME).write_text("/proj/build/\n", encoding="utf-8")
+    # Marker is missing (half-state).
+    assert not fake_markers.is_ignored(target)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(target), "--yes"])
+    assert result.exit_code == 0, result.output
+    # via_us_match should fire (the rule literally targets the path).
+    # Half-state recovery sets the marker.
+    assert "already ignored" in result.output
+    assert fake_markers.is_ignored(target)

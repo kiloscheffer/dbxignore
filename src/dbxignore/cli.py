@@ -876,8 +876,27 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
     # Idempotence + redundancy guards
     if cache.match(target):
         matches = [m for m in cache.explain(target) if not m.is_dropped]
+        # Compute canonical for each candidate ancestor file (mirrors unignore).
+        # The literal-target rule may live in any ancestor file, not just the
+        # selected rule_file; we need to recognize it as via_us regardless of
+        # which ancestor it lives in.
+        canonical_per_file: dict[Path, str] = {}
+        for m in matches:
+            if m.ignore_file not in canonical_per_file:
+                try:
+                    canonical_per_file[m.ignore_file] = rules.format_literal_rule(
+                        target, m.ignore_file
+                    )
+                except ValueError as exc:
+                    click.echo(f"error: {exc}", err=True)
+                    sys.exit(2)
         via_us_match = next(
-            (m for m in matches if m.pattern.rstrip().casefold() == canonical.rstrip().casefold()),
+            (
+                m
+                for m in matches
+                if m.pattern.rstrip().casefold()
+                == canonical_per_file[m.ignore_file].rstrip().casefold()
+            ),
             None,
         )
         if via_us_match is not None:

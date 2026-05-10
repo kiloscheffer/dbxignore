@@ -131,14 +131,17 @@ def format_literal_rule(target: Path, rule_file: Path) -> str:
     """
     relative = target.relative_to(rule_file.parent)
     parts = relative.parts
-    # Reject path components containing non-space ASCII whitespace. Newline/CR
-    # would split the rule line (effectively rule injection); tab/FF/VT are
-    # silently stripped by pathspec at end-of-line with no reliable escape
-    # mechanism. Space is the only whitespace gitignore can encode (via
-    # backslash-escape, see _escape_segment).
-    bad_whitespace = "\n\r\t\f\v"
     for p in parts:
-        bad = sorted(set(p) & set(bad_whitespace))
+        # Reject any whitespace character except space. Newline-class
+        # separators (ASCII \r/\n/\v/\f, FS/GS/RS at \x1c-\x1e, NEL \x85,
+        # Unicode line separators U+2028/U+2029) would split the rule line
+        # via str.splitlines() at read-back time, effectively injecting
+        # extra rules. Tabs/FF/VT are silently stripped by pathspec at
+        # end-of-line with no reliable escape. Other Unicode whitespace
+        # (NBSP, etc.) has the same end-of-line strip risk. Space is the
+        # only whitespace gitignore can safely encode (via backslash escape
+        # in _escape_segment).
+        bad = sorted(c for c in set(p) if c.isspace() and c != " ")
         if bad:
             chars = ", ".join(repr(c) for c in bad)
             raise ValueError(

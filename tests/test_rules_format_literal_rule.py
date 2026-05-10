@@ -114,6 +114,24 @@ def test_target_must_be_under_rule_file_parent(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(
     sys.platform == "win32",
+    reason="Windows filesystems forbid newline in filenames",
+)
+def test_newline_in_segment_raises_value_error(tmp_path: Path) -> None:
+    """Codex P2 regression: a path component containing ``\\n`` or ``\\r`` must
+    raise ValueError, not silently produce a rule line that splits into two
+    (with the suffix becoming an injected rule that could match unrelated
+    files — Dropbox would remove them from cloud)."""
+    rule_file = tmp_path / ".dropboxignore"
+    rule_file.touch()
+    target = MagicMock(spec=Path)
+    target.relative_to.return_value = Path("foo\n*.tmp")
+    target.is_dir.return_value = False
+    with pytest.raises(ValueError, match="line separator"):
+        format_literal_rule(target, rule_file)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
     reason="Windows filesystems forbid trailing spaces in filenames",
 )
 def test_file_target_with_trailing_space_escaped(tmp_path: Path) -> None:

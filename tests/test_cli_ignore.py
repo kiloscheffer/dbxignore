@@ -448,6 +448,84 @@ def test_unignore_default_prompts_then_aborts_on_no(
     assert fake_markers.is_ignored(target)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows filesystems forbid newline in filenames",
+)
+def test_ignore_rejects_newline_in_path_component(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 regression: ensure the CLI verb propagates the format_literal_rule
+    rejection to a user-friendly exit-2 error, with no rule file created and no
+    marker set."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    target = root / "foo\n*.tmp"
+    target.mkdir()
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(target), "--yes"])
+    assert result.exit_code == 2
+    assert "line separator" in result.output
+    # No mutation occurred.
+    assert not (root / IGNORE_FILENAME).exists()
+    assert not fake_markers.is_ignored(target)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows symlink creation requires admin privileges",
+)
+def test_ignore_preserves_symlink_path(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 regression: when the target is a symlink, the verb must operate
+    on the LINK (markers apply to the link per CLAUDE.md's symlink invariant),
+    not the symlink's target. Specifically: a symlink under Dropbox pointing
+    outside Dropbox must NOT be rejected as "not under any Dropbox root"."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    # Set up: a directory outside the Dropbox root that the symlink targets.
+    outside = tmp_path.parent / "outside_dropbox"
+    outside.mkdir(exist_ok=True)
+    # Symlink under Dropbox pointing outside.
+    link = root / "external_link"
+    link.symlink_to(outside)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(link), "--yes"])
+    # Primary regression assertion: the link itself is under Dropbox, so the
+    # command must succeed (previously failed with "not under any Dropbox root").
+    assert result.exit_code == 0, result.output
+    # set_ignored was called exactly once (for the link, not the target).
+    assert len(fake_markers.set_calls) == 1
+    # Rule file references the link's name (`external_link`), not the target.
+    rule_content = (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert "external_link" in rule_content
+    assert "outside_dropbox" not in rule_content
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows symlink creation requires admin privileges",
+)
+def test_ignore_symlink_target_inside_dropbox_marks_link_not_target(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the link points within Dropbox, the command accepts the link and
+    calls set_ignored exactly once — the operation is link-scoped, not recursive
+    into target."""
+    root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
+    inner = root / "inner"
+    inner.mkdir()
+    link = root / "link_to_inner"
+    link.symlink_to(inner)
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(link), "--yes"])
+    assert result.exit_code == 0, result.output
+    # set_ignored called exactly once — the link, not the target separately.
+    assert len(fake_markers.set_calls) == 1
+    # Rule file references the link's name, not `inner`.
+    rule_content = (root / IGNORE_FILENAME).read_text(encoding="utf-8")
+    assert "link_to_inner" in rule_content
+
+
 def test_ignore_dry_run_does_not_mutate_in_half_state(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:

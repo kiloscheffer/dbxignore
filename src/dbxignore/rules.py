@@ -131,6 +131,16 @@ def format_literal_rule(target: Path, rule_file: Path) -> str:
     """
     relative = target.relative_to(rule_file.parent)
     parts = relative.parts
+    # Reject path components containing line separators — they cannot be
+    # encoded as a single gitignore rule (a literal `\n` or `\r` would split
+    # the rule into multiple lines, with the suffix appearing as an injected
+    # rule that could match unrelated files).
+    for p in parts:
+        if "\n" in p or "\r" in p:
+            raise ValueError(
+                f"path component {p!r} contains a line separator; "
+                "cannot be encoded as a single gitignore rule"
+            )
     escaped = [_escape_segment(p) for p in parts]
     if escaped and escaped[0].startswith(("!", "#")):
         escaped[0] = "\\" + escaped[0]

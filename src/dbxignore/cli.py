@@ -103,16 +103,21 @@ def _load_cache(roots: list[Path]) -> RuleCache:
 
 
 def _validate_target_under_root(path: Path) -> tuple[Path, Path, list[Path]]:
-    """Resolve ``path``, verify it exists and is under a discovered Dropbox root.
+    """Normalize ``path`` and verify it exists under a discovered Dropbox root.
 
     Exits 2 with a user-friendly message if any check fails. Returns
-    ``(target, root, discovered)`` where ``target`` is the resolved path,
+    ``(target, root, discovered)`` where ``target`` is the normalized path,
     ``root`` is the Dropbox root containing it, and ``discovered`` is the
     full list of roots. Used by ``ignore`` and ``unignore``; ``apply`` and
     ``clear`` accept paths but don't pre-check existence so they don't share
     this helper.
+
+    ``path.absolute()`` is used instead of ``path.resolve()`` so that symlinks
+    are preserved — markers and rules apply to the link itself, not the link's
+    target (per the project's symlink invariant). ``os.path.normpath`` folds
+    ``..`` and ``.`` segments without following symlinks.
     """
-    target = path.resolve()
+    target = Path(os.path.normpath(path.absolute()))
     if not target.exists():
         click.echo(f"Path {path} does not exist.", err=True)
         sys.exit(2)
@@ -808,7 +813,11 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
         sys.exit(2)
     cache = _load_cache(discovered)
     rule_file = _select_rule_file(target, root)
-    canonical = rules.format_literal_rule(target, rule_file)
+    try:
+        canonical = rules.format_literal_rule(target, rule_file)
+    except ValueError as exc:
+        click.echo(f"error: {exc}", err=True)
+        sys.exit(2)
 
     # Idempotence + redundancy guards
     if cache.match(target):
@@ -980,7 +989,11 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
     canonical_per_file: dict[Path, str] = {}
     for m in matches:
         if m.ignore_file not in canonical_per_file:
-            canonical_per_file[m.ignore_file] = rules.format_literal_rule(target, m.ignore_file)
+            try:
+                canonical_per_file[m.ignore_file] = rules.format_literal_rule(target, m.ignore_file)
+            except ValueError as exc:
+                click.echo(f"error: {exc}", err=True)
+                sys.exit(2)
 
     removable = [m for m in matches if m.pattern.rstrip() == canonical_per_file[m.ignore_file]]
     blockers = [m for m in matches if m not in removable]

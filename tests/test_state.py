@@ -77,6 +77,38 @@ def test_read_corrupt_returns_none(tmp_path: Path) -> None:
     assert state.read(p) is None
 
 
+def test_read_unreadable_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A locked / permission-denied / cloud-placeholder state.json must degrade
+    to ``None`` with a WARNING, matching the corrupt-state contract. Without
+    catching OSError, ``state.read()`` would propagate the error and crash
+    every CLI verb that consults state (``status``, ``clear``'s daemon-alive
+    guard, daemon legacy-state migration). Backlog item #97."""
+    p = tmp_path / "state.json"
+    p.write_text("{}", encoding="utf-8")
+
+    def boom(self: Path, *args: object, **kwargs: object) -> str:
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(Path, "read_text", boom)
+
+    with caplog.at_level("WARNING", logger="dbxignore.state"):
+        assert state.read(p) is None
+    assert any("unreadable" in rec.message for rec in caplog.records)
+
+
+def test_read_missing_does_not_warn(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Truly-absent state.json (the first-run common case) must not log a
+    WARNING. Regression guard against accidentally promoting missing-file
+    to the new ``OSError`` warning arm added in item #97."""
+    with caplog.at_level("WARNING", logger="dbxignore.state"):
+        assert state.read(tmp_path / "does_not_exist.json") is None
+    assert not caplog.records
+
+
 def test_write_leaves_no_tmp_file(tmp_path: Path) -> None:
     """Atomic write: state.json.tmp must be renamed away on success."""
     p = tmp_path / "state.json"

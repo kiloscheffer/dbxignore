@@ -857,17 +857,34 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
     override. Prompts before clearing unless `--yes` is set.
     """
     s = state.read()
-    if not force and s is not None and state.daemon_is_running(s):
-        click.echo(
-            f"error: daemon is running (pid={s.daemon_pid}). "
-            f"The next sweep would re-apply markers.",
-            err=True,
-        )
-        click.echo(
-            "Stop the daemon first (`dbxignore uninstall`), or pass --force.",
-            err=True,
-        )
-        sys.exit(2)
+    # Two fail-closed arms gated by --force. The first covers the case where
+    # state.json exists but `state.read()` returned None (locked, permission-
+    # denied, cloud-placeholder) — daemon liveness is unknown, and silently
+    # treating it as "no daemon" would let `clear` race a live daemon that
+    # re-marks within seconds. The second is the original guard.
+    if not force:
+        if s is None and state.default_path().exists():
+            click.echo(
+                f"error: state.json at {state.default_path()} is present but "
+                "unreadable; daemon liveness is unknown.",
+                err=True,
+            )
+            click.echo(
+                "Re-run with --force only if you are certain no daemon is running.",
+                err=True,
+            )
+            sys.exit(2)
+        if s is not None and state.daemon_is_running(s):
+            click.echo(
+                f"error: daemon is running (pid={s.daemon_pid}). "
+                f"The next sweep would re-apply markers.",
+                err=True,
+            )
+            click.echo(
+                "Stop the daemon first (`dbxignore uninstall`), or pass --force.",
+                err=True,
+            )
+            sys.exit(2)
 
     if path is None:
         discovered = _discover_roots()

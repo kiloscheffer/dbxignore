@@ -195,19 +195,23 @@ def read(path: Path | None = None) -> State | None:
 
 
 def _read_at(path: Path) -> State | None:
-    if not path.exists():
-        return None
-    # Catch both JSON-syntax errors and shape errors raised by _decode (KeyError
-    # if a nested last_error sub-key is missing; TypeError if last_error is
-    # present but not a dict; ValueError if a stored datetime no longer parses).
-    # Without _decode being inside the try, a hand-edited or schema-mismatched
-    # state.json crashes the daemon on startup instead of falling back to
-    # "no prior state" — followup item 24.
+    # OSError (locked / permission-denied / cloud-placeholder) warns and
+    # returns None instead of propagating, so CLI verbs that consult state
+    # best-effort (`status`, `clear`'s daemon-alive guard, daemon legacy-state
+    # migration) don't crash on a stale-or-broken file. Followup items 24, 97.
+    # The middle arm catches the JSON-syntax + shape errors that `_decode`
+    # raises (KeyError on missing last_error sub-key; TypeError on non-dict
+    # last_error; ValueError on a stored datetime that no longer parses).
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
         return _decode(raw)
+    except FileNotFoundError:
+        return None
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         logger.warning("State file %s corrupt or shape-mismatched: %s", path, exc)
+        return None
+    except OSError as exc:
+        logger.warning("State file %s unreadable: %s", path, exc)
         return None
 
 

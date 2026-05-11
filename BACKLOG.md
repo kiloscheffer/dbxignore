@@ -2123,6 +2123,8 @@ Touches: `src/dbxignore/cli.py` (`_walk_marked_paths`, `list_ignored`, `clear`, 
 
 ## 95. Path-taking commands outside `ignore` / `unignore` resolve symlinks and can operate on the wrong object
 
+**Status: RESOLVED 2026-05-11 (PR #195).**
+
 `ignore` and `unignore` use `_validate_target_under_root()`, which intentionally preserves the symlink object (`Path.absolute()` + `os.path.normpath`) and only falls back to `resolve()` for out-of-root aliases. Several older path-taking commands still call `path.resolve()` directly:
 
 - `apply <path>`
@@ -2275,13 +2277,45 @@ CI is freshly provisioned today, so this is not an observed failure in the curre
 
 Touches: `.github/workflows/test.yml`; optionally README/AGENTS command snippets if any still mention the noncanonical form.
 
+## 104. CLI walk-entry callsites descend through symlink-to-directory arguments
+
+**Status: RESOLVED 2026-05-11 (PR #195).**
+
+`os.walk(path, followlinks=False)` follows the link when ``path`` is itself the walk root (CLAUDE.md gotcha; PR #183 added the corresponding guard at the daemon's per-subdir fan-out). After PR #195 (item #95), the CLI's path-taking verbs accept symlink-object arguments and pass them through to `_walk_marked_paths` (used by `clear`, `list`) and `_run_apply_pass` → `reconcile_subtree` (used by `apply`). Both callsites were missing the walk-root `is_symlink()` guard, so `dbxignore clear ~/Dropbox/some-dir-symlink` would walk into the link's target tree after handling the link's own marker, and `dbxignore apply ~/Dropbox/some-dir-symlink` could write orphan markers in the external target tree. `explain` / `check-ignore` are not affected (no walk).
+
+Resolved in two commits on PR #195, in response to Codex P1 and P2 findings during review:
+- `_run_apply_pass` passes `descend=False` to `reconcile_subtree` when subdir is a symlink (apply mark-write surface).
+- `_walk_marked_paths` short-circuits to "process the link's own marker only" when target is a symlink (clear/list enumerate surface).
+
+Mirrors PR #183's daemon-side per-subdir fan-out guard.
+
+## 105. `..` segments after a symlinked component are collapsed lexically and drop symlink awareness
+
+`_normalize_under_root` (and the legacy `_validate_target_under_root` from PR #191) calls `Path(os.path.normpath(path.absolute()))` to fold `..` and `.` segments without following symlinks. For paths that mix `..` with a symlinked component, this gives the lexical interpretation of `..` (the link's parent) rather than the filesystem interpretation (the link target's parent). The two diverge: `~/Dropbox/link/../file` normpath-collapses to `~/Dropbox/file`, but the filesystem would resolve it to `<target-of-link>/../file`.
+
+Pre-PR #195, `apply` used `path.resolve()` which performed filesystem-true resolution including following symlinks before applying `..`. PR #195 switched to lexical normalization to preserve the symlink object semantics (rules/markers apply to the link, not the target). This trade is sound for arguments that DON'T mix `..` with symlinks, but the corner case `link/..` produces a path that surprises users: `apply` reconciles `~/Dropbox/file` (lexical) instead of `<target>/file` (filesystem).
+
+The symlinked-ancestor guard in `_validate_target_under_root` doesn't catch this — the guard walks `target.parents` AFTER normpath, by which time the symlink has been collapsed out of the path.
+
+Same issue exists in `ignore`/`unignore` since PR #191 (predates #95); PR #195 extends the surface to `apply`/`clear`/`list`/`explain`/`check-ignore`.
+
+**Fix candidates:**
+
+- **Reject paths where `..` follows a symlinked component** (preferred). Inspect the unresolved-absolute path's segments before normpath; if any segment-prefix lexists as a symlink AND a later segment is `..`, refuse with a friendly error. Matches the symlinked-ancestor guard's spirit (loud refusal of ambiguous shapes).
+- **Partial-resolve.** Resolve symlinks in the path's prefix one segment at a time, applying `..` against the resolved-so-far prefix. Cleaner FS-true semantics but harder to reason about.
+- **Document the limitation.** Note that `..` with symlink paths is unsupported; require users to write resolved paths or omit `..`. Lowest-effort but a footgun.
+
+**Urgency:** medium. Real correctness bug, but the trigger requires `..` in the path argument — uncommon in scripted use and unlikely via Windows Explorer right-click (#65). Surfaced by Codex auto-review on PR #195. Same correctness class as #95/#104.
+
+Touches: `src/dbxignore/cli.py` (`_normalize_under_root`); cross-platform symlink tests with `..` paths.
+
 ---
 
 ## Status
 
 ### Open
 
-Eighteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Items #95, #97, and #98 are user-facing correctness/error-handling fixes and should be prioritized ahead of purely polish work.
+Eighteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Items #97, #98, and #105 are user-facing correctness/error-handling fixes and should be prioritized ahead of purely polish work.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2292,7 +2326,6 @@ Eighteen items. Most are passive (no concrete trigger requires action) — bundl
 - **#53** — Initial-sweep wall-clock on a fresh install (no existing markers) was 49.62s on a 27k-dir tree, blocking systemd readiness for ~50s. Candidate 1 (ready-before-sweep) shipped in PR #162 (removed the readiness-pause symptom). Candidate 3 (per-subdir worker fan-out) shipped in PR #183 (parallelizes the sweep itself across top-level subdirs). Only candidate 2 (persisted sweep-complete hint, ~80 LOC) remains open — has reliability concerns on network FS / File Provider mtime semantics; no fired trigger yet.
 - **#54** — Watchdog observer's recursive watch schedules one inotify watch per directory under `~/Dropbox`, including marked-ignored subtrees. Architectural fix (per-directory watches with mark/unmark lifecycle) is ~200 LOC of race-condition-prone state-machine work; deferred until a beta tester hits the watch ceiling on a system with limits already raised.
 - **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall. Path-taking verbs landed in PR #191 (item #93); spec/plan/PR cycle for #65 can resume.
-- **#95** — Older path-taking commands (`apply`, `clear`, `list`, `explain`) still call `resolve()` and can operate on symlink targets instead of symlink objects. Share the non-following target-normalization seam from `ignore` / `unignore`.
 - **#96** — Windows ADS `_stream_path()` emits invalid long-path syntax for UNC paths. Add UNC-aware `\\?\UNC\...` conversion.
 - **#97** — `state.read()` can raise `OSError` on unreadable/locked state files. Treat unreadable advisory state like corrupt state: warning + `None`.
 - **#98** — `uninstall --purge` silently ignores marker I/O failures while claiming cleanup. Accumulate/report errors and exit nonzero on incomplete marker cleanup.
@@ -2301,8 +2334,14 @@ Eighteen items. Most are passive (no concrete trigger requires action) — bundl
 - **#101** — Rule-file mutation helpers use fixed `.dropboxignore.tmp`, unsafe for concurrent `ignore` / `unignore` or user/editor temp-file collisions.
 - **#102** — Rule cache can miss same-size edits with preserved mtimes. Consider a hash or forced periodic re-read policy.
 - **#103** — CI uses `uv run pytest` despite the documented canonical `uv run python -m pytest` workaround. Mechanical workflow alignment.
+- **#105** — `..` segments after a symlinked component are collapsed lexically by `_normalize_under_root` / `_validate_target_under_root`, dropping symlink awareness. `apply ~/Dropbox/link/../file` reconciles `~/Dropbox/file` instead of `<target>/file`. Reject paths where `..` follows a symlinked component.
 
 ### Resolved (reverse chronological)
+
+#### 2026-05-11
+
+- **#95** (2026-05-11, PR #195) — Path-taking verbs `apply`/`clear`/`list`/`explain`/`check-ignore` now preserve the symlink object via shared `_normalize_under_root` helper. `apply` additionally fixed: broken-target symlinks accepted; symlinked-ancestor refused.
+- **#104** (2026-05-11, PR #195) — Filed and resolved in the same PR after Codex P1 and P2 findings during review. `_run_apply_pass` passes `descend=False` to `reconcile_subtree` when target is a symlink (apply mark-write surface); `_walk_marked_paths` short-circuits when target is a symlink (clear/list enumerate surface). Walk-root `is_symlink()` guard mirrors PR #183's daemon-side fix.
 
 #### 2026-05-10
 

@@ -520,7 +520,12 @@ class RuleCache:
         # entries in source order; every matching pattern overwrites `matched`
         # with its include bit. Deeper ancestors come later, so their patterns
         # override shallower ones — gitignore's last-match-wins semantics.
-        is_dir = path.is_dir()
+        # `is_dir` matches `format_literal_rule`'s invariant: a symlink-to-
+        # directory is treated as a LEAF for matching purposes, so a
+        # directory-only rule (e.g. `build/`) does NOT match a symlink named
+        # `build`. Otherwise round-trip via `ignore`/`unignore` breaks for
+        # symlinks (format_literal_rule writes no-slash rules for symlinks).
+        is_dir = path.is_dir() and not path.is_symlink()
         matched = False
         for ancestor, loaded in self._applicable(root, path):
             rel_str = self._rel_path_str(ancestor, path, is_dir)
@@ -552,7 +557,8 @@ class RuleCache:
         if root is None:
             return []
 
-        is_dir = path.is_dir()
+        # See `match()` for the rationale on the `not is_symlink()` guard.
+        is_dir = path.is_dir() and not path.is_symlink()
         results: list[Match] = []
         for ancestor, loaded in self._applicable(root, path):
             rel_str = self._rel_path_str(ancestor, path, is_dir)

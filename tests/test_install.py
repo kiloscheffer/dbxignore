@@ -578,12 +578,14 @@ def test_purge_skips_vanished_paths_silently(
     assert "Could not fully clear" not in result.stderr
 
 
-def test_purge_exits_zero_when_all_markers_clear(
+def test_purge_no_stderr_report_when_no_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
 ) -> None:
-    """Regression guard for item #98: happy path stays exit 0 with no stderr
-    error report. Pins that the new accumulator doesn't false-positive on
-    the no-error case."""
+    """Regression guard for item #98: happy path stays exit 0 with no
+    "Could not fully clear" stderr report. Pins that the new error accumulator
+    doesn't false-positive on the no-error case (distinct from
+    ``test_purge_clears_marker_on_discovered_root``, which doesn't read
+    stderr separately or assert the report's absence)."""
     import click.testing
 
     from dbxignore import cli, state

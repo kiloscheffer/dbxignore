@@ -21,6 +21,11 @@ click.rich_click.TEXT_MARKUP = "markdown"
 
 logger = logging.getLogger(__name__)
 
+# Cap for the bounded stderr list that `clear` and `uninstall --purge` print
+# on partial failure. Enough for diagnosis without flooding terminals on a
+# permission-denied-everywhere scenario; the exit code is the script-gate.
+_MAX_REPORTED_ERRORS = 10
+
 
 def _discover_roots() -> list[Path]:
     """Resolve roots at the CLI boundary; indirection allows test monkeypatching."""
@@ -927,7 +932,7 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
             errors.append((p, str(exc)))
 
     click.echo(f"clear: cleared={cleared} errors={len(errors)}")
-    for p, msg in errors[:10]:
+    for p, msg in errors[:_MAX_REPORTED_ERRORS]:
         click.echo(f"  error: {p} - {msg}", err=True)
 
 
@@ -1551,10 +1556,10 @@ def uninstall(purge: bool) -> None:
             # left behind. State cleanup still runs; the non-zero exit at
             # the end of the purge block is what scripts gate on.
             click.echo(f"Could not fully clear markers ({len(errors)} errors):", err=True)
-            for path, op, msg in errors[:10]:
+            for path, op, msg in errors[:_MAX_REPORTED_ERRORS]:
                 click.echo(f"  {op} failed on {path}: {msg}", err=True)
-            if len(errors) > 10:
-                click.echo(f"  ... and {len(errors) - 10} more.", err=True)
+            if len(errors) > _MAX_REPORTED_ERRORS:
+                click.echo(f"  ... and {len(errors) - _MAX_REPORTED_ERRORS} more.", err=True)
 
         # (2) Remove state.json, daemon.log*, state dir (cross-platform).
         _purge_local_state()

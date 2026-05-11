@@ -595,3 +595,84 @@ def test_reconcile_path_recognizes_mixed_case_dropboxignore(
     )
     # Marker cleared regardless (the invariant restoration always fires).
     assert rule_file.resolve() not in fake_markers._ignored
+
+
+@pytest.mark.skipif(
+    __import__("sys").platform == "win32",
+    reason="Windows symlink creation requires admin/dev-mode privileges",
+)
+def test_match_treats_symlink_to_dir_as_leaf_not_directory(
+    tmp_path: Path, write_file: WriteFile
+) -> None:
+    """match() must treat a symlink-to-directory as a LEAF for matching, not
+    as a directory. Mirrors format_literal_rule's invariant (rules.py:161:
+    ``if target.is_dir() and not target.is_symlink()``).
+
+    Round-trip example: ``dbxignore ignore link-to-dir`` writes the rule
+    ``link-to-dir`` (no trailing slash, per format_literal_rule).
+    Subsequently, ``dbxignore apply`` (or the daemon) calling
+    ``cache.match(link-to-dir)`` should match that no-slash rule. If
+    match() were to set ``is_dir=True`` (by following the symlink),
+    it would also match a stray ``link-to-dir/`` rule and mark the
+    symlink — contradicting the invariant.
+    """
+    # Set up: a real directory and a symlink at the same level pointing to it.
+    real_dir = tmp_path / "real-dir"
+    real_dir.mkdir()
+    link = tmp_path / "link-to-dir"
+    link.symlink_to(real_dir)
+
+    # Case A: directory-only rule should NOT match the symlink.
+    write_file(tmp_path / ".dropboxignore", "link-to-dir/\n")
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+    assert cache.match(link) is False, (
+        "directory-only rule `link-to-dir/` matched the symlink — "
+        "match() must not treat symlinks as directories. (See "
+        "format_literal_rule's invariant at rules.py:161.)"
+    )
+
+    # Case B: no-slash rule SHOULD match the symlink (parity with what
+    # `ignore <symlink>` would write).
+    write_file(tmp_path / ".dropboxignore", "link-to-dir\n")
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+    assert cache.match(link) is True, (
+        "plain rule `link-to-dir` did NOT match the symlink — "
+        "round-trip with `ignore` is broken."
+    )
+
+
+@pytest.mark.skipif(
+    __import__("sys").platform == "win32",
+    reason="Windows symlink creation requires admin/dev-mode privileges",
+)
+def test_explain_treats_symlink_to_dir_as_leaf_not_directory(
+    tmp_path: Path, write_file: WriteFile
+) -> None:
+    """explain() shares match()'s ``is_dir`` derivation; the same symlink-
+    as-leaf invariant applies. A directory-only rule must not show up in
+    `explain()`'s matches for a symlink target."""
+    real_dir = tmp_path / "real-dir"
+    real_dir.mkdir()
+    link = tmp_path / "link-to-dir"
+    link.symlink_to(real_dir)
+
+    write_file(tmp_path / ".dropboxignore", "link-to-dir/\n")
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+
+    matches = cache.explain(link)
+    assert not matches, (
+        f"explain() returned matches for a symlink against a directory-only "
+        f"rule: {matches}. The symlink-as-leaf invariant requires no match."
+    )
+
+    # Companion: a real directory is still matched by the directory-only rule.
+    real_dir_named_for_rule = tmp_path / "other-dir"
+    real_dir_named_for_rule.mkdir()
+    write_file(tmp_path / ".dropboxignore", "other-dir/\n")
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+    assert cache.match(real_dir_named_for_rule) is True
+    assert len(cache.explain(real_dir_named_for_rule)) == 1

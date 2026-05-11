@@ -195,20 +195,13 @@ def read(path: Path | None = None) -> State | None:
 
 
 def _read_at(path: Path) -> State | None:
-    # FileNotFoundError is the silent first-run / no-prior-state case. Catching
-    # it here (instead of via a pre-`exists()` check) closes the TOCTOU window
-    # where the file vanishes between the existence test and the read.
-    # The remaining OSError arm covers locked / permission-denied / cloud-
-    # placeholder / transiently-unavailable state.json — same advisory-degrade
-    # contract as the corrupt-state arm: warn + None rather than propagate, so
-    # CLI verbs that consult state (`status`, `clear`'s daemon-alive guard,
-    # daemon legacy-state migration) don't crash on a stale-or-broken file.
-    # Specific-before-general ordering matters: FileNotFoundError subclasses
-    # OSError, so the silent arm must precede the warning arm.
-    # The middle arm catches both JSON-syntax errors and shape errors raised
-    # by _decode (KeyError if a nested last_error sub-key is missing; TypeError
-    # if last_error is present but not a dict; ValueError if a stored datetime
-    # no longer parses) — followup items 24, 97.
+    # OSError (locked / permission-denied / cloud-placeholder) warns and
+    # returns None instead of propagating, so CLI verbs that consult state
+    # best-effort (`status`, `clear`'s daemon-alive guard, daemon legacy-state
+    # migration) don't crash on a stale-or-broken file. Followup items 24, 97.
+    # The middle arm catches the JSON-syntax + shape errors that `_decode`
+    # raises (KeyError on missing last_error sub-key; TypeError on non-dict
+    # last_error; ValueError on a stored datetime that no longer parses).
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
         return _decode(raw)

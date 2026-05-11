@@ -1500,9 +1500,15 @@ def uninstall(purge: bool) -> None:
         discovered = _discover_roots()
         cleared = 0
         errors: list[tuple[Path, str, str]] = []  # (path, operation, message)
+        # FileNotFoundError on either arm = path vanished between `os.walk`
+        # and our read/clear (Dropbox sync, IDE temp file, concurrent user
+        # activity) — no marker to manage, skip silently. Mirrors the
+        # reconcile read arm's vanished-path treatment.
         for r in discovered:
             try:
                 root_marked = markers.is_ignored(r)
+            except FileNotFoundError:
+                root_marked = False
             except OSError as exc:
                 errors.append((r, "read", str(exc)))
                 root_marked = False
@@ -1510,6 +1516,8 @@ def uninstall(purge: bool) -> None:
                 try:
                     markers.clear_ignored(r)
                     cleared += 1
+                except FileNotFoundError:
+                    pass
                 except OSError as exc:
                     errors.append((r, "clear", str(exc)))
             for current, dirnames, filenames in os.walk(r, followlinks=False):
@@ -1518,6 +1526,8 @@ def uninstall(purge: bool) -> None:
                     p = current_path / name
                     try:
                         marked = markers.is_ignored(p)
+                    except FileNotFoundError:
+                        continue
                     except OSError as exc:
                         errors.append((p, "read", str(exc)))
                         continue
@@ -1531,6 +1541,8 @@ def uninstall(purge: bool) -> None:
                     try:
                         markers.clear_ignored(p)
                         cleared += 1
+                    except FileNotFoundError:
+                        pass
                     except OSError as exc:
                         errors.append((p, "clear", str(exc)))
         click.echo(f"Cleared {cleared} ignore markers.")

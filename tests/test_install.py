@@ -533,6 +533,51 @@ def test_purge_reports_marker_clear_errors_and_exits_two(
     assert not state_json.exists()
 
 
+def test_purge_skips_vanished_paths_silently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
+) -> None:
+    """A path that `os.walk` listed can vanish before `markers.is_ignored`
+    is called (Dropbox sync deleting the path, IDE moving a temp file,
+    concurrent user activity). `FileNotFoundError` is an `OSError`
+    subclass, so without a specific arm the prior fix would report the
+    vanished path as a read failure and exit 2 spuriously. Mirrors the
+    reconcile read arm's vanished-path treatment."""
+    import click.testing
+
+    from dbxignore import cli, state
+
+    root = tmp_path / "Dropbox"
+    root.mkdir()
+    vanished = root / "vanished.tmp"
+    vanished.touch()
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    # Set up the marker BEFORE injecting the FileNotFoundError so the
+    # path is in fake_markers' set; the injection covers what would
+    # happen if the file disappeared between `os.walk`'s listing and the
+    # `is_ignored` call.
+    fake_markers.set_ignored(vanished)
+    real_is_ignored = fake_markers.is_ignored
+
+    def vanishing_is_ignored(path: Path) -> bool:
+        if path.resolve() == vanished.resolve():
+            raise FileNotFoundError(2, "No such file or directory", str(path))
+        return real_is_ignored(path)
+
+    monkeypatch.setattr(fake_markers, "is_ignored", vanishing_is_ignored)
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+    monkeypatch.setattr("dbxignore.install.uninstall_service", lambda: None)
+
+    result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
+
+    assert result.exit_code == 0, (result.output, result.stderr)
+    # Vanished path is not counted in cleared (we never confirmed the
+    # marker) and not reported as an error.
+    assert "Cleared 0 ignore markers" in result.output
+    assert "Could not fully clear" not in result.stderr
+
+
 def test_purge_exits_zero_when_all_markers_clear(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
 ) -> None:

@@ -517,3 +517,149 @@ def test_case9_clear_list_symlink_to_directory_does_not_descend(
         f"was queried on {queries_through_link}. The is_symlink() guard "
         f"at _walk_marked_paths entry is missing."
     )
+
+
+# ---- Case 10: `..` after a symlinked component (item #105) ---------------
+#
+# `os.path.normpath` collapses `link/..` lexically (to nothing), but the
+# filesystem would resolve it to `<target-of-link>/..`. The two interpretations
+# diverge, so `_normalize_under_root` rejects up-front. Tests cover both
+# filesystem-state and rule-logic verbs since the guard lives in the shared
+# helper used by all path-taking verbs.
+
+
+@pytest.mark.parametrize("verb", ALL_VERBS)
+def test_case10a_dotdot_after_symlink_rejected(
+    verb: str,
+    dropbox_root: Path,
+    raw_marker_spy: SimpleNamespace,
+    symlink_capable: None,
+) -> None:
+    """``apply link/../file`` and the four other path-taking verbs must
+    refuse to proceed when ``..`` follows a symlinked path component.
+    Without the guard the verb would silently operate on the lexically-
+    collapsed path (``Dropbox/file``) instead of the filesystem-true path
+    (``<target-of-link>/../file``)."""
+    target_dir = dropbox_root / "target-dir"
+    target_dir.mkdir()
+    (target_dir / "file.txt").touch()
+    link = dropbox_root / "link-to-dir"
+    os.symlink(target_dir, link)
+    # The lexically-collapsed path must also exist so we know the verb
+    # would otherwise have a real candidate to operate on.
+    (dropbox_root / "file.txt").touch()
+
+    arg = link / ".." / "file.txt"
+    exit_code, _stdout, stderr = _invoke(verb, arg)
+
+    assert exit_code == 2, f"{verb} should refuse; got exit={exit_code} stderr={stderr!r}"
+    assert "symlinked component" in stderr
+    # No markers were queried or mutated — the verb bailed before reaching
+    # the marker layer.
+    seen = raw_marker_spy.set + raw_marker_spy.clear + raw_marker_spy.is_ignored
+    assert not seen, f"{verb} reached markers despite rejection; spy saw {seen}"
+
+
+@pytest.mark.parametrize("verb", RULE_LOGIC_VERBS)
+def test_case10b_dotdot_before_symlink_accepted_rule_logic_verbs(
+    verb: str,
+    dropbox_root: Path,
+    raw_marker_spy: SimpleNamespace,
+    symlink_capable: None,
+) -> None:
+    """``regular-dir/../link/file.txt`` must NOT trip the new ``..``-after-
+    symlink guard: the ``..`` cancels a non-symlinked segment
+    (``regular-dir``) before any symlink enters the prefix, so lexical
+    normalization and filesystem resolution agree.
+
+    Parametrized over RULE_LOGIC_VERBS only because the FS-state verbs
+    (``apply``/``clear``/``list``) reject this path shape via the
+    PRE-EXISTING symlinked-ancestor guard in ``_validate_target_under_root``
+    (after ``..`` cancels ``regular-dir``, the result still has
+    ``link-to-dir`` as a symlinked ancestor). That older guard's rejection
+    is correct for the path shape; this test only needs to verify the new
+    guard doesn't fire on ``..``-before-symlink, which is observable on
+    the rule-logic verbs that skip the ancestor guard."""
+    regular_dir = dropbox_root / "regular-dir"
+    regular_dir.mkdir()
+    target_dir = dropbox_root / "target-dir"
+    target_dir.mkdir()
+    target_file = target_dir / "file.txt"
+    target_file.touch()
+    link = dropbox_root / "link-to-dir"
+    os.symlink(target_dir, link)
+
+    arg = regular_dir / ".." / "link-to-dir" / "file.txt"
+    exit_code, _stdout, stderr = _invoke(verb, arg)
+
+    # explain / check-ignore return 0-or-1 (rule-driven verdict). Either
+    # is acceptable here — the assertion is "the new guard didn't reject".
+    assert exit_code in (0, 1), f"{verb} unexpectedly refused; stderr={stderr!r}"
+    assert "symlinked component" not in stderr
+
+
+@pytest.mark.parametrize("verb", FS_STATE_VERBS)
+def test_case10c_plain_dotdot_no_symlink_still_works(
+    verb: str,
+    dropbox_root: Path,
+    raw_marker_spy: SimpleNamespace,
+) -> None:
+    """Sanity check: a path containing ``..`` but no symlinks anywhere
+    must continue to work as before. Pins that the new guard doesn't
+    over-fire on the common case where ``..`` is just lexical sugar."""
+    parent_dir = dropbox_root / "parent-dir"
+    parent_dir.mkdir()
+    sibling_dir = dropbox_root / "sibling-dir"
+    sibling_dir.mkdir()
+    sibling_file = sibling_dir / "file.txt"
+    sibling_file.touch()
+
+    # parent-dir/../sibling-dir/file.txt — normpath collapses to
+    # Dropbox/sibling-dir/file.txt, which exists.
+    arg = parent_dir / ".." / "sibling-dir" / "file.txt"
+    exit_code, _stdout, stderr = _invoke(verb, arg)
+
+    assert exit_code == 0, f"{verb} refused plain ..-path; stderr={stderr!r}"
+    assert "symlinked component" not in stderr
+
+
+@pytest.mark.parametrize("verb", ALL_VERBS)
+def test_case10d_dotdot_after_alias_uses_resolved_fallback(
+    verb: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    raw_marker_spy: SimpleNamespace,
+    symlink_capable: None,
+) -> None:
+    """An out-of-Dropbox alias linking INTO Dropbox combined with ``..`` in the
+    path's tail must NOT trip the ``..``-after-symlink guard: the unresolved
+    path is not under any discovered Dropbox root (the alias is outside), so
+    ``_normalize_under_root`` falls through to ``path.resolve()`` — which is
+    filesystem-true and unambiguous. The guard applies only to paths that
+    would actually be handled through the lexical in-root branch.
+
+    Without this scoping (PR #205's first commit had the guard at the top),
+    an alias like ``/alias → ~/Dropbox`` would set ``seen_symlink`` on
+    ``alias``, then the trailing ``..`` would trigger a spurious rejection
+    even though resolve() handles the path correctly. Same scenario as
+    ``test_case4_out_of_dropbox_alias_into_dropbox`` but with ``..`` in the
+    tail."""
+    real_dropbox = tmp_path / "real-dropbox"
+    real_dropbox.mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [real_dropbox])
+    sub = real_dropbox / "sub"
+    sub.mkdir()
+    target_file = real_dropbox / "file.txt"
+    target_file.touch()
+
+    alias = tmp_path / "alias"
+    os.symlink(real_dropbox, alias)
+    alias_arg = alias / "sub" / ".." / "file.txt"  # resolves to real_dropbox/file.txt
+
+    exit_code, _stdout, stderr = _invoke(verb, alias_arg)
+
+    assert exit_code in (0, 1), (
+        f"{verb} refused alias path with ..; stderr={stderr!r}. "
+        f"Resolved-fallback should have succeeded without firing the guard."
+    )
+    assert "symlinked component" not in stderr

@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import stat
+import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -219,10 +220,15 @@ def append_rule(rule_file: Path, rule_line: str) -> bool:
     so an extra duplicate at the end is exactly what makes the rule take
     effect (overriding any earlier negation).
 
-    Atomic via temp-then-replace, mirroring ``state.write()``: writes to
-    ``<rule_file>.tmp``, then ``os.replace`` into place. Survives SIGKILL
-    or power loss mid-write — the file is either fully updated or unchanged.
-    Not safe against concurrent writers; intended for serial CLI invocation.
+    Atomic via temp-then-replace, mirroring ``state.write()``: writes the
+    content to a unique sibling temp file, then ``os.replace`` into place.
+    Survives SIGKILL or power loss mid-write — the file is either fully
+    updated or unchanged. The temp name is unique (``mkstemp``-generated)
+    rather than the fixed ``<rule_file>.tmp`` that previously could collide
+    with a concurrent CLI mutation, an editor's atomic-save backup, or a
+    user-created temp file (item #101). Still doesn't prevent lost updates
+    when two writers race the read-modify-write itself; an advisory lock
+    would be needed for that and is deferred until a concrete failure shows.
 
     Returns True. (The previous return-False idempotent-skip semantics were
     removed because they masked the override-via-duplicate behavior gitignore
@@ -244,13 +250,7 @@ def append_rule(rule_file: Path, rule_line: str) -> bool:
     else:
         new_content = _FILE_HEADER + rule_line + "\n"
 
-    tmp = rule_file.with_suffix(rule_file.suffix + ".tmp")
-    try:
-        tmp.write_text(new_content, encoding="utf-8")
-        os.replace(tmp, rule_file)
-    except OSError:
-        tmp.unlink(missing_ok=True)
-        raise
+    _atomic_write_rule_file(rule_file, new_content)
     return True
 
 
@@ -281,14 +281,29 @@ def remove_rule(rule_file: Path, rule_line: str) -> int:
     if removed_count == 0:
         return 0
     new_content = "\n".join(kept) + ("\n" if kept else "")
-    tmp = rule_file.with_suffix(rule_file.suffix + ".tmp")
+    _atomic_write_rule_file(rule_file, new_content)
+    return removed_count
+
+
+def _atomic_write_rule_file(rule_file: Path, new_content: str) -> None:
+    """Write ``new_content`` to ``rule_file`` atomically via a unique temp.
+
+    Uses ``tempfile.mkstemp`` to pick a non-colliding name in ``rule_file``'s
+    parent directory (same filesystem, so ``os.replace`` is atomic), then
+    closes and ``os.replace``s into place. The unique temp name prevents
+    the collisions item #101 documents: two concurrent CLI mutations, an
+    editor's backup temp file, or a stray user-created
+    ``.dropboxignore.tmp`` would all have raced the old fixed name.
+    """
+    fd, tmp_str = tempfile.mkstemp(dir=rule_file.parent, prefix=f"{rule_file.name}.", suffix=".tmp")
+    tmp = Path(tmp_str)
     try:
-        tmp.write_text(new_content, encoding="utf-8")
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
+            tmp_file.write(new_content)
         os.replace(tmp, rule_file)
     except OSError:
         tmp.unlink(missing_ok=True)
         raise
-    return removed_count
 
 
 class _CaseInsensitiveGitIgnorePattern(GitIgnoreSpecPattern):

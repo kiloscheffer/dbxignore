@@ -119,6 +119,44 @@ def test_clear_force_overrides_daemon_alive(
     assert not fake_markers.is_ignored(paths["marked_dir"])
 
 
+def test_clear_refuses_when_state_json_unreadable(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail-closed when state.json is present but `state.read()` returns None
+    (locked, permission-denied, cloud-placeholder). Daemon liveness is unknown,
+    so treating it as "no daemon" would let `clear` race a live daemon that
+    re-marks within seconds. Codex P2 follow-up on PR #203 (item #97)."""
+    paths = _setup_marked_tree(tmp_path, fake_markers, monkeypatch)
+    # state.json was created by the fixture; simulate unreadable by stubbing
+    # state.read to return None (the post-item-#97 OSError fallback).
+    monkeypatch.setattr(state, "read", lambda: None)
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["clear", "--yes"])
+
+    assert result.exit_code == 2
+    assert "unreadable" in result.output
+    assert "--force" in result.output
+    # Markers must still be set — fail-closed means no destructive action.
+    assert fake_markers.is_ignored(paths["marked_dir"])
+
+
+def test_clear_force_overrides_unreadable_state(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--force lets the user override the unreadable-state fail-closed arm
+    when they know no daemon is running (mirrors the daemon-alive override)."""
+    paths = _setup_marked_tree(tmp_path, fake_markers, monkeypatch)
+    monkeypatch.setattr(state, "read", lambda: None)
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["clear", "--force", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert "cleared=2" in result.output
+    assert not fake_markers.is_ignored(paths["marked_dir"])
+
+
 def test_clear_dry_run_prints_but_does_not_clear(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -29,6 +29,7 @@ Operational notes that are still relevant, but too situational for the always-lo
 - `watchdog.observers.Observer` is a platform-conditional factory, not a class. For annotations use `BaseObserver` from `watchdog.observers.api` under `TYPE_CHECKING`.
 - `daemon._configured_logging()` snapshots and restores the `dbxignore` logger. Linux installs file + stderr handlers; Windows only installs the file handler.
 - `state.write()` writes `state.json.tmp` then `os.replace`s into place. Do not replace it with direct `path.write_text()`.
+- Per-user state-dir paths are platform-divergent. The single source of truth is `state.user_state_dir()` (used by state file, daemon lock, daemon log) and `state.user_log_dir()` (daemon log path only). Resolution: Windows → `%LOCALAPPDATA%\dbxignore\` (falls back to `~/AppData/Local/dbxignore/`); Linux → `$XDG_STATE_HOME/dbxignore/` (falls back to `~/.local/state/dbxignore/`); macOS → `~/Library/Application Support/dbxignore/` for state, with daemon logs split off to `~/Library/Logs/dbxignore/`. Call the helpers rather than reconstructing the path.
 - `state.json` means "daemon started", not "initial sweep completed". `last_sweep is None` is the `state=starting` window.
 - `_initial_sweep_worker` must keep helper calls, env reads, and validators inside its broad `try/except Exception:` block so failures set `stop_event` instead of stranding the daemon in `state=starting`.
 - Validate user-derived wait durations with `math.isfinite(value)` and `value <= threading.TIMEOUT_MAX` before `threading.Event.wait(timeout)`.

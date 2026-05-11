@@ -479,15 +479,11 @@ def _run_apply_pass(
 
     When ``subdir`` is itself a symlink, reconcile runs with
     ``descend=False`` — process the link's own marker but skip the
-    ``os.walk``, which would otherwise follow the link into its target
-    tree at the walk root despite ``followlinks=False``. Without this
-    guard, ``apply <symlink-to-dir>`` would write markers under the
-    symlink target (possibly outside the Dropbox root) that the daemon's
-    own walk (`followlinks=False` from each root) would never reach,
-    leaving orphan markers. Partial mitigation for backlog #104: the
-    walk-root guard for ``clear``/``list`` via ``_walk_marked_paths`` is
-    still tracked as a follow-up. Mirrors the daemon's per-subdir fan-out
-    guard from PR #183.
+    ``os.walk``, which would otherwise follow the link at the walk root
+    despite ``followlinks=False``. Without this guard, marker writes
+    would land under the symlink target where the daemon's own walk
+    (rooted at each Dropbox root with ``followlinks=False``) would never
+    reach them, leaving orphan markers.
     """
     aggregate = reconcile.Report()
     for r, subdir in targets:
@@ -793,13 +789,10 @@ def _walk_marked_paths(target: Path) -> list[Path]:
     reconcile, since `clear` with a pruning walk gets the same
     user-visible outcome at vastly lower walk cost on big trees).
 
-    When ``target`` is itself a symlink, only the link's own marker is
-    checked — the ``os.walk`` is skipped. ``followlinks=False`` only
-    gates subdirectory symlinks encountered during the walk, not the
-    walk root; without this guard, walking a symlinked directory would
-    enumerate markers inside the link's target tree (possibly outside
-    any Dropbox root). Mirrors `_run_apply_pass`'s ``descend=False``
-    guard and the daemon's per-subdir fan-out from PR #183.
+    ``followlinks=False`` only gates subdirectory symlinks encountered
+    during traversal, not the walk root; without an explicit guard, a
+    symlinked-directory ``target`` would enumerate markers inside the
+    link's target tree, potentially outside any Dropbox root.
     """
     found: list[Path] = []
     try:
@@ -808,7 +801,7 @@ def _walk_marked_paths(target: Path) -> list[Path]:
     except OSError:
         pass
     if target.is_symlink():
-        return found
+        return []
     for current, dirnames, filenames in os.walk(target, followlinks=False):
         current_path = Path(current)
         kept_dirs: list[str] = []
@@ -883,7 +876,7 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
             sys.exit(2)
         targets = discovered
     else:
-        target, _root, _discovered = _validate_target_under_root(path)
+        target, *_ = _validate_target_under_root(path)
         targets = [target]
 
     to_clear: list[Path] = []
@@ -1335,7 +1328,7 @@ def list_ignored(path: Path | None) -> None:
             sys.exit(2)
         targets = discovered
     else:
-        target, _root, _discovered = _validate_target_under_root(path)
+        target, *_ = _validate_target_under_root(path)
         targets = [target]
 
     for target in targets:

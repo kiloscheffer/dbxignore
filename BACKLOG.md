@@ -2309,13 +2309,58 @@ Same issue exists in `ignore`/`unignore` since PR #191 (predates #95); PR #195 e
 
 Touches: `src/dbxignore/cli.py` (`_normalize_under_root`); cross-platform symlink tests with `..` paths.
 
+## 106. Complete `_is_real_dir` consolidation in `format_literal_rule`
+
+PR #195's post-merge cleanup introduced `rules._is_real_dir(path)` — a single-`lstat()` helper that replaces the `path.is_dir() and not path.is_symlink()` two-call form. The helper is used at the two daemon-hot-path sites (`cache.match`, `cache.explain`), but `rules.format_literal_rule:181` still uses the inline two-call form for a concrete reason: six tests in `tests/test_rules_format_literal_rule.py` mock `MagicMock(spec=Path)` and stub `path.is_dir` / `path.is_symlink` directly. Migrating that third call site would require those mocks to also stub `path.lstat()` and return a mock whose `.st_mode` satisfies `stat.S_ISDIR(...)`.
+
+`format_literal_rule` is cold-path (CLI `ignore` / `unignore` / `generate` only), so the syscall cost is irrelevant; consolidation is purely a code-cleanliness concern.
+
+**Fix candidates:**
+
+- Update each of the six affected tests to stub `path.lstat().st_mode` returning a value where `stat.S_ISDIR(...)` is True for dir cases and False for file cases. Then replace the inline form with `_is_real_dir(target)`. ~30 LOC of test-only changes.
+- Leave the asymmetry documented (as it currently is in `_is_real_dir`'s docstring) and skip the consolidation. The third call site is acceptable.
+
+**Urgency:** low. Triggered by: next time the test mocks in `test_rules_format_literal_rule.py` need updating for unrelated reasons, OR a fourth `path.is_dir() and not path.is_symlink()` site appears elsewhere.
+
+Touches: `src/dbxignore/rules.py` (`format_literal_rule`); `tests/test_rules_format_literal_rule.py` (6 tests).
+
+## 107. Promote `symlink_capable` runtime-probe fixture to `conftest.py` for real Windows coverage
+
+The existing convention for symlink-dependent tests is `@pytest.mark.skipif(sys.platform == "win32", reason="Windows symlink creation requires admin/dev-mode privileges")` — about 10 call sites across `tests/test_cli_ignore.py` and `tests/test_rules_basic.py`. This skips ALL Windows runs, including CI's `windows-latest` runner which has Developer Mode enabled and CAN create symlinks. Those tests currently provide zero Windows coverage where they could provide real coverage.
+
+`tests/test_cli_symlink_path_args.py::symlink_capable` is the better pattern: a fixture that probes `os.symlink` at runtime and only skips on `OSError`. Hosts that support symlink creation (Linux, macOS, Windows with Dev Mode) exercise the tests; hosts that don't (Windows without Dev Mode, locked-down Docker containers) skip cleanly.
+
+**Fix candidates:**
+
+- Move `symlink_capable` from `tests/test_cli_symlink_path_args.py:35` to `tests/conftest.py`. Update each affected test to declare `symlink_capable` as a fixture parameter and drop its `@pytest.mark.skipif` decorator. Real Windows-symlink coverage unlocked.
+- Leave the static `skipif` form in place; coverage gap accepted as a trade-off for simplicity.
+
+**Urgency:** low. Concrete coverage gain, but no user-facing impact; bundle with the next time those tests are touched.
+
+Touches: `tests/conftest.py`; `tests/test_cli_ignore.py` (~7 tests); `tests/test_rules_basic.py` (~2 tests).
+
+## 108. `dropbox_root` fixture centralization (design-tension record)
+
+About 27 sites across `tests/test_cli_apply.py`, `tests/test_cli_clear.py`, and `tests/test_cli_status_list_explain.py` use the inline pattern `monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])`. `tests/test_cli_symlink_path_args.py:87` packages this as a `dropbox_root` fixture that creates a real `Dropbox` subdirectory under `tmp_path` and points `_discover_roots` at it.
+
+The fixture form removes the inline duplication; the inline form is more explicit at the test site (a reader can see exactly what's being monkeypatched). Filed for the design-tension record (precedent: items #40 / #51); current dual shape is defensible.
+
+**Fix candidates:**
+
+- Move `dropbox_root` to `conftest.py`. Migrate the ~27 inline sites to use it. Many tests would shrink by 2-3 lines each. Risk: tests that depend on the *exact* `tmp_path` rather than `tmp_path / "Dropbox"` need separate handling.
+- Leave the dual pattern in place; the inline form is defensible as more explicit at the test site.
+
+**Urgency:** very low. Pre-existing duplication; PR #195 added the 27th instance, packaged as a fixture rather than inline. Awaits a rule-of-three trigger from a fourth context that wants the fixture pattern.
+
+Touches: `tests/conftest.py`; ~27 sites across `tests/test_cli_*.py`.
+
 ---
 
 ## Status
 
 ### Open
 
-Eighteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Items #97, #98, and #105 are user-facing correctness/error-handling fixes and should be prioritized ahead of purely polish work.
+Twenty-one items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Items #97, #98, and #105 are user-facing correctness/error-handling fixes and should be prioritized ahead of purely polish work.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2335,6 +2380,9 @@ Eighteen items. Most are passive (no concrete trigger requires action) — bundl
 - **#102** — Rule cache can miss same-size edits with preserved mtimes. Consider a hash or forced periodic re-read policy.
 - **#103** — CI uses `uv run pytest` despite the documented canonical `uv run python -m pytest` workaround. Mechanical workflow alignment.
 - **#105** — `..` segments after a symlinked component are collapsed lexically by `_normalize_under_root` / `_validate_target_under_root`, dropping symlink awareness. `apply ~/Dropbox/link/../file` reconciles `~/Dropbox/file` instead of `<target>/file`. Reject paths where `..` follows a symlinked component.
+- **#106** — Complete the `_is_real_dir` helper consolidation: `format_literal_rule:181` still uses the inline `path.is_dir() and not path.is_symlink()` form because six tests in `test_rules_format_literal_rule.py` mock `path.is_dir`/`is_symlink` directly. Migration requires updating those mocks to stub `path.lstat().st_mode`.
+- **#107** — Promote `symlink_capable` runtime-probe fixture from `test_cli_symlink_path_args.py` to `conftest.py`. The ~10 existing tests using `@pytest.mark.skipif(sys.platform == "win32", ...)` could then drop the static decorator and exercise on Windows hosts that support symlink creation (CI's Windows runner has Dev Mode).
+- **#108** — `dropbox_root` fixture from `test_cli_symlink_path_args.py` packages the ~27-site inline `monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])` pattern across `test_cli_apply.py` / `test_cli_clear.py` / `test_cli_status_list_explain.py`. Filed for design-tension record (precedent: #40, #51); current dual shape is defensible.
 
 ### Resolved (reverse chronological)
 

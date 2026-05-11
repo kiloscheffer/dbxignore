@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from . import linux_systemd as linux_systemd
+    from . import macos_launchd as macos_launchd
+    from . import windows_task as windows_task
 
 
 def install_service() -> None:

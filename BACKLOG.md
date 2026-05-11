@@ -2354,13 +2354,39 @@ The fixture form removes the inline duplication; the inline form is more explici
 
 Touches: `tests/conftest.py`; ~27 sites across `tests/test_cli_*.py`.
 
+## 109. `FileNotFoundError`-before-`OSError` 'vanished path' idiom now repeats across three modules
+
+The specific-before-general pattern that handles "the path I'm about to read or write may have vanished between listing and access" — a benign race window on a live tree — now lives at seven call sites across three modules after PR #203 (item #97) and PR #204 (item #98 plus the Codex P2 follow-up):
+
+- `src/dbxignore/reconcile.py:160,206` — `_reconcile_path` read and write arms. `FileNotFoundError → logger.debug + return None`. The established precedent; the docstring at the top of the module captures the contract.
+- `src/dbxignore/state.py:215` — `_read_at`. `FileNotFoundError → return None` (silent, because the file-doesn't-exist case is the first-run common case and emitting a WARNING would spam every fresh install's log).
+- `src/dbxignore/cli.py` (`uninstall --purge` marker loop) — four sites: root `is_ignored`, root `clear_ignored`, child `is_ignored`, child `clear_ignored`. Each has a `FileNotFoundError` arm before the broad `OSError` arm; the local response varies (`root_marked = False`, `pass`, `continue`).
+
+The idiom is recognizable at each site, but the **response action** after the FNF catch varies enough that a generic helper would need to express the post-FNF behavior in a parameterized way. Two candidate shapes:
+
+- A `suppress_vanished()` context manager — fits the silent-pass purge clear arms cleanly, but loses the read arms' need to set local state (`root_marked = False`) or jump to the next iteration (`continue`). Those sites would still need their own try/except, defeating the dedup.
+- A wrapper function like `read_marker_or_none(path) -> bool | None` — specific enough to fit one caller's shape (the purge read loop), but would need a different signature for each call site (state.py wants `State | None`; reconcile wants the read tuple).
+
+Surfaced 2026-05-11 during the PR #204 review cycle (the third site needing the idiom was identified by an automated review on the purge loop).
+
+**Fix candidates:**
+
+- **Extract a `suppress_vanished()` context manager** and apply it at the silent-pass sites only. Pros: removes two-line `except FileNotFoundError: pass` boilerplate at the purge clear arms. Cons: the read sites cannot use it (they need to set a flag or `continue`), so the helper would only apply to a minority of the seven sites.
+- **Status quo.** Each site's two-line `except FileNotFoundError: <local action>` reads in context; the local action varies meaningfully. The contract is documented in `reconcile.py`'s module docstring, so a future implementer encountering the idiom at a new site has a reference.
+
+**Recommendation:** keep as-is. Precedents #40 (dual `paths` for-loops in macOS xattr backend), #51 (`install/__init__.py` platform dispatch), #108 (`dropbox_root` fixture) — same shape: rule-of-three triggered, helper extraction is tempting but the local variation makes the generic shape less clear than the duplicated idiom. Await a fourth concrete site or a real maintenance burden before reopening.
+
+**Urgency:** very low. Code-quality observation; current per-site shape is defensible and the idiom is documented.
+
+Touches: `src/dbxignore/cli.py`, `src/dbxignore/state.py`, `src/dbxignore/reconcile.py` (one helper added, ~3-7 call sites updated depending on which extraction shape is picked).
+
 ---
 
 ## Status
 
 ### Open
 
-Twenty-one items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Items #97, #98, and #105 are user-facing correctness/error-handling fixes and should be prioritized ahead of purely polish work.
+Twenty-two items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Items #97, #98, and #105 are user-facing correctness/error-handling fixes and should be prioritized ahead of purely polish work.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2383,6 +2409,7 @@ Twenty-one items. Most are passive (no concrete trigger requires action) — bun
 - **#106** — Complete the `_is_real_dir` helper consolidation: `format_literal_rule:181` still uses the inline `path.is_dir() and not path.is_symlink()` form because six tests in `test_rules_format_literal_rule.py` mock `path.is_dir`/`is_symlink` directly. Migration requires updating those mocks to stub `path.lstat().st_mode`.
 - **#107** — Promote `symlink_capable` runtime-probe fixture from `test_cli_symlink_path_args.py` to `conftest.py`. The ~10 existing tests using `@pytest.mark.skipif(sys.platform == "win32", ...)` could then drop the static decorator and exercise on Windows hosts that support symlink creation (CI's Windows runner has Dev Mode).
 - **#108** — `dropbox_root` fixture from `test_cli_symlink_path_args.py` packages the ~27-site inline `monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])` pattern across `test_cli_apply.py` / `test_cli_clear.py` / `test_cli_status_list_explain.py`. Filed for design-tension record (precedent: #40, #51); current dual shape is defensible.
+- **#109** — `FileNotFoundError`-before-`OSError` 'vanished path' idiom now repeats across `reconcile._reconcile_path` (2 sites), `state._read_at` (1 site), and `cli.uninstall --purge` (4 sites after PR #204). Filed for design-tension record (precedent: #40, #51, #108); current per-site shape is defensible because the local response action varies (return None / set flag / continue / pass) and no generic helper fits all seven sites.
 
 ### Resolved (reverse chronological)
 

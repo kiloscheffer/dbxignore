@@ -480,6 +480,88 @@ def test_purge_clears_marker_on_discovered_root(
     assert not fake_markers.is_ignored(root)
 
 
+def test_purge_reports_marker_clear_errors_and_exits_two(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
+) -> None:
+    """Backlog item #98: when `markers.clear_ignored` raises OSError on one
+    path, --purge collects the error, prints a stderr report listing the
+    failure, still purges every OTHER marker and the local state dir, and
+    exits 2 so scripts can detect incomplete cleanup. The prior shape
+    silently swallowed OSError and reported full success."""
+    import click.testing
+
+    from dbxignore import cli, state
+
+    root = tmp_path / "Dropbox"
+    root.mkdir()
+    good = root / "good.tmp"
+    good.touch()
+    bad = root / "bad.tmp"
+    bad.touch()
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    state_json = state_dir / "state.json"
+    state_json.write_text('{"schema": 1}', encoding="utf-8")
+    fake_markers.set_ignored(good)
+    fake_markers.set_ignored(bad)
+
+    # Inject a clear-side failure for `bad` only.
+    real_clear = fake_markers.clear_ignored
+
+    def failing_clear(path: Path) -> None:
+        if path.resolve() == bad.resolve():
+            raise PermissionError(13, "Permission denied", str(path))
+        real_clear(path)
+
+    monkeypatch.setattr(fake_markers, "clear_ignored", failing_clear)
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+    monkeypatch.setattr("dbxignore.install.uninstall_service", lambda: None)
+
+    result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
+
+    assert result.exit_code == 2, result.output
+    # The good marker was cleared; the bad one was not.
+    assert "Cleared 1 ignore markers" in result.output
+    assert not fake_markers.is_ignored(good)
+    assert fake_markers.is_ignored(bad)
+    # Stderr names the failure with its operation tag and the bad path.
+    assert "Could not fully clear markers" in result.stderr
+    assert "clear failed on" in result.stderr
+    assert str(bad) in result.stderr
+    # State cleanup ran despite the marker failure — exit-2 only after.
+    assert not state_json.exists()
+
+
+def test_purge_exits_zero_when_all_markers_clear(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
+) -> None:
+    """Regression guard for item #98: happy path stays exit 0 with no stderr
+    error report. Pins that the new accumulator doesn't false-positive on
+    the no-error case."""
+    import click.testing
+
+    from dbxignore import cli, state
+
+    root = tmp_path / "Dropbox"
+    root.mkdir()
+    marked = root / "scratch.tmp"
+    marked.touch()
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    fake_markers.set_ignored(marked)
+
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+    monkeypatch.setattr("dbxignore.install.uninstall_service", lambda: None)
+
+    result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
+
+    assert result.exit_code == 0, result.output
+    assert "Cleared 1 ignore markers" in result.output
+    assert "Could not fully clear" not in result.stderr
+
+
 def test_purge_removes_daemon_log_and_rotations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
 ) -> None:

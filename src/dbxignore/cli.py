@@ -1493,33 +1493,56 @@ def uninstall(purge: bool) -> None:
     click.echo("Uninstalled dbxignore daemon service.")
 
     if purge:
-        # (1) Clear xattr markers.
+        # (1) Clear xattr markers. Read and clear arms are split so each
+        # failure can be attributed to the specific operation that failed;
+        # the prior shape collapsed both into one `except OSError: pass`
+        # and silently overstated cleanup success (backlog item #98).
         discovered = _discover_roots()
         cleared = 0
+        errors: list[tuple[Path, str, str]] = []  # (path, operation, message)
         for r in discovered:
             try:
-                if markers.is_ignored(r):
+                root_marked = markers.is_ignored(r)
+            except OSError as exc:
+                errors.append((r, "read", str(exc)))
+                root_marked = False
+            if root_marked:
+                try:
                     markers.clear_ignored(r)
                     cleared += 1
-            except OSError:
-                pass
+                except OSError as exc:
+                    errors.append((r, "clear", str(exc)))
             for current, dirnames, filenames in os.walk(r, followlinks=False):
                 current_path = Path(current)
                 for name in dirnames + filenames:
                     p = current_path / name
                     try:
-                        if markers.is_ignored(p):
-                            if is_ignore_filename(p.name):
-                                logger.warning(
-                                    ".dropboxignore at %s was marked ignored; "
-                                    "overriding back to synced",
-                                    p,
-                                )
-                            markers.clear_ignored(p)
-                            cleared += 1
-                    except OSError:
+                        marked = markers.is_ignored(p)
+                    except OSError as exc:
+                        errors.append((p, "read", str(exc)))
                         continue
+                    if not marked:
+                        continue
+                    if is_ignore_filename(p.name):
+                        logger.warning(
+                            ".dropboxignore at %s was marked ignored; overriding back to synced",
+                            p,
+                        )
+                    try:
+                        markers.clear_ignored(p)
+                        cleared += 1
+                    except OSError as exc:
+                        errors.append((p, "clear", str(exc)))
         click.echo(f"Cleared {cleared} ignore markers.")
+        if errors:
+            # Surface a bounded list to stderr so the user sees what was
+            # left behind. State cleanup still runs; the non-zero exit at
+            # the end of the purge block is what scripts gate on.
+            click.echo(f"Could not fully clear markers ({len(errors)} errors):", err=True)
+            for path, op, msg in errors[:10]:
+                click.echo(f"  {op} failed on {path}: {msg}", err=True)
+            if len(errors) > 10:
+                click.echo(f"  ... and {len(errors) - 10} more.", err=True)
 
         # (2) Remove state.json, daemon.log*, state dir (cross-platform).
         _purge_local_state()
@@ -1531,6 +1554,9 @@ def uninstall(purge: bool) -> None:
             removed_dropin = linux_systemd.remove_dropin_directory()
             if removed_dropin is not None:
                 click.echo(f"Removed systemd drop-in directory {removed_dropin}.")
+
+        if errors:
+            sys.exit(2)
 
 
 _INIT_DETECTION_DIRS = frozenset(

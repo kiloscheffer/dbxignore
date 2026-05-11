@@ -155,7 +155,7 @@ def _normalize_under_root(path: Path, *, require_exists: bool) -> tuple[Path, Pa
     # symlink is safe — it cancels a regular segment with no FS divergence,
     # so the sticky-flag only flips once a symlink enters the prefix.
     parts = abs_path.parts
-    prefix = Path(parts[0]) if parts else abs_path
+    prefix = Path(parts[0])
     seen_symlink = False
     for seg in parts[1:]:
         if seg == "..":
@@ -168,7 +168,7 @@ def _normalize_under_root(path: Path, *, require_exists: bool) -> tuple[Path, Pa
                 )
                 sys.exit(2)
             prefix = prefix.parent
-        elif seg != ".":
+        else:
             prefix = prefix / seg
             if not seen_symlink and os.path.islink(prefix):
                 seen_symlink = True

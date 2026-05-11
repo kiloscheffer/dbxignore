@@ -519,7 +519,7 @@ def test_case9_clear_list_symlink_to_directory_does_not_descend(
     )
 
 
-# ---- Case 7: `..` after a symlinked component (item #105) -----------------
+# ---- Case 10: `..` after a symlinked component (item #105) ---------------
 #
 # `os.path.normpath` collapses `link/..` lexically (to nothing), but the
 # filesystem would resolve it to `<target-of-link>/..`. The two interpretations
@@ -529,7 +529,7 @@ def test_case9_clear_list_symlink_to_directory_does_not_descend(
 
 
 @pytest.mark.parametrize("verb", ALL_VERBS)
-def test_case7a_dotdot_after_symlink_rejected(
+def test_case10a_dotdot_after_symlink_rejected(
     verb: str,
     dropbox_root: Path,
     raw_marker_spy: SimpleNamespace,
@@ -561,7 +561,7 @@ def test_case7a_dotdot_after_symlink_rejected(
 
 
 @pytest.mark.parametrize("verb", RULE_LOGIC_VERBS)
-def test_case7b_dotdot_before_symlink_accepted_rule_logic_verbs(
+def test_case10b_dotdot_before_symlink_accepted_rule_logic_verbs(
     verb: str,
     dropbox_root: Path,
     raw_marker_spy: SimpleNamespace,
@@ -599,7 +599,7 @@ def test_case7b_dotdot_before_symlink_accepted_rule_logic_verbs(
 
 
 @pytest.mark.parametrize("verb", FS_STATE_VERBS)
-def test_case7c_plain_dotdot_no_symlink_still_works(
+def test_case10c_plain_dotdot_no_symlink_still_works(
     verb: str,
     dropbox_root: Path,
     raw_marker_spy: SimpleNamespace,

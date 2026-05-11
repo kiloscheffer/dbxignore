@@ -29,16 +29,16 @@ jobs:
         run: uv run mypy .
 
       - name: Unit tests (cross-platform)
-        run: uv run pytest -m "not windows_only and not linux_only and not macos_only" -v
+        run: uv run python -m pytest -m "not windows_only and not linux_only and not macos_only" -v
 
       - name: Windows-only integration tests
         if: runner.os == 'Windows'
-        run: uv run pytest -m windows_only -v
+        run: uv run python -m pytest -m windows_only -v
 
       - name: Linux-only integration tests
         if: runner.os == 'Linux'
-        run: uv run pytest -m linux_only -v
+        run: uv run python -m pytest -m linux_only -v
 
       - name: macOS-only integration tests
         if: runner.os == 'macOS'
-        run: uv run pytest -m macos_only -v
+        run: uv run python -m pytest -m macos_only -v

@@ -1,6 +1,10 @@
 """RuleCache.load_root skips reparsing .dropboxignore files whose content
-(mtime + size) hasn't changed since the last load. The sweep is still the
-safety net — rglob finds new files — but already-cached files stay put."""
+hash matches the cached digest. The sweep is still the safety net — rglob
+finds new files — but already-cached files stay put.
+
+Previously the gate used ``(mtime_ns, size)`` from stat; the content-hash
+form (item #102) also catches same-size edits with preserved mtimes — a
+real edge case when editors or ``touch -r`` restore the timestamp."""
 
 from __future__ import annotations
 
@@ -55,8 +59,9 @@ def test_load_root_reloads_when_size_changes(tmp_path: Path, write_file: WriteFi
 def test_load_root_reloads_when_mtime_changes_but_size_matches(
     tmp_path: Path, write_file: WriteFile
 ) -> None:
-    """Same byte count, different content — size check alone wouldn't
-    catch this. mtime_ns must be part of the stat tuple."""
+    """Same byte count, different content, later mtime — the content-hash
+    gate catches this. (Also caught by the prior ``(mtime_ns, size)`` gate
+    because mtime differs; this test pins the common editor-save case.)"""
     ignore = write_file(tmp_path / ".dropboxignore", "build/\n")  # 7 bytes
 
     cache = RuleCache()
@@ -75,6 +80,44 @@ def test_load_root_reloads_when_mtime_changes_but_size_matches(
     second = _cached(cache, ignore)
 
     assert first is not second
+    assert cache.match(tmp_path / "cache") is True
+    assert cache.match(tmp_path / "build") is False
+
+
+def test_load_root_reloads_when_size_and_mtime_match_but_content_differs(
+    tmp_path: Path, write_file: WriteFile
+) -> None:
+    """Same byte count, content swap, AND mtime restored to its original
+    value. The pre-item-#102 ``(mtime_ns, size)`` gate would silently skip
+    the reparse and leave stale rules active; the content-hash gate
+    catches the swap.
+
+    This is a real edge case — editors that preserve mtime on save, or
+    explicit ``touch -r`` restoring a timestamp after edit. The daemon
+    sweep is the recovery path for missed watchdog events, so a stale
+    rule-cache entry that survives the sweep would survive indefinitely
+    until the next size/mtime change."""
+    ignore = write_file(tmp_path / ".dropboxignore", "build/\n")  # 7 bytes
+
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+    first = _cached(cache, ignore)
+    baseline_mtime_ns = ignore.stat().st_mtime_ns
+
+    # Overwrite with same-length content AND restore the original mtime.
+    ignore.write_text("cache/\n", encoding="utf-8")  # also 7 bytes
+    os.utime(ignore, ns=(baseline_mtime_ns, baseline_mtime_ns))
+    (tmp_path / "cache").mkdir()
+    (tmp_path / "build").mkdir()
+
+    cache.load_root(tmp_path)
+    second = _cached(cache, ignore)
+
+    assert first is not second, (
+        "Cache kept the stale entry despite a content swap with preserved "
+        "mtime+size. The content-hash gate must catch this case; "
+        "(mtime_ns, size) alone misses it (item #102)."
+    )
     assert cache.match(tmp_path / "cache") is True
     assert cache.match(tmp_path / "build") is False
 

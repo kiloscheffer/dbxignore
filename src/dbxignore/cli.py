@@ -121,12 +121,6 @@ def _normalize_under_root(path: Path, *, require_exists: bool) -> tuple[Path, Pa
     itself, not the link's target. ``os.path.normpath`` folds ``..`` /
     ``.`` segments without following symlinks.
 
-    Mixing ``..`` with a symlinked component is rejected up-front (item
-    #105): lexical normalization of ``link/..`` differs from the
-    filesystem's ``<target-of-link>/..``, and silently picking the
-    lexical interpretation would operate on a path the user did not
-    intend. ``..`` BEFORE any symlink in the path is fine.
-
     When ``require_exists`` is True, ``os.path.lexists(target)`` is
     checked before discovery — broken/missing symlinks still pass
     (the link object lexists even if its target doesn't). Callers that
@@ -140,6 +134,15 @@ def _normalize_under_root(path: Path, *, require_exists: bool) -> tuple[Path, Pa
     Dropbox root fails the unresolved containment (lexical prefix
     mismatch), then succeeds via ``path.resolve()``.
 
+    Paths that mix ``..`` with a symlinked component are rejected when
+    the LEXICAL interpretation is what we would use (item #105): lexical
+    normalization of ``link/..`` differs from the filesystem's
+    ``<target-of-link>/..``, and silently picking the lexical
+    interpretation would operate on a path the user did not intend. The
+    check runs only inside the unresolved-containment-succeeded branch
+    because the resolved-path fallback is itself filesystem-true and so
+    has no lexical-vs-FS-true divergence to defend against.
+
     Used directly by ``_explain`` (rule-logic lookup, no walk, no
     mutation, so the symlinked-ancestor guard is unnecessary). The
     filesystem-state verbs (``apply``, ``clear``, ``list``,
@@ -147,32 +150,6 @@ def _normalize_under_root(path: Path, *, require_exists: bool) -> tuple[Path, Pa
     which wraps this and adds the ancestor-rejection guard.
     """
     abs_path = path.absolute()
-    # Reject `..` segments that would follow a symlinked component:
-    # `os.path.normpath` collapses `link/..` lexically (to nothing), but the
-    # filesystem would resolve it to `<target-of-link>/..`. The two
-    # interpretations diverge, and the lexical one silently operates on a
-    # different path than the user intended (item #105). A `..` BEFORE any
-    # symlink is safe — it cancels a regular segment with no FS divergence,
-    # so the sticky-flag only flips once a symlink enters the prefix.
-    parts = abs_path.parts
-    prefix = Path(parts[0])
-    seen_symlink = False
-    for seg in parts[1:]:
-        if seg == "..":
-            if seen_symlink:
-                click.echo(
-                    f"error: {path} contains '..' after a symlinked component; "
-                    f"lexical and filesystem interpretations diverge here. "
-                    f"Operate on the resolved path or the symlink object itself.",
-                    err=True,
-                )
-                sys.exit(2)
-            prefix = prefix.parent
-        else:
-            prefix = prefix / seg
-            if not seen_symlink and os.path.islink(prefix):
-                seen_symlink = True
-
     target_unresolved = Path(os.path.normpath(abs_path))
     if require_exists and not os.path.lexists(target_unresolved):
         click.echo(f"Path {path} does not exist.", err=True)
@@ -183,6 +160,11 @@ def _normalize_under_root(path: Path, *, require_exists: bool) -> tuple[Path, Pa
         sys.exit(2)
     root = find_containing(target_unresolved, discovered)
     if root is not None:
+        # Lexical interpretation will be used as the target — fire the
+        # `..`-after-symlink guard. For the resolved-path fallback below,
+        # `path.resolve()` is filesystem-true and unambiguous, so the
+        # guard does not apply.
+        _reject_dotdot_after_symlink(path, abs_path)
         target = target_unresolved
     else:
         target_resolved = path.resolve()
@@ -192,6 +174,40 @@ def _normalize_under_root(path: Path, *, require_exists: bool) -> tuple[Path, Pa
             sys.exit(2)
         target = target_resolved
     return target, root, discovered
+
+
+def _reject_dotdot_after_symlink(orig_path: Path, abs_path: Path) -> None:
+    """Refuse to proceed when ``..`` follows a symlinked component (item #105).
+
+    ``os.path.normpath`` collapses ``link/..`` lexically (to nothing), but
+    the filesystem would resolve it to ``<target-of-link>/..``. The two
+    interpretations diverge, and silently picking the lexical one is the
+    bug item #105 closes. A ``..`` BEFORE any symlink in the path is safe:
+    it cancels a regular segment with no FS divergence, so the sticky-flag
+    only flips once a symlink enters the accumulated prefix.
+
+    Caller passes the un-normalized absolute path so the walk can see each
+    segment's original position; the original ``orig_path`` is used only in
+    the user-facing error message.
+    """
+    parts = abs_path.parts
+    prefix = Path(parts[0])
+    seen_symlink = False
+    for seg in parts[1:]:
+        if seg == "..":
+            if seen_symlink:
+                click.echo(
+                    f"error: {orig_path} contains '..' after a symlinked component; "
+                    f"lexical and filesystem interpretations diverge here. "
+                    f"Operate on the resolved path or the symlink object itself.",
+                    err=True,
+                )
+                sys.exit(2)
+            prefix = prefix.parent
+        else:
+            prefix = prefix / seg
+            if not seen_symlink and os.path.islink(prefix):
+                seen_symlink = True
 
 
 def _validate_target_under_root(path: Path) -> tuple[Path, Path, list[Path]]:

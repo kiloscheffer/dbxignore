@@ -621,3 +621,45 @@ def test_case10c_plain_dotdot_no_symlink_still_works(
 
     assert exit_code == 0, f"{verb} refused plain ..-path; stderr={stderr!r}"
     assert "symlinked component" not in stderr
+
+
+@pytest.mark.parametrize("verb", ALL_VERBS)
+def test_case10d_dotdot_after_alias_uses_resolved_fallback(
+    verb: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    raw_marker_spy: SimpleNamespace,
+    symlink_capable: None,
+) -> None:
+    """An out-of-Dropbox alias linking INTO Dropbox combined with ``..`` in the
+    path's tail must NOT trip the ``..``-after-symlink guard: the unresolved
+    path is not under any discovered Dropbox root (the alias is outside), so
+    ``_normalize_under_root`` falls through to ``path.resolve()`` — which is
+    filesystem-true and unambiguous. The guard applies only to paths that
+    would actually be handled through the lexical in-root branch.
+
+    Without this scoping (PR #205's first commit had the guard at the top),
+    an alias like ``/alias → ~/Dropbox`` would set ``seen_symlink`` on
+    ``alias``, then the trailing ``..`` would trigger a spurious rejection
+    even though resolve() handles the path correctly. Same scenario as
+    ``test_case4_out_of_dropbox_alias_into_dropbox`` but with ``..`` in the
+    tail."""
+    real_dropbox = tmp_path / "real-dropbox"
+    real_dropbox.mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [real_dropbox])
+    sub = real_dropbox / "sub"
+    sub.mkdir()
+    target_file = real_dropbox / "file.txt"
+    target_file.touch()
+
+    alias = tmp_path / "alias"
+    os.symlink(real_dropbox, alias)
+    alias_arg = alias / "sub" / ".." / "file.txt"  # resolves to real_dropbox/file.txt
+
+    exit_code, _stdout, stderr = _invoke(verb, alias_arg)
+
+    assert exit_code in (0, 1), (
+        f"{verb} refused alias path with ..; stderr={stderr!r}. "
+        f"Resolved-fallback should have succeeded without firing the guard."
+    )
+    assert "symlinked component" not in stderr

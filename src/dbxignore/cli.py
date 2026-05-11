@@ -121,6 +121,12 @@ def _normalize_under_root(path: Path, *, require_exists: bool) -> tuple[Path, Pa
     itself, not the link's target. ``os.path.normpath`` folds ``..`` /
     ``.`` segments without following symlinks.
 
+    Mixing ``..`` with a symlinked component is rejected up-front (item
+    #105): lexical normalization of ``link/..`` differs from the
+    filesystem's ``<target-of-link>/..``, and silently picking the
+    lexical interpretation would operate on a path the user did not
+    intend. ``..`` BEFORE any symlink in the path is fine.
+
     When ``require_exists`` is True, ``os.path.lexists(target)`` is
     checked before discovery — broken/missing symlinks still pass
     (the link object lexists even if its target doesn't). Callers that
@@ -140,7 +146,34 @@ def _normalize_under_root(path: Path, *, require_exists: bool) -> tuple[Path, Pa
     ``ignore``, ``unignore``) go through ``_validate_target_under_root``,
     which wraps this and adds the ancestor-rejection guard.
     """
-    target_unresolved = Path(os.path.normpath(path.absolute()))
+    abs_path = path.absolute()
+    # Reject `..` segments that would follow a symlinked component:
+    # `os.path.normpath` collapses `link/..` lexically (to nothing), but the
+    # filesystem would resolve it to `<target-of-link>/..`. The two
+    # interpretations diverge, and the lexical one silently operates on a
+    # different path than the user intended (item #105). A `..` BEFORE any
+    # symlink is safe — it cancels a regular segment with no FS divergence,
+    # so the sticky-flag only flips once a symlink enters the prefix.
+    parts = abs_path.parts
+    prefix = Path(parts[0]) if parts else abs_path
+    seen_symlink = False
+    for seg in parts[1:]:
+        if seg == "..":
+            if seen_symlink:
+                click.echo(
+                    f"error: {path} contains '..' after a symlinked component; "
+                    f"lexical and filesystem interpretations diverge here. "
+                    f"Operate on the resolved path or the symlink object itself.",
+                    err=True,
+                )
+                sys.exit(2)
+            prefix = prefix.parent
+        elif seg != ".":
+            prefix = prefix / seg
+            if not seen_symlink and os.path.islink(prefix):
+                seen_symlink = True
+
+    target_unresolved = Path(os.path.normpath(abs_path))
     if require_exists and not os.path.lexists(target_unresolved):
         click.echo(f"Path {path} does not exist.", err=True)
         sys.exit(2)

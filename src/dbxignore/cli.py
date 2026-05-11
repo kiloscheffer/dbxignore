@@ -102,54 +102,44 @@ def _load_cache(roots: list[Path]) -> RuleCache:
     return cache
 
 
-def _validate_target_under_root(path: Path) -> tuple[Path, Path, list[Path]]:
-    """Normalize ``path`` and verify it exists under a discovered Dropbox root.
+def _normalize_under_root(path: Path, *, require_exists: bool) -> tuple[Path, Path, list[Path]]:
+    """Normalize ``path`` (symlink-preserving) and verify Dropbox-root containment.
 
-    Exits 2 with a user-friendly message if any check fails. Returns
-    ``(target, root, discovered)`` where ``target`` is the normalized path,
+    Returns ``(target, root, discovered)`` where ``target`` is the
+    normalized absolute path (NOT resolved — symlinks preserved),
     ``root`` is the Dropbox root containing it, and ``discovered`` is the
-    full list of roots. Used by ``ignore`` and ``unignore``; ``apply`` and
-    ``clear`` accept paths but don't pre-check existence so they don't share
-    this helper.
+    full list of roots. Exits 2 with a user-friendly stderr message if
+    any check fails.
 
-    ``path.absolute()`` is used instead of ``path.resolve()`` so that symlinks
-    are preserved — markers and rules apply to the link itself, not the link's
-    target (per the project's symlink invariant). ``os.path.normpath`` folds
-    ``..`` and ``.`` segments without following symlinks.
+    ``path.absolute()`` is used instead of ``path.resolve()`` so that
+    symlinks are preserved — markers and rules apply to the link object
+    itself, not the link's target. ``os.path.normpath`` folds ``..`` /
+    ``.`` segments without following symlinks.
 
-    If the unresolved path is not under any Dropbox root, the validation
-    falls back to the resolved path — this handles out-of-Dropbox symlink
-    aliases that reach into Dropbox. For example, ``/alias/Dropbox/file``
-    where ``/alias`` symlinks to the actual Dropbox root will fail the
-    unresolved containment check (lexical prefix mismatch), then succeed
-    using the canonical resolved path.
+    When ``require_exists`` is True, ``os.path.lexists(target)`` is
+    checked before discovery — broken/missing symlinks still pass
+    (the link object lexists even if its target doesn't). Callers that
+    answer rule-logic questions about hypothetical paths (``explain``,
+    ``check-ignore``) pass ``require_exists=False``.
 
-    Symlinked ancestors between ``target`` and ``root`` are rejected: the daemon
-    walks with ``followlinks=False`` and would never reconcile a path whose
-    ancestor resolves through a symlink, leaving the marker permanently orphaned.
-    Operating on the symlink itself is fine; only intermediate symlinks are
-    problematic.
+    If the unresolved path is not under any Dropbox root, the
+    containment check falls back to the resolved path — this handles
+    out-of-Dropbox symlink aliases that reach into Dropbox. For example,
+    ``/alias/Dropbox/file`` where ``/alias`` symlinks to the actual
+    Dropbox root fails the unresolved containment (lexical prefix
+    mismatch), then succeeds via ``path.resolve()``.
+
+    Used directly by ``clear``, ``list``, and ``_explain``; wrapped by
+    ``_validate_target_under_root`` for the write-side verbs.
     """
-    # Path.absolute() preserves symlinks (round-4: the new verbs operate
-    # on the link itself, not its target). os.path.normpath folds `..`/`.`.
     target_unresolved = Path(os.path.normpath(path.absolute()))
-    # `exists()` follows symlinks — a broken symlink would be rejected even
-    # though the link object itself exists and is what dbxignore manages.
-    # `os.path.lexists` checks the link itself, so broken symlinks pass.
-    # macOS xattrs attach via NOFOLLOW (work on link regardless of target);
-    # Linux's ignore-side rejection in cli.ignore catches symlinks anyway.
-    if not os.path.lexists(target_unresolved):
+    if require_exists and not os.path.lexists(target_unresolved):
         click.echo(f"Path {path} does not exist.", err=True)
         sys.exit(2)
     discovered = _discover_roots()
     if not discovered:
         click.echo("No Dropbox roots found. Is Dropbox installed?", err=True)
         sys.exit(2)
-    # Try unresolved first (in-Dropbox symlink-as-target semantic). If that's
-    # not under any root, fall back to resolved (handles out-of-Dropbox
-    # symlink aliases that reach into Dropbox — `_discover_roots` returns
-    # resolved roots, so the unresolved-path lexical-prefix check would
-    # reject them otherwise).
     root = find_containing(target_unresolved, discovered)
     if root is not None:
         target = target_unresolved
@@ -160,10 +150,24 @@ def _validate_target_under_root(path: Path) -> tuple[Path, Path, list[Path]]:
             click.echo(f"Path {path} is not under any Dropbox root.", err=True)
             sys.exit(2)
         target = target_resolved
-    # Reject paths whose ancestors (between target and root) are symlinks. The
-    # daemon walks with followlinks=False and would never reconcile such a path,
-    # leaving the marker permanently orphaned. The target itself being a symlink
-    # is fine — that's the intended use case (round-4 fix).
+    return target, root, discovered
+
+
+def _validate_target_under_root(path: Path) -> tuple[Path, Path, list[Path]]:
+    """Normalize, verify existence and Dropbox-root containment, and
+    reject symlinked ancestors between target and root.
+
+    Wraps ``_normalize_under_root(path, require_exists=True)`` and adds
+    the daemon-orphan guard for write-side verbs: a marker written under
+    a symlinked ancestor would never be reconciled by the daemon's
+    ``followlinks=False`` walk, so the verb refuses up-front. The target
+    itself being a symlink is fine — that's the intended use case
+    (markers attach to the link object on macOS/Windows; Linux rejects
+    via ``_reconcile_path``'s ``PermissionError`` arm with a WARNING).
+
+    Used by ``ignore``, ``unignore``, and ``apply``.
+    """
+    target, root, discovered = _normalize_under_root(path, require_exists=True)
     for ancestor in target.parents:
         if ancestor == root:
             break
@@ -593,25 +597,17 @@ def apply(
         _apply_from_gitignore(from_gitignore, dry_run=dry_run, yes=yes)
         return
 
-    discovered = _discover_roots()
-    if not discovered:
-        click.echo("No Dropbox roots found. Is Dropbox installed?", err=True)
-        sys.exit(2)
-
-    cache = _load_cache(discovered)
-
     if path is None:
+        discovered = _discover_roots()
+        if not discovered:
+            click.echo("No Dropbox roots found. Is Dropbox installed?", err=True)
+            sys.exit(2)
         targets: list[tuple[Path, Path]] = [(r, r) for r in discovered]
     else:
-        resolved = path.resolve()
-        if not resolved.exists():
-            click.echo(f"Path {path} does not exist.", err=True)
-            sys.exit(2)
-        matched_root = find_containing(resolved, discovered)
-        if matched_root is None:
-            click.echo(f"Path {path} is not under any Dropbox root.", err=True)
-            sys.exit(2)
-        targets = [(matched_root, resolved)]
+        target, root, discovered = _validate_target_under_root(path)
+        targets = [(root, target)]
+
+    cache = _load_cache(discovered)
 
     if dry_run:
         report = _run_apply_pass(targets, cache, dry_run=True)
@@ -847,18 +843,14 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
         )
         sys.exit(2)
 
-    discovered = _discover_roots()
-    if not discovered:
-        click.echo("No Dropbox roots found.", err=True)
-        sys.exit(2)
-
     if path is None:
+        discovered = _discover_roots()
+        if not discovered:
+            click.echo("No Dropbox roots found.", err=True)
+            sys.exit(2)
         targets = discovered
     else:
-        target = path.resolve()
-        if find_containing(target, discovered) is None:
-            click.echo(f"Path {path} is not under any Dropbox root.", err=True)
-            sys.exit(2)
+        target, _root, _discovered = _normalize_under_root(path, require_exists=True)
         targets = [target]
 
     to_clear: list[Path] = []
@@ -1303,18 +1295,14 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
 @click.argument("path", required=False, type=click.Path(path_type=Path))
 def list_ignored(path: Path | None) -> None:
     """List every path currently bearing the Dropbox ignore marker."""
-    discovered = _discover_roots()
-    if not discovered:
-        click.echo("No Dropbox roots found.", err=True)
-        sys.exit(2)
-
     if path is None:
+        discovered = _discover_roots()
+        if not discovered:
+            click.echo("No Dropbox roots found.", err=True)
+            sys.exit(2)
         targets = discovered
     else:
-        target = path.resolve()
-        if find_containing(target, discovered) is None:
-            click.echo(f"Path {path} is not under any Dropbox root.", err=True)
-            sys.exit(2)
+        target, _root, _discovered = _normalize_under_root(path, require_exists=True)
         targets = [target]
 
     for target in targets:
@@ -1329,24 +1317,20 @@ def _explain(path: Path, *, quiet: bool) -> int:
       0 — path is ignored (cache.match returns True)
       1 — path is not ignored (cache.match returns False; covers no-match
           AND only-dropped-matches cases)
-      2 — fatal: no Dropbox roots discovered (preserves project convention
-          for fatal errors; see other cli.py callsites)
+      2 — fatal: no Dropbox roots discovered or path not under root
+          (via SystemExit from _normalize_under_root; preserves project
+          convention for fatal errors; see other cli.py callsites)
 
     `quiet` suppresses stdout (the rule listing and the `no match for X`
-    line). stderr is preserved for the fatal "No Dropbox roots found." line —
-    matches `git check-ignore -q` semantics.
+    line). stderr is preserved for fatal error lines (e.g., "No Dropbox
+    roots found.") — matches `git check-ignore -q` semantics.
     """
-    discovered = _discover_roots()
-    if not discovered:
-        click.echo("No Dropbox roots found.", err=True)
-        return 2
-
+    target, _root, discovered = _normalize_under_root(path, require_exists=False)
     cache = _load_cache(discovered)
-    resolved = path.resolve()
-    is_ignored = cache.match(resolved)
+    is_ignored = cache.match(target)
 
     if not quiet:
-        matches = cache.explain(resolved)
+        matches = cache.explain(target)
         if not matches:
             click.echo(f"no match for {path}")
         else:

@@ -566,6 +566,44 @@ function Test-ExtendedCli {
         }
     }
     Remove-Item -Path $target4q -Recurse -Force
+
+    # 4r — clear/list exit 2 on nonexistent path (PR #195, item #95)
+    Write-Note "4r - clear/list error on nonexistent path"
+    $nonexist = Join-Path $script:DropboxDir "dbxignore-test-nonexistent-$PID"
+
+    # clear on nonexistent path should exit 2
+    $clearErrFile = "$env:TEMP\dbxignore-4r-clear.err"
+    & dbxignore clear $nonexist --yes *> $clearErrFile
+    $clearExitCode = $LASTEXITCODE
+    if ($clearExitCode -eq 2) {
+        Write-Pass "4r - clear exits 2 on nonexistent path"
+    } else {
+        Write-Fail "4r - clear exited $clearExitCode instead of 2"
+    }
+    $clearErr = if (Test-Path $clearErrFile) { Get-Content $clearErrFile -Raw } else { "" }
+    if ($clearErr -match 'does not exist') {
+        Write-Pass "4r - clear stderr says 'does not exist'"
+    } else {
+        Write-Note "clear stderr: $clearErr"
+        Write-Fail "4r - clear stderr missing 'does not exist'"
+    }
+
+    # list on nonexistent path should exit 2
+    $listErrFile = "$env:TEMP\dbxignore-4r-list.err"
+    & dbxignore list $nonexist *> $listErrFile
+    $listExitCode = $LASTEXITCODE
+    if ($listExitCode -eq 2) {
+        Write-Pass "4r - list exits 2 on nonexistent path"
+    } else {
+        Write-Fail "4r - list exited $listExitCode instead of 2"
+    }
+    $listErr = if (Test-Path $listErrFile) { Get-Content $listErrFile -Raw } else { "" }
+    if ($listErr -match 'does not exist') {
+        Write-Pass "4r - list stderr says 'does not exist'"
+    } else {
+        Write-Note "list stderr: $listErr"
+        Write-Fail "4r - list stderr missing 'does not exist'"
+    }
 }
 
 # ---------------------------------------------------------------------------

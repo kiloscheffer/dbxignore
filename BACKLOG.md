@@ -2123,6 +2123,8 @@ Touches: `src/dbxignore/cli.py` (`_walk_marked_paths`, `list_ignored`, `clear`, 
 
 ## 95. Path-taking commands outside `ignore` / `unignore` resolve symlinks and can operate on the wrong object
 
+**Status: RESOLVED 2026-05-11 (PR #195).**
+
 `ignore` and `unignore` use `_validate_target_under_root()`, which intentionally preserves the symlink object (`Path.absolute()` + `os.path.normpath`) and only falls back to `resolve()` for out-of-root aliases. Several older path-taking commands still call `path.resolve()` directly:
 
 - `apply <path>`
@@ -2275,13 +2277,26 @@ CI is freshly provisioned today, so this is not an observed failure in the curre
 
 Touches: `.github/workflows/test.yml`; optionally README/AGENTS command snippets if any still mention the noncanonical form.
 
+## 104. CLI walk-entry callsites descend through symlink-to-directory arguments
+
+`os.walk(path, followlinks=False)` follows the link when ``path`` is itself the walk root (CLAUDE.md gotcha; PR #183 added the corresponding guard at the daemon's per-subdir fan-out). After PR #195 (item #95), the CLI's path-taking verbs accept symlink-object arguments and pass them through to `_walk_marked_paths` (used by `clear`, `list`) and `_run_apply_pass` → `reconcile_subtree` (used by `apply`). Neither callsite guards `is_symlink()` at the walk root, so a `dbxignore clear ~/Dropbox/some-dir-symlink` walks into the link's target tree after handling the link's own marker. `explain` / `check-ignore` are not affected (no walk).
+
+**Fix candidates:**
+
+- **Guard at each CLI callsite.** Add an `is_symlink()` check at the entry to `_walk_marked_paths` and `_run_apply_pass`'s subtree handling. Short-circuit to "process the link's own marker only; do not descend." Mirrors PR #183's daemon-side approach.
+- **Guard inside the helpers themselves** (`_walk_marked_paths`, `reconcile.reconcile_subtree`). Riskier — `reconcile_subtree` is shared with the daemon, which already has its own walk-entry guard from PR #183; adding a second guard would be defense in depth but could mask future daemon-side regressions.
+
+**Urgency:** medium. Same correctness class as #95, narrowly scoped, no user reports yet but the corrected normalization in #95 makes this newly reachable.
+
+Touches: `src/dbxignore/cli.py` (`_walk_marked_paths`, `_run_apply_pass`); `src/dbxignore/reconcile.py` (`reconcile_subtree`); cross-platform symlink tests.
+
 ---
 
 ## Status
 
 ### Open
 
-Eighteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Items #95, #97, and #98 are user-facing correctness/error-handling fixes and should be prioritized ahead of purely polish work.
+Eighteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Items #97 and #98 are user-facing correctness/error-handling fixes and should be prioritized ahead of purely polish work.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2292,7 +2307,6 @@ Eighteen items. Most are passive (no concrete trigger requires action) — bundl
 - **#53** — Initial-sweep wall-clock on a fresh install (no existing markers) was 49.62s on a 27k-dir tree, blocking systemd readiness for ~50s. Candidate 1 (ready-before-sweep) shipped in PR #162 (removed the readiness-pause symptom). Candidate 3 (per-subdir worker fan-out) shipped in PR #183 (parallelizes the sweep itself across top-level subdirs). Only candidate 2 (persisted sweep-complete hint, ~80 LOC) remains open — has reliability concerns on network FS / File Provider mtime semantics; no fired trigger yet.
 - **#54** — Watchdog observer's recursive watch schedules one inotify watch per directory under `~/Dropbox`, including marked-ignored subtrees. Architectural fix (per-directory watches with mark/unmark lifecycle) is ~200 LOC of race-condition-prone state-machine work; deferred until a beta tester hits the watch ceiling on a system with limits already raised.
 - **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall. Path-taking verbs landed in PR #191 (item #93); spec/plan/PR cycle for #65 can resume.
-- **#95** — Older path-taking commands (`apply`, `clear`, `list`, `explain`) still call `resolve()` and can operate on symlink targets instead of symlink objects. Share the non-following target-normalization seam from `ignore` / `unignore`.
 - **#96** — Windows ADS `_stream_path()` emits invalid long-path syntax for UNC paths. Add UNC-aware `\\?\UNC\...` conversion.
 - **#97** — `state.read()` can raise `OSError` on unreadable/locked state files. Treat unreadable advisory state like corrupt state: warning + `None`.
 - **#98** — `uninstall --purge` silently ignores marker I/O failures while claiming cleanup. Accumulate/report errors and exit nonzero on incomplete marker cleanup.
@@ -2301,8 +2315,13 @@ Eighteen items. Most are passive (no concrete trigger requires action) — bundl
 - **#101** — Rule-file mutation helpers use fixed `.dropboxignore.tmp`, unsafe for concurrent `ignore` / `unignore` or user/editor temp-file collisions.
 - **#102** — Rule cache can miss same-size edits with preserved mtimes. Consider a hash or forced periodic re-read policy.
 - **#103** — CI uses `uv run pytest` despite the documented canonical `uv run python -m pytest` workaround. Mechanical workflow alignment.
+- **#104** — CLI walk-entry callsites descend through symlink-to-directory arguments. After #95's normalization fix, `apply`/`clear`/`list` on a symlink-to-directory target walk into the link's target tree. Add `is_symlink()` guard at CLI walk-entry sites, mirroring PR #183's daemon-side fix.
 
 ### Resolved (reverse chronological)
+
+#### 2026-05-11
+
+- **#95** (2026-05-11, PR #195) — Path-taking verbs `apply`/`clear`/`list`/`explain`/`check-ignore` now preserve the symlink object via shared `_normalize_under_root` helper. `apply` additionally fixed: broken-target symlinks accepted; symlinked-ancestor refused.
 
 #### 2026-05-10
 

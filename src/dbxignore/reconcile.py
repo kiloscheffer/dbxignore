@@ -46,11 +46,14 @@ def reconcile_subtree(
 ) -> Report:
     """Reconcile ``subdir`` under ``root`` with the current rule set.
 
-    Both ``root`` and ``subdir`` MUST be absolute and pre-resolved by the
-    caller — resolution is the CLI/daemon boundary's responsibility (see
-    CLAUDE.md "Resolve at the CLI/daemon boundary, never inside the cache
-    or markers layer"). ``Path.resolve()`` on Windows is a per-call
-    syscall that dominated sweep wall-clock before being hoisted.
+    Both ``root`` and ``subdir`` MUST be absolute and normalized at the
+    CLI/daemon boundary — the daemon resolves roots upfront via
+    ``_discover_roots()`` (avoiding a per-walk ``Path.resolve()`` syscall
+    that previously dominated sweep wall-clock on Windows). The CLI's
+    path-taking verbs may pass symlink-preserving normalized paths (item
+    #95): containment check below is purely lexical and tolerates either
+    form. The ``ValueError`` raised on out-of-root ``subdir`` is the
+    caller's responsibility to avoid; misuse is a programming error.
 
     When ``dry_run`` is True, marker mutations are skipped: ``markers.set_ignored``
     and ``markers.clear_ignored`` are NOT called. Subtree pruning still

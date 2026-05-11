@@ -190,4 +190,34 @@ phase_extended_cli() {
         rm -f "$DROPBOX_DIR/.dropboxignore"
     fi
     rm -rf "$target_4q"
+
+    # 4r — clear/list exit 2 on nonexistent path (PR #195, item #95)
+    note "4r — clear/list error on nonexistent path"
+    local nonexist="$DROPBOX_DIR/dbxignore-test-nonexistent-$$"
+
+    # clear on nonexistent path should exit 2
+    if dbxignore clear "$nonexist" --yes >/tmp/dbx-4r-clear.err 2>&1; then
+        fail "4r — clear should exit 2 on nonexistent path"
+    else
+        local exit_code=$?
+        if [ $exit_code -eq 2 ]; then
+            pass "4r — clear exits 2 on nonexistent path"
+        else
+            fail "4r — clear exited $exit_code instead of 2"
+        fi
+    fi
+    assert_grep /tmp/dbx-4r-clear.err 'does not exist' "4r — clear stderr says 'does not exist'"
+
+    # list on nonexistent path should exit 2
+    if dbxignore list "$nonexist" >/tmp/dbx-4r-list.err 2>&1; then
+        fail "4r — list should exit 2 on nonexistent path"
+    else
+        local exit_code=$?
+        if [ $exit_code -eq 2 ]; then
+            pass "4r — list exits 2 on nonexistent path"
+        else
+            fail "4r — list exited $exit_code instead of 2"
+        fi
+    fi
+    assert_grep /tmp/dbx-4r-list.err 'does not exist' "4r — list stderr says 'does not exist'"
 }

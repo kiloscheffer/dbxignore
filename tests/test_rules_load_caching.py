@@ -84,6 +84,37 @@ def test_load_root_reloads_when_mtime_changes_but_size_matches(
     assert cache.match(tmp_path / "build") is False
 
 
+def test_load_root_drops_cache_on_non_utf8_overwrite(tmp_path: Path, write_file: WriteFile) -> None:
+    """A .dropboxignore that turns into invalid UTF-8 (e.g. an editor
+    saved as cp1252) is treated the same way as a pathspec parse error:
+    the read succeeded but the content is broken, so the cached entry is
+    dropped and the daemon treats the file as empty until the next valid
+    edit. Keeping stale rules would let reconcile keep marking paths the
+    user already changed their mind about.
+
+    Before item #102's switch from ``read_text("utf-8")`` to
+    ``read_bytes() + raw.decode("utf-8")``, the prior code would have
+    raised an uncaught ``UnicodeDecodeError`` and crashed the sweep —
+    strictly worse than either drop-cache or keep-cache."""
+    ignore = write_file(tmp_path / ".dropboxignore", "build/\n")
+
+    cache = RuleCache()
+    cache.load_root(tmp_path)
+    cache_key = ignore.resolve()
+    assert cache_key in cache._rules
+
+    # Overwrite with bytes that are not valid UTF-8.
+    ignore.write_bytes(b"\xff\xfe\x00invalid\n")
+
+    cache.load_root(tmp_path)
+
+    assert cache_key not in cache._rules, (
+        "Cached rules survived a non-UTF-8 overwrite; daemon would keep "
+        "applying stale rules. Decode error should drop the entry, "
+        "matching the parse-error arm's semantics."
+    )
+
+
 def test_load_root_reloads_when_size_and_mtime_match_but_content_differs(
     tmp_path: Path, write_file: WriteFile
 ) -> None:

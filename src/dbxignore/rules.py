@@ -615,6 +615,7 @@ class RuleCache:
         ignore_file: Path,
         *,
         raw: bytes | None = None,
+        content_hash: bytes | None = None,
         st: os.stat_result | None = None,
         as_path: Path | None = None,
     ) -> None:
@@ -627,8 +628,11 @@ class RuleCache:
         and the source location is the cache key.
 
         ``raw`` lets a caller (``_load_if_changed``) pass already-read bytes
-        to avoid a second read of the same file in the common
-        content-changed case. When ``None``, the bytes are read here.
+        to avoid a second read. When ``None``, the bytes are read here.
+        ``content_hash`` similarly lets the caller pass an already-computed
+        blake2b-128 digest of those bytes; when ``None``, the hash is
+        computed here. Both kwargs together avoid the double-read-and-hash
+        on the miss path through ``_load_if_changed``.
         """
         # Resolve the cache key up front so failure arms can drop the
         # stale entry. Without that, an already-cached file that later
@@ -664,14 +668,19 @@ class RuleCache:
             # stale-purge instead.
             logger.warning("Could not read %s: %s", ignore_file, exc)
             return
-        # Decode bytes the same way the prior `read_text(encoding="utf-8")`
-        # call would have: strict UTF-8, no implicit transcoding. A file with
-        # a UTF-8 BOM lands in `lines[0]` as a leading "﻿", same as
-        # before — pathspec ignores it as if it were arbitrary text.
+        # `raw.decode("utf-8")` is strict — a non-UTF-8 file (the user saved
+        # from an editor that defaulted to cp1252, say) is treated the same
+        # way as a pathspec parse error below: the read succeeded but the
+        # content is broken, so drop the cached entry and let the daemon
+        # treat the file as empty until the next valid edit. Keeping stale
+        # rules would let reconcile keep marking paths the user already
+        # changed their mind about. `read_text("utf-8")` would have raised
+        # uncaught and crashed the sweep — strictly worse than either arm.
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError as exc:
             logger.warning("Could not decode %s as utf-8: %s", ignore_file, exc)
+            self._rules.pop(cache_key, None)
             return
         lines = text.splitlines()
         try:
@@ -689,7 +698,9 @@ class RuleCache:
         self._rules[cache_key] = _LoadedRules(
             lines=lines,
             entries=_build_entries(lines, spec),
-            content_hash=hashlib.blake2b(raw, digest_size=16).digest(),
+            content_hash=content_hash
+            if content_hash is not None
+            else hashlib.blake2b(raw, digest_size=16).digest(),
             mtime_ns=st.st_mtime_ns,
             size=st.st_size,
         )
@@ -728,11 +739,12 @@ class RuleCache:
             # (it will re-attempt the read and log on failure).
             self._load_file(ignore_file, as_path=as_path)
             return
+        content_hash = hashlib.blake2b(raw, digest_size=16).digest()
         if as_path is None or as_path.name == ignore_file.name:
             cached = self._rules.get(_canonical_cache_key(as_path or ignore_file))
-            if cached and cached.content_hash == hashlib.blake2b(raw, digest_size=16).digest():
+            if cached and cached.content_hash == content_hash:
                 return
-        self._load_file(ignore_file, raw=raw, as_path=as_path)
+        self._load_file(ignore_file, raw=raw, content_hash=content_hash, as_path=as_path)
 
     def _applicable(self, root: Path, path: Path) -> list[tuple[Path, _LoadedRules]]:
         """Return (ancestor, loaded_rules) for each applicable .dropboxignore

@@ -2290,13 +2290,33 @@ Touches: `.github/workflows/test.yml`; optionally README/AGENTS command snippets
 
 Touches: `src/dbxignore/cli.py` (`_walk_marked_paths`, `_run_apply_pass`); `src/dbxignore/reconcile.py` (`reconcile_subtree`); cross-platform symlink tests.
 
+## 105. `..` segments after a symlinked component are collapsed lexically and drop symlink awareness
+
+`_normalize_under_root` (and the legacy `_validate_target_under_root` from PR #191) calls `Path(os.path.normpath(path.absolute()))` to fold `..` and `.` segments without following symlinks. For paths that mix `..` with a symlinked component, this gives the lexical interpretation of `..` (the link's parent) rather than the filesystem interpretation (the link target's parent). The two diverge: `~/Dropbox/link/../file` normpath-collapses to `~/Dropbox/file`, but the filesystem would resolve it to `<target-of-link>/../file`.
+
+Pre-PR #195, `apply` used `path.resolve()` which performed filesystem-true resolution including following symlinks before applying `..`. PR #195 switched to lexical normalization to preserve the symlink object semantics (rules/markers apply to the link, not the target). This trade is sound for arguments that DON'T mix `..` with symlinks, but the corner case `link/..` produces a path that surprises users: `apply` reconciles `~/Dropbox/file` (lexical) instead of `<target>/file` (filesystem).
+
+The symlinked-ancestor guard in `_validate_target_under_root` doesn't catch this — the guard walks `target.parents` AFTER normpath, by which time the symlink has been collapsed out of the path.
+
+Same issue exists in `ignore`/`unignore` since PR #191 (predates #95); PR #195 extends the surface to `apply`/`clear`/`list`/`explain`/`check-ignore`.
+
+**Fix candidates:**
+
+- **Reject paths where `..` follows a symlinked component** (preferred). Inspect the unresolved-absolute path's segments before normpath; if any segment-prefix lexists as a symlink AND a later segment is `..`, refuse with a friendly error. Matches the symlinked-ancestor guard's spirit (loud refusal of ambiguous shapes).
+- **Partial-resolve.** Resolve symlinks in the path's prefix one segment at a time, applying `..` against the resolved-so-far prefix. Cleaner FS-true semantics but harder to reason about.
+- **Document the limitation.** Note that `..` with symlink paths is unsupported; require users to write resolved paths or omit `..`. Lowest-effort but a footgun.
+
+**Urgency:** medium. Real correctness bug, but the trigger requires `..` in the path argument — uncommon in scripted use and unlikely via Windows Explorer right-click (#65). Surfaced by Codex auto-review on PR #195. Same correctness class as #95/#104.
+
+Touches: `src/dbxignore/cli.py` (`_normalize_under_root`); cross-platform symlink tests with `..` paths.
+
 ---
 
 ## Status
 
 ### Open
 
-Eighteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Items #97 and #98 are user-facing correctness/error-handling fixes and should be prioritized ahead of purely polish work.
+Nineteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Items #97, #98, and #105 are user-facing correctness/error-handling fixes and should be prioritized ahead of purely polish work.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2316,6 +2336,7 @@ Eighteen items. Most are passive (no concrete trigger requires action) — bundl
 - **#102** — Rule cache can miss same-size edits with preserved mtimes. Consider a hash or forced periodic re-read policy.
 - **#103** — CI uses `uv run pytest` despite the documented canonical `uv run python -m pytest` workaround. Mechanical workflow alignment.
 - **#104** — CLI walk-entry callsites descend through symlink-to-directory arguments. After #95's normalization fix, `apply`/`clear`/`list` on a symlink-to-directory target walk into the link's target tree. Add `is_symlink()` guard at CLI walk-entry sites, mirroring PR #183's daemon-side fix.
+- **#105** — `..` segments after a symlinked component are collapsed lexically by `_normalize_under_root` / `_validate_target_under_root`, dropping symlink awareness. `apply ~/Dropbox/link/../file` reconciles `~/Dropbox/file` instead of `<target>/file`. Reject paths where `..` follows a symlinked component.
 
 ### Resolved (reverse chronological)
 

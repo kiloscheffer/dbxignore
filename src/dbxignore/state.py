@@ -195,19 +195,30 @@ def read(path: Path | None = None) -> State | None:
 
 
 def _read_at(path: Path) -> State | None:
-    if not path.exists():
-        return None
-    # Catch both JSON-syntax errors and shape errors raised by _decode (KeyError
-    # if a nested last_error sub-key is missing; TypeError if last_error is
-    # present but not a dict; ValueError if a stored datetime no longer parses).
-    # Without _decode being inside the try, a hand-edited or schema-mismatched
-    # state.json crashes the daemon on startup instead of falling back to
-    # "no prior state" — followup item 24.
+    # FileNotFoundError is the silent first-run / no-prior-state case. Catching
+    # it here (instead of via a pre-`exists()` check) closes the TOCTOU window
+    # where the file vanishes between the existence test and the read.
+    # The remaining OSError arm covers locked / permission-denied / cloud-
+    # placeholder / transiently-unavailable state.json — same advisory-degrade
+    # contract as the corrupt-state arm: warn + None rather than propagate, so
+    # CLI verbs that consult state (`status`, `clear`'s daemon-alive guard,
+    # daemon legacy-state migration) don't crash on a stale-or-broken file.
+    # Specific-before-general ordering matters: FileNotFoundError subclasses
+    # OSError, so the silent arm must precede the warning arm.
+    # The middle arm catches both JSON-syntax errors and shape errors raised
+    # by _decode (KeyError if a nested last_error sub-key is missing; TypeError
+    # if last_error is present but not a dict; ValueError if a stored datetime
+    # no longer parses) — followup items 24, 97.
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
         return _decode(raw)
+    except FileNotFoundError:
+        return None
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         logger.warning("State file %s corrupt or shape-mismatched: %s", path, exc)
+        return None
+    except OSError as exc:
+        logger.warning("State file %s unreadable: %s", path, exc)
         return None
 
 

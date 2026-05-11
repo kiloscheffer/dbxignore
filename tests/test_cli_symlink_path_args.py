@@ -409,3 +409,49 @@ def test_case7_existing_outside_dropbox(
     assert "not under any Dropbox root" in stderr, (
         f"{verb} rejected with wrong message; stderr={stderr!r}"
     )
+
+
+# ---- Case 8: apply on symlink-to-directory does not descend ---------------
+
+
+def test_case8_apply_symlink_to_directory_does_not_descend(
+    dropbox_root: Path,
+    raw_marker_spy: SimpleNamespace,
+    symlink_capable: None,
+) -> None:
+    """apply with a symlink-to-directory argument processes the link's own
+    marker but does NOT walk into the link target's tree.
+
+    Without the ``descend=False`` guard, ``os.walk(link, followlinks=False)``
+    follows the link at the walk root (per the CLAUDE.md gotcha) and apply
+    would write markers under paths the daemon's own walk (which starts
+    from the Dropbox root with ``followlinks=False``) would never reach,
+    stranding orphan markers. Partial fix for backlog #104 covering the
+    apply mark-write surface.
+    """
+    # Create a directory and a file in it; the file would be matched by
+    # a top-level rule.
+    real_target_dir = dropbox_root / "real-target-dir"
+    real_target_dir.mkdir()
+    inner_file = real_target_dir / "should-not-be-marked.txt"
+    inner_file.touch()
+
+    # Plant a rule that would mark `should-not-be-marked.txt` if walked.
+    rule_file = dropbox_root / ".dropboxignore"
+    rule_file.write_text("should-not-be-marked.txt\n")
+
+    # Symlink under Dropbox pointing at the directory.
+    link = dropbox_root / "link-to-dir"
+    os.symlink(real_target_dir, link)
+
+    exit_code, _stdout, stderr = _invoke("apply", link)
+
+    assert exit_code == 0, f"apply failed: exit={exit_code} stderr={stderr!r}"
+
+    # No marker writes should target paths reached THROUGH the link.
+    paths_through_link = [link / "should-not-be-marked.txt"]
+    for bad_path in paths_through_link:
+        assert bad_path not in raw_marker_spy.set, (
+            f"apply descended into symlink target via the link; "
+            f"spy.set contains {bad_path}. The descend=False guard is missing."
+        )

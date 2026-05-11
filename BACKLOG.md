@@ -2279,16 +2279,18 @@ Touches: `.github/workflows/test.yml`; optionally README/AGENTS command snippets
 
 ## 104. CLI walk-entry callsites descend through symlink-to-directory arguments
 
-`os.walk(path, followlinks=False)` follows the link when ``path`` is itself the walk root (CLAUDE.md gotcha; PR #183 added the corresponding guard at the daemon's per-subdir fan-out). After PR #195 (item #95), the CLI's path-taking verbs accept symlink-object arguments and pass them through to `_walk_marked_paths` (used by `clear`, `list`) and `_run_apply_pass` → `reconcile_subtree` (used by `apply`). Neither callsite guards `is_symlink()` at the walk root, so a `dbxignore clear ~/Dropbox/some-dir-symlink` walks into the link's target tree after handling the link's own marker. `explain` / `check-ignore` are not affected (no walk).
+`os.walk(path, followlinks=False)` follows the link when ``path`` is itself the walk root (CLAUDE.md gotcha; PR #183 added the corresponding guard at the daemon's per-subdir fan-out). After PR #195 (item #95), the CLI's path-taking verbs accept symlink-object arguments and pass them through to `_walk_marked_paths` (used by `clear`, `list`) and `_run_apply_pass` → `reconcile_subtree` (used by `apply`). The walk-root `is_symlink()` guard was applied to `_run_apply_pass` in PR #195 (via `descend=False`, mitigating the apply mark-write surface after a Codex P1 finding), but `_walk_marked_paths` still descends, so `dbxignore clear ~/Dropbox/some-dir-symlink` walks into the link's target tree after handling the link's own marker. `explain` / `check-ignore` are not affected (no walk).
 
-**Fix candidates:**
+**Status:** apply portion mitigated in PR #195. Remaining work: `_walk_marked_paths` walk-root guard for `clear` and `list`.
 
-- **Guard at each CLI callsite.** Add an `is_symlink()` check at the entry to `_walk_marked_paths` and `_run_apply_pass`'s subtree handling. Short-circuit to "process the link's own marker only; do not descend." Mirrors PR #183's daemon-side approach.
-- **Guard inside the helpers themselves** (`_walk_marked_paths`, `reconcile.reconcile_subtree`). Riskier — `reconcile_subtree` is shared with the daemon, which already has its own walk-entry guard from PR #183; adding a second guard would be defense in depth but could mask future daemon-side regressions.
+**Fix candidates (remaining):**
 
-**Urgency:** medium. Same correctness class as #95, narrowly scoped, no user reports yet but the corrected normalization in #95 makes this newly reachable.
+- **Guard at the CLI callsite.** Add an `is_symlink()` check at the entry to `_walk_marked_paths`. Short-circuit to "process the link's own marker only; do not descend." Mirrors PR #195's `_run_apply_pass` fix and PR #183's daemon-side approach.
+- **Guard inside the helper itself** (`_walk_marked_paths`). Lower-risk than the same change in `reconcile.reconcile_subtree` (which is shared with the daemon, where PR #183 already guards walk roots); `_walk_marked_paths` is CLI-only.
 
-Touches: `src/dbxignore/cli.py` (`_walk_marked_paths`, `_run_apply_pass`); `src/dbxignore/reconcile.py` (`reconcile_subtree`); cross-platform symlink tests.
+**Urgency:** medium. Less destructive than the apply portion (clear/list read or remove markers; they don't create orphan markers). Surfaced by Codex auto-review on PR #195.
+
+Touches: `src/dbxignore/cli.py` (`_walk_marked_paths`); cross-platform symlink tests for `clear` and `list`.
 
 ## 105. `..` segments after a symlinked component are collapsed lexically and drop symlink awareness
 

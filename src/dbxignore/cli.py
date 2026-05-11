@@ -466,10 +466,23 @@ def _run_apply_pass(
 
     Used by `apply` for both the dry-run pre-walk (driving the confirmation
     prompt) and the real reconcile pass.
+
+    When ``subdir`` is itself a symlink, reconcile runs with
+    ``descend=False`` — process the link's own marker but skip the
+    ``os.walk``, which would otherwise follow the link into its target
+    tree at the walk root despite ``followlinks=False``. Without this
+    guard, ``apply <symlink-to-dir>`` would write markers under the
+    symlink target (possibly outside the Dropbox root) that the daemon's
+    own walk (`followlinks=False` from each root) would never reach,
+    leaving orphan markers. Partial mitigation for backlog #104: the
+    walk-root guard for ``clear``/``list`` via ``_walk_marked_paths`` is
+    still tracked as a follow-up. Mirrors the daemon's per-subdir fan-out
+    guard from PR #183.
     """
     aggregate = reconcile.Report()
     for r, subdir in targets:
-        rep = reconcile.reconcile_subtree(r, subdir, cache, dry_run=dry_run)
+        descend = not subdir.is_symlink()
+        rep = reconcile.reconcile_subtree(r, subdir, cache, dry_run=dry_run, descend=descend)
         aggregate.marked += rep.marked
         aggregate.cleared += rep.cleared
         aggregate.errors.extend(rep.errors)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -337,12 +338,21 @@ class _LoadedRules:
     active rule (i.e. non-blank, non-comment, parses to a positive or negation
     pattern), in the order they appear in the file.
 
-    ``mtime_ns`` and ``size`` are the file's stat values at load time, used by
-    ``load_root`` to skip reparsing files whose on-disk bytes are unchanged.
+    ``content_hash`` is a blake2b-128 digest of the file's bytes at load
+    time, used by ``_load_if_changed`` to skip reparsing files whose content
+    is unchanged. Replaces the prior ``(mtime_ns, size)`` shortcut, which
+    missed same-size edits with preserved mtimes (item #102 — common when
+    editors or ``touch -r`` restore the original timestamp after a save).
+
+    ``mtime_ns`` and ``size`` remain on the dataclass for diagnostic value
+    and to keep the existing private-API touches in
+    ``tests/test_rules_basic.py`` working; they no longer drive the
+    cache-invalidation gate.
     """
 
     lines: list[str]
     entries: list[tuple[int, pathspec.Pattern]]
+    content_hash: bytes
     mtime_ns: int
     size: int
 
@@ -604,6 +614,8 @@ class RuleCache:
         self,
         ignore_file: Path,
         *,
+        raw: bytes | None = None,
+        content_hash: bytes | None = None,
         st: os.stat_result | None = None,
         as_path: Path | None = None,
     ) -> None:
@@ -614,6 +626,13 @@ class RuleCache:
         Used by ``load_external`` to mount a non-``.dropboxignore`` source
         at an arbitrary directory; pass ``None`` for the discovery code path
         and the source location is the cache key.
+
+        ``raw`` lets a caller (``_load_if_changed``) pass already-read bytes
+        to avoid a second read. When ``None``, the bytes are read here.
+        ``content_hash`` similarly lets the caller pass an already-computed
+        blake2b-128 digest of those bytes; when ``None``, the hash is
+        computed here. Both kwargs together avoid the double-read-and-hash
+        on the miss path through ``_load_if_changed``.
         """
         # Resolve the cache key up front so failure arms can drop the
         # stale entry. Without that, an already-cached file that later
@@ -632,7 +651,8 @@ class RuleCache:
             logger.warning("Could not resolve %s: %s", as_path or ignore_file, exc)
             return
         try:
-            lines = ignore_file.read_text(encoding="utf-8").splitlines()
+            if raw is None:
+                raw = ignore_file.read_bytes()
             if st is None:
                 st = ignore_file.stat()
         except OSError as exc:
@@ -648,6 +668,21 @@ class RuleCache:
             # stale-purge instead.
             logger.warning("Could not read %s: %s", ignore_file, exc)
             return
+        # `raw.decode("utf-8")` is strict — a non-UTF-8 file (the user saved
+        # from an editor that defaulted to cp1252, say) is treated the same
+        # way as a pathspec parse error below: the read succeeded but the
+        # content is broken, so drop the cached entry and let the daemon
+        # treat the file as empty until the next valid edit. Keeping stale
+        # rules would let reconcile keep marking paths the user already
+        # changed their mind about. `read_text("utf-8")` would have raised
+        # uncaught and crashed the sweep — strictly worse than either arm.
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            logger.warning("Could not decode %s as utf-8: %s", ignore_file, exc)
+            self._rules.pop(cache_key, None)
+            return
+        lines = text.splitlines()
         try:
             spec = _build_spec(lines)
         except (ValueError, TypeError, re.error) as exc:
@@ -663,40 +698,53 @@ class RuleCache:
         self._rules[cache_key] = _LoadedRules(
             lines=lines,
             entries=_build_entries(lines, spec),
+            content_hash=content_hash
+            if content_hash is not None
+            else hashlib.blake2b(raw, digest_size=16).digest(),
             mtime_ns=st.st_mtime_ns,
             size=st.st_size,
         )
 
     def _load_if_changed(self, ignore_file: Path, *, as_path: Path | None = None) -> None:
-        """Load ``ignore_file`` only if its on-disk bytes differ from the
-        cached version (mtime or size mismatch). No-op if unchanged.
+        """Load ``ignore_file`` only if its bytes differ from the cached
+        version (content hash mismatch). No-op if unchanged.
 
         Used by the sweep path (``load_root``) to avoid reparsing every
         .dropboxignore every hour. ``reload_file`` bypasses this check —
         a watchdog event is an explicit signal to reload regardless of
-        stat.
+        content.
+
+        Reads the file's bytes unconditionally and hashes them, then skips
+        the (more expensive) pathspec compile only when the hash matches
+        the cached digest. The prior shortcut compared
+        ``(mtime_ns, size)`` from a stat call — cheaper, but missed
+        same-size edits whose mtime was preserved by the editing tool
+        (item #102). Read+hash on a small .dropboxignore is sub-millisecond;
+        pathspec compile is the cost worth skipping.
 
         ``as_path`` overrides the cache-key derivation (mirrors
         ``_load_file``'s same-named kwarg). When ``as_path``'s basename
         differs from ``ignore_file``'s (the mixed-case fallback case in
-        ``load_root``), the mtime+size shortcut is skipped — the
-        canonical-key entry may have been populated from a different
-        source file, so its stat values cannot be trusted to identify
-        the current source. Name comparison rather than Path equality
-        because ``WindowsPath`` equality is case-insensitive on Windows
-        and would falsely collapse the fallback case to a no-op.
+        ``load_root``), the hash shortcut is skipped — the canonical-key
+        entry may have been populated from a different source file, so its
+        hash cannot be trusted to identify the current source. Name
+        comparison rather than Path equality because ``WindowsPath``
+        equality is case-insensitive on Windows and would falsely collapse
+        the fallback case to a no-op.
         """
         try:
-            st = ignore_file.stat()
+            raw = ignore_file.read_bytes()
         except OSError:
-            # Can't stat — let _load_file's read path surface the same error.
+            # Can't read — let _load_file's arm surface the same error
+            # (it will re-attempt the read and log on failure).
             self._load_file(ignore_file, as_path=as_path)
             return
+        content_hash = hashlib.blake2b(raw, digest_size=16).digest()
         if as_path is None or as_path.name == ignore_file.name:
             cached = self._rules.get(_canonical_cache_key(as_path or ignore_file))
-            if cached and cached.mtime_ns == st.st_mtime_ns and cached.size == st.st_size:
+            if cached and cached.content_hash == content_hash:
                 return
-        self._load_file(ignore_file, st=st, as_path=as_path)
+        self._load_file(ignore_file, raw=raw, content_hash=content_hash, as_path=as_path)
 
     def _applicable(self, root: Path, path: Path) -> list[tuple[Path, _LoadedRules]]:
         """Return (ancestor, loaded_rules) for each applicable .dropboxignore

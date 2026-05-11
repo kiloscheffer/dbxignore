@@ -638,8 +638,7 @@ def test_match_treats_symlink_to_dir_as_leaf_not_directory(
     cache = RuleCache()
     cache.load_root(tmp_path)
     assert cache.match(link) is True, (
-        "plain rule `link-to-dir` did NOT match the symlink — "
-        "round-trip with `ignore` is broken."
+        "plain rule `link-to-dir` did NOT match the symlink — round-trip with `ignore` is broken."
     )
 
 

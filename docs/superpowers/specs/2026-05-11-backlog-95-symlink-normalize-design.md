@@ -87,16 +87,18 @@ def _validate_target_under_root(path: Path) -> tuple[Path, Path, list[Path]]:
 | `ignore` | `_validate_target_under_root(path)` | yes | yes |
 | `unignore` | `_validate_target_under_root(path)` | yes | yes |
 | `apply <path>` | `_validate_target_under_root(path)` | yes | yes |
-| `clear <path>` | `_normalize_under_root(path, require_exists=True)` | yes | no |
-| `list <path>` | `_normalize_under_root(path, require_exists=True)` | yes | no |
+| `clear <path>` | `_validate_target_under_root(path)` | yes | yes |
+| `list <path>` | `_validate_target_under_root(path)` | yes | yes |
 | `explain <path>` | `_normalize_under_root(path, require_exists=False)` | no | no |
 | `check-ignore <path>` | (via `_explain`) | no | no |
 
 `apply` moves from `path.resolve() + exists()` to `_validate_target_under_root`. The `targets = [(matched_root, resolved)]` line at `cli.py:614` becomes `targets = [(root, target)]`.
 
-`clear` and `list` move from `path.resolve() + find_containing` to `_normalize_under_root(require_exists=True)`. The `targets = [target]` lines stay; only the normalization changes.
+`clear` and `list` move from `path.resolve() + find_containing` to `_validate_target_under_root`. The `targets = [target]` lines stay; only the normalization changes.
 
 `_explain` moves from `resolved = path.resolve()` to `target, _, _ = _normalize_under_root(path, require_exists=False)` and passes `target` to `cache.match` / `cache.explain`.
+
+**Note on `clear`/`list` ancestor rejection:** The initial design split filesystem-state verbs into two tiers — `apply`/`ignore`/`unignore` enforced symlinked-ancestor rejection (daemon-orphan guard), while `clear`/`list` did not (no orphan concern because clear/list don't *write* markers). Codex review during PR #195 identified an additional concern that has the same fix shape: `clear`/`list` on a path with a symlinked ancestor would enumerate or mutate xattrs in the link target's tree, potentially outside the watched Dropbox root. The two-tier split collapsed to one — all five filesystem-state verbs go through `_validate_target_under_root`. Only `explain`/`check-ignore` (rule-logic, no walk, no mutation) bypass the ancestor guard.
 
 ### `reconcile_subtree` contract documentation
 

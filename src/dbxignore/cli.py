@@ -129,8 +129,11 @@ def _normalize_under_root(path: Path, *, require_exists: bool) -> tuple[Path, Pa
     Dropbox root fails the unresolved containment (lexical prefix
     mismatch), then succeeds via ``path.resolve()``.
 
-    Used directly by ``clear``, ``list``, and ``_explain``; wrapped by
-    ``_validate_target_under_root`` for the write-side verbs.
+    Used directly by ``_explain`` (rule-logic lookup, no walk, no
+    mutation, so the symlinked-ancestor guard is unnecessary). The
+    filesystem-state verbs (``apply``, ``clear``, ``list``,
+    ``ignore``, ``unignore``) go through ``_validate_target_under_root``,
+    which wraps this and adds the ancestor-rejection guard.
     """
     target_unresolved = Path(os.path.normpath(path.absolute()))
     if require_exists and not os.path.lexists(target_unresolved):
@@ -165,7 +168,14 @@ def _validate_target_under_root(path: Path) -> tuple[Path, Path, list[Path]]:
     (markers attach to the link object on macOS/Windows; Linux rejects
     via ``_reconcile_path``'s ``PermissionError`` arm with a WARNING).
 
-    Used by ``ignore``, ``unignore``, and ``apply``.
+    Used by all filesystem-state verbs: ``ignore``, ``unignore``,
+    ``apply``, ``clear``, ``list``. The ancestor-rejection guards
+    against two failure modes: (1) markers written by ``apply`` under
+    a symlinked ancestor would be stranded because the daemon's
+    ``followlinks=False`` walk can't reach them; (2) ``clear``/``list``
+    on a path with a symlinked ancestor would enumerate or mutate
+    xattrs in the link target's tree, potentially outside any watched
+    Dropbox root.
     """
     target, root, discovered = _normalize_under_root(path, require_exists=True)
     for ancestor in target.parents:
@@ -873,7 +883,7 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
             sys.exit(2)
         targets = discovered
     else:
-        target, _root, _discovered = _normalize_under_root(path, require_exists=True)
+        target, _root, _discovered = _validate_target_under_root(path)
         targets = [target]
 
     to_clear: list[Path] = []
@@ -1325,7 +1335,7 @@ def list_ignored(path: Path | None) -> None:
             sys.exit(2)
         targets = discovered
     else:
-        target, _root, _discovered = _normalize_under_root(path, require_exists=True)
+        target, _root, _discovered = _validate_target_under_root(path)
         targets = [target]
 
     for target in targets:

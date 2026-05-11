@@ -267,12 +267,22 @@ def test_case4_out_of_dropbox_alias_into_dropbox(
 # ---- Case 5: symlinked ancestor between target and root -------------------
 
 
-def test_case5_apply_refuses_symlinked_ancestor(
+@pytest.mark.parametrize("verb", FS_STATE_VERBS)
+def test_case5_filesystem_verbs_refuse_symlinked_ancestor(
+    verb: str,
     dropbox_root: Path,
     raw_marker_spy: SimpleNamespace,
     symlink_capable: None,
 ) -> None:
-    """apply refuses (ancestor-orphan guard); clear/list/explain proceed."""
+    """apply/clear/list refuse symlinked-ancestor paths.
+
+    Two failure modes the guard prevents:
+    - apply: marker written under a symlinked ancestor would be stranded
+      because the daemon's `followlinks=False` walk can never reach it.
+    - clear/list: walking through a symlinked ancestor enumerates or
+      mutates xattrs in the link target's tree, potentially outside the
+      watched Dropbox root.
+    """
     # Build: dropbox_root/normal/link-dir/sub where link-dir is a symlink.
     normal = dropbox_root / "normal"
     normal.mkdir()
@@ -283,22 +293,28 @@ def test_case5_apply_refuses_symlinked_ancestor(
     os.symlink(real_target_dir, link_dir)
     arg = link_dir / "sub"
 
-    exit_code, _stdout, stderr = _invoke("apply", arg)
+    exit_code, _stdout, stderr = _invoke(verb, arg)
 
-    assert exit_code == 2, f"apply did not refuse; exit={exit_code} stderr={stderr!r}"
+    assert exit_code == 2, f"{verb} did not refuse; exit={exit_code} stderr={stderr!r}"
     assert "symlinked ancestor" in stderr, (
-        f"apply refused but with wrong message; stderr={stderr!r}"
+        f"{verb} refused but with wrong message; stderr={stderr!r}"
     )
 
 
-@pytest.mark.parametrize("verb", ["clear", "list", "explain", "check-ignore"])
-def test_case5_other_verbs_proceed_through_symlinked_ancestor(
+@pytest.mark.parametrize("verb", RULE_LOGIC_VERBS)
+def test_case5_rule_logic_verbs_proceed_through_symlinked_ancestor(
     verb: str,
     dropbox_root: Path,
     raw_marker_spy: SimpleNamespace,
     symlink_capable: None,
 ) -> None:
-    """clear/list/explain do not enforce the ancestor guard."""
+    """explain/check-ignore proceed through symlinked ancestors.
+
+    Rule-logic verbs are pure lexical lookups against the rule set —
+    they don't walk, don't enumerate, don't mutate markers. A symlinked
+    ancestor in the queried path can't leak out-of-scope state because
+    no filesystem operations fire on the link's target tree.
+    """
     normal = dropbox_root / "normal"
     normal.mkdir()
     real_target_dir = dropbox_root / "real-target-dir"
@@ -312,7 +328,7 @@ def test_case5_other_verbs_proceed_through_symlinked_ancestor(
 
     assert exit_code in (0, 1), (
         f"{verb} refused symlinked ancestor; exit={exit_code} stderr={stderr!r}. "
-        f"Only `apply` enforces the daemon-orphan guard."
+        f"Rule-logic verbs do not enforce the ancestor guard."
     )
 
 

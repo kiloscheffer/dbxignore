@@ -294,7 +294,29 @@ def _atomic_write_rule_file(rule_file: Path, new_content: str) -> None:
     the collisions item #101 documents: two concurrent CLI mutations, an
     editor's backup temp file, or a stray user-created
     ``.dropboxignore.tmp`` would all have raced the old fixed name.
+
+    ``mkstemp`` creates its temp at mode ``0o600`` on POSIX (a sensible
+    default for sensitive temp files), so the write happens, then
+    ``os.chmod`` restores the intended rule-file mode before the replace.
+    The intended mode is the existing file's current mode (preserving any
+    group-readable / shared-workflow configuration the user set), or for a
+    new file the umask-based default ``0o666 & ~umask`` that the prior
+    ``Path.write_text`` shape produced. Without this restore step, every
+    ``ignore`` / ``unignore`` invocation would silently relock the rule
+    file to ``0o600`` — breaking shared workflows where another user or a
+    different process account needs to read it.
     """
+    try:
+        target_mode = rule_file.stat().st_mode & 0o777
+    except FileNotFoundError:
+        # Read-then-restore the umask to compute the default mode a fresh
+        # `open(O_CREAT, 0o666)` would have produced. Race-free under our
+        # single-threaded CLI invocation; intentionally NOT thread-safe
+        # against parallel `os.umask` callers (none exist here).
+        current_umask = os.umask(0o022)
+        os.umask(current_umask)
+        target_mode = 0o666 & ~current_umask
+
     fd, tmp_str = tempfile.mkstemp(dir=rule_file.parent, prefix=f"{rule_file.name}.", suffix=".tmp")
     tmp = Path(tmp_str)
     try:
@@ -306,6 +328,7 @@ def _atomic_write_rule_file(rule_file: Path, new_content: str) -> None:
         # is consolidated.
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as tmp_file:
             tmp_file.write(new_content)
+        os.chmod(tmp, target_mode)
         os.replace(tmp, rule_file)
     except OSError:
         tmp.unlink(missing_ok=True)

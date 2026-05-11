@@ -7,6 +7,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from . import linux_xattr as linux_xattr
+    from . import macos_xattr as macos_xattr
+    from . import windows_ads as windows_ads
+
 
 def require_absolute(path: Path) -> None:
     if not path.is_absolute():

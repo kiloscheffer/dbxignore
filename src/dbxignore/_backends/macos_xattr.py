@@ -32,6 +32,55 @@ A symlink matched by a rule therefore gets marked directly — the symlink
 itself is marked, not its target.  This is the intentional macOS-vs-Linux
 behavioral divergence documented in the spec.  ``reconcile._reconcile_path``'s
 ``PermissionError`` arm is dormant on macOS for this reason.
+
+Detection (``_detect()``) is **path-primary, pluginkit-disambiguating** —
+the user-level "which mode is this account in" lives in info.json, and the
+system-level "is the appex registered" comes from pluginkit. Returns
+``(attr_names, summary)``:
+
+==========================================================  =========================================
+Signal                                                      ``attr_names``
+==========================================================  =========================================
+Extension explicitly disabled (regardless of path)          ``[ATTR_LEGACY]``
+Any account path under ``~/Library/CloudStorage/``          ``[ATTR_FILEPROVIDER]``
+Path elsewhere + extension allowed                          ``[ATTR_FILEPROVIDER]``
+(external-drive eligibility-gated)
+Pluginkit unknown + no decisive path signal                 ``[ATTR_LEGACY, ATTR_FILEPROVIDER]``
+(write-both defensive, followup item 58)
+Otherwise                                                   ``[ATTR_LEGACY]``
+==========================================================  =========================================
+
+The decision is cached on ``_decision_cache`` so the per-file reconcile loop
+doesn't re-invoke pluginkit + re-parse info.json. Callers:
+``_detected_attr_names()`` returns ``_detect()[0]``; the legacy
+``_detected_attr_name() -> str`` is a back-compat shim returning
+``_detected_attr_names()[0]`` for older tests; ``detection_summary()``
+returns ``_detect()[1]`` — the human-readable ``<mode>: <reason>`` string
+that the daemon logs at INFO startup and ``dbxignore status`` echoes on
+darwin (followup item 37).
+
+Dual-attribute mode behavior (followup item 58): when ``_detected_attr_names()``
+returns both names, ``is_ignored`` iterates and short-circuits ``True`` on
+the first non-empty hit (so legacy users don't pay two getxattr calls per
+file); ``set_ignored`` writes both names sequentially and a partial-failure
+on the second propagates with the second's exception, mirroring the
+single-attr "either fully successful or raises" contract; ``clear_ignored``
+removes both with per-attribute ENOATTR no-op so a half-marked path that
+only ever had one name written gets cleaned up regardless. The trade is a
+stray attribute on the inactive sync stack (metadata cleanliness) versus
+a silent no-op on the active stack (correctness).
+
+The cross-platform facade ``markers.detection_summary()`` returns this
+module's summary string on darwin and ``None`` on Windows/Linux (where
+there's nothing to detect). Callers gate on ``if summary is not None:``
+so the same code path works on every platform.
+
+Tests for this module live in ``tests/test_macos_xattr_unit.py``. The
+``_fake_pluginkit`` helper monkeypatches ``subprocess.run`` to inject
+``stdout=`` for the success path or ``side_effect=`` for
+``FileNotFoundError`` / ``TimeoutExpired``; ``_stage_dropbox_info``
+stages a synthetic info.json. Future install-backend tests (schtasks,
+systemctl, launchctl) should use the same shape.
 """
 
 from __future__ import annotations

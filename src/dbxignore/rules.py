@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import stat
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +37,27 @@ def is_ignore_filename(name: str) -> bool:
     ``_CaseInsensitiveGitIgnorePattern``) extended end-to-end.
     """
     return name.lower() == IGNORE_FILENAME
+
+
+def _is_real_dir(path: Path) -> bool:
+    """Return True iff ``path`` is a directory and not a symlink.
+
+    Equivalent to ``path.is_dir() and not path.is_symlink()`` but costs
+    one ``lstat()`` syscall instead of two. ``S_ISDIR`` on an ``lstat()``
+    result is False for symlinks regardless of target type — `lstat`
+    reports the link's own mode (`S_IFLNK`), not the target's. That
+    matches the symlinks-are-leaves invariant from PR #191's
+    ``format_literal_rule`` (which still uses the two-call form because
+    its cold-path callers stub ``path.is_dir`` / ``is_symlink`` directly
+    in test mocks). ``cache.match`` / ``cache.explain`` are in the
+    daemon's hot path and use this helper.
+
+    On `OSError` (vanished path, permission denied), returns False.
+    """
+    try:
+        return stat.S_ISDIR(path.lstat().st_mode)
+    except OSError:
+        return False
 
 
 def _canonical_cache_key(path: Path) -> Path:
@@ -520,12 +542,11 @@ class RuleCache:
         # entries in source order; every matching pattern overwrites `matched`
         # with its include bit. Deeper ancestors come later, so their patterns
         # override shallower ones — gitignore's last-match-wins semantics.
-        # `is_dir` matches `format_literal_rule`'s invariant: a symlink-to-
-        # directory is treated as a LEAF for matching purposes, so a
-        # directory-only rule (e.g. `build/`) does NOT match a symlink named
-        # `build`. Otherwise round-trip via `ignore`/`unignore` breaks for
-        # symlinks (format_literal_rule writes no-slash rules for symlinks).
-        is_dir = path.is_dir() and not path.is_symlink()
+        # Symlink-to-dir is treated as a LEAF here so a directory-only rule
+        # (e.g. `build/`) does NOT match a symlink named `build`. Mirrors the
+        # `format_literal_rule` invariant — round-trip via `ignore`/`unignore`
+        # would otherwise break (ignore writes no-slash rules for symlinks).
+        is_dir = _is_real_dir(path)
         matched = False
         for ancestor, loaded in self._applicable(root, path):
             rel_str = self._rel_path_str(ancestor, path, is_dir)
@@ -557,8 +578,7 @@ class RuleCache:
         if root is None:
             return []
 
-        # See `match()` for the rationale on the `not is_symlink()` guard.
-        is_dir = path.is_dir() and not path.is_symlink()
+        is_dir = _is_real_dir(path)
         results: list[Match] = []
         for ancestor, loaded in self._applicable(root, path):
             rel_str = self._rel_path_str(ancestor, path, is_dir)

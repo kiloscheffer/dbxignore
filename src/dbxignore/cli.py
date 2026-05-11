@@ -21,6 +21,11 @@ click.rich_click.TEXT_MARKUP = "markdown"
 
 logger = logging.getLogger(__name__)
 
+# Cap for the bounded stderr list that `clear` and `uninstall --purge` print
+# on partial failure. Enough for diagnosis without flooding terminals on a
+# permission-denied-everywhere scenario; the exit code is the script-gate.
+_MAX_REPORTED_ERRORS = 10
+
 
 def _discover_roots() -> list[Path]:
     """Resolve roots at the CLI boundary; indirection allows test monkeypatching."""
@@ -927,7 +932,7 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
             errors.append((p, str(exc)))
 
     click.echo(f"clear: cleared={cleared} errors={len(errors)}")
-    for p, msg in errors[:10]:
+    for p, msg in errors[:_MAX_REPORTED_ERRORS]:
         click.echo(f"  error: {p} - {msg}", err=True)
 
 
@@ -1493,33 +1498,68 @@ def uninstall(purge: bool) -> None:
     click.echo("Uninstalled dbxignore daemon service.")
 
     if purge:
-        # (1) Clear xattr markers.
+        # (1) Clear xattr markers. Read and clear arms are split so each
+        # failure can be attributed to the specific operation that failed;
+        # the prior shape collapsed both into one `except OSError: pass`
+        # and silently overstated cleanup success (backlog item #98).
         discovered = _discover_roots()
         cleared = 0
+        errors: list[tuple[Path, str, str]] = []  # (path, operation, message)
+        # FileNotFoundError on either arm = path vanished between `os.walk`
+        # and our read/clear (Dropbox sync, IDE temp file, concurrent user
+        # activity) — no marker to manage, skip silently. Mirrors the
+        # reconcile read arm's vanished-path treatment.
         for r in discovered:
             try:
-                if markers.is_ignored(r):
+                root_marked = markers.is_ignored(r)
+            except FileNotFoundError:
+                root_marked = False
+            except OSError as exc:
+                errors.append((r, "read", str(exc)))
+                root_marked = False
+            if root_marked:
+                try:
                     markers.clear_ignored(r)
                     cleared += 1
-            except OSError:
-                pass
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    errors.append((r, "clear", str(exc)))
             for current, dirnames, filenames in os.walk(r, followlinks=False):
                 current_path = Path(current)
                 for name in dirnames + filenames:
                     p = current_path / name
                     try:
-                        if markers.is_ignored(p):
-                            if is_ignore_filename(p.name):
-                                logger.warning(
-                                    ".dropboxignore at %s was marked ignored; "
-                                    "overriding back to synced",
-                                    p,
-                                )
-                            markers.clear_ignored(p)
-                            cleared += 1
-                    except OSError:
+                        marked = markers.is_ignored(p)
+                    except FileNotFoundError:
                         continue
+                    except OSError as exc:
+                        errors.append((p, "read", str(exc)))
+                        continue
+                    if not marked:
+                        continue
+                    if is_ignore_filename(p.name):
+                        logger.warning(
+                            ".dropboxignore at %s was marked ignored; overriding back to synced",
+                            p,
+                        )
+                    try:
+                        markers.clear_ignored(p)
+                        cleared += 1
+                    except FileNotFoundError:
+                        pass
+                    except OSError as exc:
+                        errors.append((p, "clear", str(exc)))
         click.echo(f"Cleared {cleared} ignore markers.")
+        if errors:
+            # Surface a bounded list to stderr so the user sees what was
+            # left behind. State cleanup still runs; the non-zero exit at
+            # the end of the purge block is what scripts gate on.
+            click.echo(f"Could not fully clear markers ({len(errors)} errors):", err=True)
+            for path, op, msg in errors[:_MAX_REPORTED_ERRORS]:
+                click.echo(f"  {op} failed on {path}: {msg}", err=True)
+            if len(errors) > _MAX_REPORTED_ERRORS:
+                click.echo(f"  ... and {len(errors) - _MAX_REPORTED_ERRORS} more.", err=True)
 
         # (2) Remove state.json, daemon.log*, state dir (cross-platform).
         _purge_local_state()
@@ -1531,6 +1571,9 @@ def uninstall(purge: bool) -> None:
             removed_dropin = linux_systemd.remove_dropin_directory()
             if removed_dropin is not None:
                 click.echo(f"Removed systemd drop-in directory {removed_dropin}.")
+
+        if errors:
+            sys.exit(2)
 
 
 _INIT_DETECTION_DIRS = frozenset(

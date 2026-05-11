@@ -782,6 +782,14 @@ def _walk_marked_paths(target: Path) -> list[Path]:
     descendant under a marked parent is left to the next `apply` to
     reconcile, since `clear` with a pruning walk gets the same
     user-visible outcome at vastly lower walk cost on big trees).
+
+    When ``target`` is itself a symlink, only the link's own marker is
+    checked — the ``os.walk`` is skipped. ``followlinks=False`` only
+    gates subdirectory symlinks encountered during the walk, not the
+    walk root; without this guard, walking a symlinked directory would
+    enumerate markers inside the link's target tree (possibly outside
+    any Dropbox root). Mirrors `_run_apply_pass`'s ``descend=False``
+    guard and the daemon's per-subdir fan-out from PR #183.
     """
     found: list[Path] = []
     try:
@@ -789,6 +797,8 @@ def _walk_marked_paths(target: Path) -> list[Path]:
             return [target]
     except OSError:
         pass
+    if target.is_symlink():
+        return found
     for current, dirnames, filenames in os.walk(target, followlinks=False):
         current_path = Path(current)
         kept_dirs: list[str] = []

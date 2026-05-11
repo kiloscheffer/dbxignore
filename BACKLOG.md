@@ -2279,18 +2279,15 @@ Touches: `.github/workflows/test.yml`; optionally README/AGENTS command snippets
 
 ## 104. CLI walk-entry callsites descend through symlink-to-directory arguments
 
-`os.walk(path, followlinks=False)` follows the link when ``path`` is itself the walk root (CLAUDE.md gotcha; PR #183 added the corresponding guard at the daemon's per-subdir fan-out). After PR #195 (item #95), the CLI's path-taking verbs accept symlink-object arguments and pass them through to `_walk_marked_paths` (used by `clear`, `list`) and `_run_apply_pass` → `reconcile_subtree` (used by `apply`). The walk-root `is_symlink()` guard was applied to `_run_apply_pass` in PR #195 (via `descend=False`, mitigating the apply mark-write surface after a Codex P1 finding), but `_walk_marked_paths` still descends, so `dbxignore clear ~/Dropbox/some-dir-symlink` walks into the link's target tree after handling the link's own marker. `explain` / `check-ignore` are not affected (no walk).
+**Status: RESOLVED 2026-05-11 (PR #195).**
 
-**Status:** apply portion mitigated in PR #195. Remaining work: `_walk_marked_paths` walk-root guard for `clear` and `list`.
+`os.walk(path, followlinks=False)` follows the link when ``path`` is itself the walk root (CLAUDE.md gotcha; PR #183 added the corresponding guard at the daemon's per-subdir fan-out). After PR #195 (item #95), the CLI's path-taking verbs accept symlink-object arguments and pass them through to `_walk_marked_paths` (used by `clear`, `list`) and `_run_apply_pass` → `reconcile_subtree` (used by `apply`). Both callsites were missing the walk-root `is_symlink()` guard, so `dbxignore clear ~/Dropbox/some-dir-symlink` would walk into the link's target tree after handling the link's own marker, and `dbxignore apply ~/Dropbox/some-dir-symlink` could write orphan markers in the external target tree. `explain` / `check-ignore` are not affected (no walk).
 
-**Fix candidates (remaining):**
+Resolved in two commits on PR #195, in response to Codex P1 and P2 findings during review:
+- `_run_apply_pass` passes `descend=False` to `reconcile_subtree` when subdir is a symlink (apply mark-write surface).
+- `_walk_marked_paths` short-circuits to "process the link's own marker only" when target is a symlink (clear/list enumerate surface).
 
-- **Guard at the CLI callsite.** Add an `is_symlink()` check at the entry to `_walk_marked_paths`. Short-circuit to "process the link's own marker only; do not descend." Mirrors PR #195's `_run_apply_pass` fix and PR #183's daemon-side approach.
-- **Guard inside the helper itself** (`_walk_marked_paths`). Lower-risk than the same change in `reconcile.reconcile_subtree` (which is shared with the daemon, where PR #183 already guards walk roots); `_walk_marked_paths` is CLI-only.
-
-**Urgency:** medium. Less destructive than the apply portion (clear/list read or remove markers; they don't create orphan markers). Surfaced by Codex auto-review on PR #195.
-
-Touches: `src/dbxignore/cli.py` (`_walk_marked_paths`); cross-platform symlink tests for `clear` and `list`.
+Mirrors PR #183's daemon-side per-subdir fan-out guard.
 
 ## 105. `..` segments after a symlinked component are collapsed lexically and drop symlink awareness
 
@@ -2318,7 +2315,7 @@ Touches: `src/dbxignore/cli.py` (`_normalize_under_root`); cross-platform symlin
 
 ### Open
 
-Nineteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Items #97, #98, and #105 are user-facing correctness/error-handling fixes and should be prioritized ahead of purely polish work.
+Eighteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Items #97, #98, and #105 are user-facing correctness/error-handling fixes and should be prioritized ahead of purely polish work.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2337,7 +2334,6 @@ Nineteen items. Most are passive (no concrete trigger requires action) — bundl
 - **#101** — Rule-file mutation helpers use fixed `.dropboxignore.tmp`, unsafe for concurrent `ignore` / `unignore` or user/editor temp-file collisions.
 - **#102** — Rule cache can miss same-size edits with preserved mtimes. Consider a hash or forced periodic re-read policy.
 - **#103** — CI uses `uv run pytest` despite the documented canonical `uv run python -m pytest` workaround. Mechanical workflow alignment.
-- **#104** — CLI walk-entry callsites descend through symlink-to-directory arguments. After #95's normalization fix, `apply`/`clear`/`list` on a symlink-to-directory target walk into the link's target tree. Add `is_symlink()` guard at CLI walk-entry sites, mirroring PR #183's daemon-side fix.
 - **#105** — `..` segments after a symlinked component are collapsed lexically by `_normalize_under_root` / `_validate_target_under_root`, dropping symlink awareness. `apply ~/Dropbox/link/../file` reconciles `~/Dropbox/file` instead of `<target>/file`. Reject paths where `..` follows a symlinked component.
 
 ### Resolved (reverse chronological)
@@ -2345,6 +2341,7 @@ Nineteen items. Most are passive (no concrete trigger requires action) — bundl
 #### 2026-05-11
 
 - **#95** (2026-05-11, PR #195) — Path-taking verbs `apply`/`clear`/`list`/`explain`/`check-ignore` now preserve the symlink object via shared `_normalize_under_root` helper. `apply` additionally fixed: broken-target symlinks accepted; symlinked-ancestor refused.
+- **#104** (2026-05-11, PR #195) — Filed and resolved in the same PR after Codex P1 and P2 findings during review. `_run_apply_pass` passes `descend=False` to `reconcile_subtree` when target is a symlink (apply mark-write surface); `_walk_marked_paths` short-circuits when target is a symlink (clear/list enumerate surface). Walk-root `is_symlink()` guard mirrors PR #183's daemon-side fix.
 
 #### 2026-05-10
 

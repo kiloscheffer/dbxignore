@@ -455,3 +455,49 @@ def test_case8_apply_symlink_to_directory_does_not_descend(
             f"apply descended into symlink target via the link; "
             f"spy.set contains {bad_path}. The descend=False guard is missing."
         )
+
+
+# ---- Case 9: clear/list on symlink-to-directory do not descend ------------
+
+
+@pytest.mark.parametrize("verb", ["clear", "list"])
+def test_case9_clear_list_symlink_to_directory_does_not_descend(
+    verb: str,
+    dropbox_root: Path,
+    raw_marker_spy: SimpleNamespace,
+    symlink_capable: None,
+) -> None:
+    """clear/list with a symlink-to-directory argument check only the link's
+    own marker; they don't walk into the link target's tree.
+
+    ``_walk_marked_paths`` short-circuits when ``target.is_symlink()`` —
+    ``os.walk(target, followlinks=False)`` still follows the link at the
+    walk root (per the CLAUDE.md gotcha; same shape as apply's walk and
+    the daemon's per-subdir fan-out pre-PR #183). Without the guard,
+    `dbxignore clear ~/Dropbox/link-to-external` would enumerate and
+    clear markers in the link's external target tree.
+    """
+    real_target_dir = dropbox_root / "real-target-dir"
+    real_target_dir.mkdir()
+    (real_target_dir / "inner-file-1.txt").touch()
+    (real_target_dir / "inner-file-2.txt").touch()
+
+    link = dropbox_root / "link-to-dir"
+    os.symlink(real_target_dir, link)
+
+    exit_code, _stdout, stderr = _invoke(verb, link)
+
+    assert exit_code == 0, f"{verb} failed: exit={exit_code} stderr={stderr!r}"
+
+    # The spy may have queried is_ignored on `link` itself. But no query
+    # should target a path reached BY DESCENDING THROUGH the link.
+    queries_through_link = [
+        p
+        for p in raw_marker_spy.is_ignored
+        if p != link and any(parent == link for parent in p.parents)
+    ]
+    assert not queries_through_link, (
+        f"{verb} descended into symlink target via the link; is_ignored "
+        f"was queried on {queries_through_link}. The is_symlink() guard "
+        f"at _walk_marked_paths entry is missing."
+    )

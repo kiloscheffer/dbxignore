@@ -298,7 +298,13 @@ def _atomic_write_rule_file(rule_file: Path, new_content: str) -> None:
     fd, tmp_str = tempfile.mkstemp(dir=rule_file.parent, prefix=f"{rule_file.name}.", suffix=".tmp")
     tmp = Path(tmp_str)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
+        # `newline=""` disables the default text-mode `\n` → `\r\n` translation
+        # on Windows. Gitignore-style files are LF-canonical; the prior
+        # `Path.write_text(...)` shape inherited Python's default text-mode
+        # translation accidentally, producing CRLF on Windows and LF elsewhere
+        # for byte-identical inputs. Pin LF everywhere now that the writer
+        # is consolidated.
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as tmp_file:
             tmp_file.write(new_content)
         os.replace(tmp, rule_file)
     except OSError:

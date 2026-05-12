@@ -627,7 +627,13 @@ phase_daemon() {
         pass "5e — clear exited non-zero (refused)"
     fi
     assert_grep /tmp/dbx-clear-alive.out 'daemon is running' "5e — refusal message names the daemon"
-    if dbxignore clear "$T" --force --yes >/dev/null 2>&1; then
+    # Scope the --force clear to a single file (freshrule.dat, marked in 5c)
+    # rather than the whole tree: a tree-wide clear here would also clear
+    # watch-me.tmp's marker, and Phase 6's "uninstall — markers retained on
+    # watch-me.tmp" assertion would then fail vacuously (the marker is gone
+    # before uninstall even runs). The override behavior is demonstrated
+    # identically on a single-file target. Item #112.
+    if dbxignore clear "$T/freshrule.dat" --force --yes >/dev/null 2>&1; then
         pass "5e — clear --force overrides daemon-alive guard"
     else
         fail "5e — clear --force did not override the guard"

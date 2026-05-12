@@ -83,6 +83,13 @@ cleanup() {
     # crash skipped the in-phase cleanup (BACKLOG #89). Honoring a stale
     # marker on a future install would silently pad every initial sweep.
     rm -f "$DBXIGNORE_STATE_DIR/_test_slow_sweep" 2>/dev/null || true
+    # Phase 4.5 case 4s leaves recovery sentinels set across its destructive
+    # section; honor them on abort. No-op when sentinels are unset (the
+    # in-phase restore ran successfully). Function is defined in
+    # `_phase_extended_cli.sh`, sourced below before this trap fires.
+    if declare -F _phase_4s_recover_state_json >/dev/null 2>&1; then
+        _phase_4s_recover_state_json
+    fi
 }
 trap cleanup EXIT
 

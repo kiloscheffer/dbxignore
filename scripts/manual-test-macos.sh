@@ -56,6 +56,21 @@ pass()   { PASS_COUNT=$((PASS_COUNT+1)); echo "  ${G}PASS${X} $*"; }
 fail()   { FAIL_COUNT=$((FAIL_COUNT+1)); FAIL_NAMES+=("$*"); echo "  ${R}FAIL${X} $*"; }
 abort()  { echo "${R}ABORT:${X} $*" >&2; exit 1; }
 
+# EXIT trap — honor Phase 4.5 case 4s's recovery sentinels if a `set -e` abort
+# fired mid-test. No-op when sentinels are unset (the in-phase restore ran
+# successfully). The recovery function is defined in `_phase_extended_cli.sh`,
+# sourced below before this trap fires. Unlike `manual-test-ubuntu-vps.sh`,
+# macOS doesn't run a long-lived `dropboxd` foreground process during tests
+# (the .app launches the daemon out-of-band), so this cleanup is currently
+# 4s-only; expand to additional recovery hooks alongside any future
+# destructive-setup cases.
+cleanup() {
+    if declare -F _phase_4s_recover_state_json >/dev/null 2>&1; then
+        _phase_4s_recover_state_json
+    fi
+}
+trap cleanup EXIT
+
 # ---- xattr helpers ---------------------------------------------------------
 # macOS picks the active attribute name from sync mode (legacy ↔
 # com.dropbox.ignored, File Provider ↔ com.apple.fileprovider.ignore#P,

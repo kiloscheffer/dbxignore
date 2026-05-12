@@ -15,6 +15,25 @@
 # Windows (`scripts/manual-test-windows.ps1`) is PowerShell and does not
 # share this body — see backlog item #75.
 
+# Recovery hook for case 4s — called from each parent script's EXIT trap
+# (cleanup()) so an abort during the destructive section restores the user's
+# state.json regardless of how the script exited. The sentinels
+# (`_4S_STATE_JSON`, `_4S_STATE_JSON_EXISTED`) are set inside `phase_extended_cli`
+# right before the destructive operations and unset after successful
+# completion; this function is a no-op when sentinels are unset.
+_phase_4s_recover_state_json() {
+    if [ -z "${_4S_STATE_JSON:-}" ]; then
+        return 0
+    fi
+    chmod 644 "$_4S_STATE_JSON" 2>/dev/null || true
+    if [ "${_4S_STATE_JSON_EXISTED:-0}" = "1" ] && [ -f /tmp/dbx-4s-state-backup.json ]; then
+        mv -f /tmp/dbx-4s-state-backup.json "$_4S_STATE_JSON" 2>/dev/null || true
+    elif [ "${_4S_STATE_JSON_EXISTED:-0}" = "0" ]; then
+        rm -f "$_4S_STATE_JSON" 2>/dev/null || true
+    fi
+    unset _4S_STATE_JSON _4S_STATE_JSON_EXISTED
+}
+
 phase_extended_cli() {
     phase "Phase 4.5 — extended CLI surface (init, generate, apply variants, clear)"
 
@@ -228,10 +247,12 @@ phase_extended_cli() {
     # → _read_at returns None). cli.clear refuses to proceed because daemon liveness
     # is unknown; --force overrides.
     #
-    # Sequence: backup → setup tree + apply (state.json still readable, so a setup
-    # failure aborts cleanly) → narrow chmod 000 window per test → chmod 644 right
-    # after each clear call so an abort during assertions doesn't strand state.json
-    # at mode 000.
+    # Recovery: sentinels (`_4S_STATE_JSON`, `_4S_STATE_JSON_EXISTED`) are set
+    # BEFORE the destructive overwrite. The parent script's EXIT trap calls
+    # `_phase_4s_recover_state_json` to chmod 644 + restore content if a `set -e`
+    # abort fires anywhere between the overwrite and the explicit restore at the
+    # end. Sentinels are unset after the successful restore, making the recovery
+    # hook a no-op.
     note "4s — clear fail-closed on unreadable state.json"
     mkdir -p "$DBXIGNORE_STATE_DIR"
     local state_json="$DBXIGNORE_STATE_DIR/state.json"
@@ -240,10 +261,16 @@ phase_extended_cli() {
         state_json_existed=1
         cp -p "$state_json" /tmp/dbx-4s-state-backup.json
     fi
+
+    # Install recovery sentinels BEFORE the first destructive operation.
+    # The parent cleanup() trap reads these; unset on successful completion.
+    _4S_STATE_JSON="$state_json"
+    _4S_STATE_JSON_EXISTED="$state_json_existed"
+
     printf '{}\n' > "$state_json"
 
-    # Setup the test target FIRST, with state.json still readable. Any setup
-    # failure aborts before the lock window opens.
+    # Setup the test target. Any setup failure aborts cleanly via the parent's
+    # EXIT trap, which calls _phase_4s_recover_state_json to restore state.json.
     rm -rf "$T"; mkdir -p "$T"
     printf '*.tmp\n' > "$T/.dropboxignore"
     : > "$T/foo.tmp"
@@ -285,12 +312,13 @@ phase_extended_cli() {
     fi
     assert_xattr_unset "$T/foo.tmp" "4s — clear --force cleared the marker"
 
-    # Restore state.json content.
+    # Restore state.json content and unset the recovery sentinels.
     if [ "$state_json_existed" -eq 1 ]; then
         mv /tmp/dbx-4s-state-backup.json "$state_json"
     else
         rm -f "$state_json"
     fi
+    unset _4S_STATE_JSON _4S_STATE_JSON_EXISTED
 
     # 4t — path-taking verbs refuse `..` after a symlinked component (PR #205, item #105)
     # Lexical normalization of `link/..` differs from filesystem-true resolution;

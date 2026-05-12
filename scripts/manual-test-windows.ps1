@@ -621,20 +621,25 @@ function Test-ExtendedCli {
     $stateJson4s = Join-Path $stateDir4s "state.json"
     $stateJson4sExisted = Test-Path $stateJson4s
     $stateJson4sBackup = Join-Path $env:TEMP "dbx-4s-state-backup.json"
+    # Back up the real state.json BEFORE any destructive op. Copy-Item itself
+    # is non-destructive (read-only on $stateJson4s), so any failure here
+    # aborts the script with the user's state.json untouched.
     if ($stateJson4sExisted) {
         Copy-Item $stateJson4s $stateJson4sBackup -Force
     }
-    Set-Content -Path $stateJson4s -Value "{}" -Encoding utf8 -NoNewline
-
-    # Setup the test target FIRST, with state.json still readable. Setup failures
-    # abort before the deny ACE goes on.
-    Remove-Item -Recurse -Force $T -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Force -Path $T | Out-Null
-    Set-Content -Path "$T\.dropboxignore" -Value "*.tmp" -Encoding utf8
-    New-Item -ItemType File -Force -Path "$T\foo.tmp" | Out-Null
-    & dbxignore apply $T --yes *> $null
 
     try {
+        # All destructive ops live in the try block so the finally unconditionally
+        # restores state.json regardless of where the abort fires — Set-Content,
+        # tree setup, dbxignore apply, the deny ACE, or any of the test commands.
+        Set-Content -Path $stateJson4s -Value "{}" -Encoding utf8 -NoNewline
+
+        Remove-Item -Recurse -Force $T -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path $T | Out-Null
+        Set-Content -Path "$T\.dropboxignore" -Value "*.tmp" -Encoding utf8
+        New-Item -ItemType File -Force -Path "$T\foo.tmp" | Out-Null
+        & dbxignore apply $T --yes *> $null
+
         # Deny only Read Data (RD) — NOT the generic R, which includes RA
         # (Read Attributes). `state.default_path().exists()` in cli.clear
         # queries file attributes; if RA were denied, exists() could return

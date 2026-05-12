@@ -9,9 +9,12 @@ the same logic.
 
 from __future__ import annotations
 
+import logging
 import shutil
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def detect_invocation() -> tuple[Path, str]:
@@ -42,13 +45,17 @@ def detect_invocation() -> tuple[Path, str]:
 
     Non-frozen branch is platform-conditional:
 
-    - **Windows** (Task Scheduler logon launch): use ``pythonw.exe`` —
+    - **Windows** (Task Scheduler logon launch): prefer ``pythonw.exe`` —
       the windowless interpreter sibling next to ``sys.executable`` — to
       avoid the console flash + orphan ``conhost.exe`` that ``python.exe``
-      would produce. The ``shutil.which("dbxignored")`` PATH-shim lookup
-      is intentionally skipped on Windows: the typical Windows dev path
-      is ``.venv/Scripts/python.exe``, and any PATH shim would still
-      launch ``python.exe`` with a console.
+      would produce. If ``pythonw.exe`` doesn't exist at that path (Store
+      Python, embedded interpreter, or a pruned CPython install), fall
+      back to ``sys.executable`` (``python.exe``) with a ``WARNING`` log.
+      The daemon then runs correctly but Task Scheduler flashes a brief
+      console window at every logon. The ``shutil.which("dbxignored")``
+      PATH-shim lookup is intentionally skipped on Windows: the typical
+      Windows dev path is ``.venv/Scripts/python.exe``, and any PATH shim
+      would still launch ``python.exe`` with a console.
     - **Linux/macOS** (systemd / launchd): try ``shutil.which("dbxignored")``
       first (the ``uv tool install`` PATH-shim case); fall back to
       ``python3 -m dbxignore daemon`` otherwise.
@@ -72,7 +79,23 @@ def detect_invocation() -> tuple[Path, str]:
         return exe, "daemon"
     if sys.platform == "win32":
         pythonw = Path(sys.executable).with_name("pythonw.exe")
-        return pythonw, "-m dbxignore daemon"
+        if pythonw.exists():
+            return pythonw, "-m dbxignore daemon"
+        # Item #100: fall back to python.exe when pythonw.exe is missing.
+        # Common on Microsoft Store Python, embedded interpreters, or
+        # pruned CPython installs that ship only `python.exe`. The daemon
+        # functions correctly under python.exe but Task Scheduler flashes
+        # a console window at every logon.
+        logger.warning(
+            "pythonw.exe not found at %s; falling back to %s for the daemon "
+            "Task Scheduler entry. The daemon will start at logon, but a "
+            "brief console window will appear each time. To suppress, "
+            "install a standard CPython distribution (which includes "
+            "pythonw.exe alongside python.exe).",
+            pythonw,
+            sys.executable,
+        )
+        return Path(sys.executable), "-m dbxignore daemon"
     exe_str = shutil.which("dbxignored")
     if exe_str:
         return Path(exe_str), ""

@@ -845,3 +845,21 @@ def test_format_applies_to_query_empty_roots_returns_empty_string() -> None:
     # The dispatcher guards against this case (skipped-no-roots), but
     # the pure helper itself handles it cleanly — empty list ⇒ empty string.
     assert _format_applies_to_query([]) == ""
+
+
+def test_format_applies_to_query_drive_root() -> None:
+    """Drive-root Dropbox mount (e.g. `D:\\`) — str(Path) already has a trailing
+    backslash; the prefix clause must not double-append, otherwise it produces
+    `D:\\\\` in stored AQS which parses to `D:\\` (two backslashes) and matches
+    no real Windows path.
+    """
+    roots = [Path("D:\\")]
+    result = _format_applies_to_query(roots)
+    # Exact clause for the root itself: `D:` followed by one backslash, doubled
+    # in stored AQS to `D:\\`.
+    assert r'System.ItemPathDisplay:="D:\\"' in result
+    # Prefix clause: same `D:\\` — the prefix-construction normalization
+    # (`rstrip + re-append`) ensures we DON'T get `D:\\\\` here.
+    assert r'System.ItemPathDisplay:~<"D:\\"' in result
+    # And we should have exactly two clauses (no spurious extras).
+    assert result.count(" OR ") == 1

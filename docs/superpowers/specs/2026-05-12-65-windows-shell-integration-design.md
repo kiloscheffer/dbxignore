@@ -78,13 +78,15 @@ HKCU\Software\Classes\AllFilesystemObjects\shell\DbxignoreRestore
 The `AppliesTo` property is a Windows Property System query that gates whether the verb is shown for a given Explorer item. Built at install time from `roots.discover()`, with two clauses per root ORed together — root-itself (`:=` exact-equal) plus root-prefix-with-trailing-backslash (`:~<` starts-with) — to match the root and everything under it without falsely matching siblings (e.g. `Dropbox-other`):
 
 ```
-System.ItemPathDisplay:="C:\Users\kilo\Dropbox" OR
-System.ItemPathDisplay:~<"C:\Users\kilo\Dropbox\\" OR
-System.ItemPathDisplay:="D:\Dropbox (Personal)" OR
-System.ItemPathDisplay:~<"D:\Dropbox (Personal)\\"
+System.ItemPathDisplay:="C:\\Users\\kilo\\Dropbox" OR
+System.ItemPathDisplay:~<"C:\\Users\\kilo\\Dropbox\\" OR
+System.ItemPathDisplay:="D:\\Dropbox (Personal)" OR
+System.ItemPathDisplay:~<"D:\\Dropbox (Personal)\\"
 ```
 
-Inside `AppliesTo` double-quoted string literals, `\` is a literal backslash and `\\` is a literal backslash-followed-by-backslash. So a path ending in `\` (rare, but possible for `D:\` if a user mounts Dropbox at a drive root) renders as `"D:\\"`. Helper `_format_applies_to_query(roots: list[Path]) -> str` handles the construction.
+Inside `AppliesTo` double-quoted string literals, AQS treats `\\` as a single literal backslash — so every backslash in the input path is doubled before embedding. A path `C:\Users\kilo\Dropbox` becomes the stored string `C:\\Users\\kilo\\Dropbox`, which AQS parses back to the literal path. For drive-root mounts like `D:\`, `str(Path)` already ends in `\`, so `_format_applies_to_query` normalizes the prefix-clause path via `.rstrip("\\") + "\\"` before doubling — without that, the prefix clause would render as `D:\\\\` (four stored backslashes → AQS parses to `D:\\`), which matches no real path.
+
+Helper `_format_applies_to_query(roots: list[Path]) -> str` handles the construction.
 
 ### Refusal: paths containing `"`
 

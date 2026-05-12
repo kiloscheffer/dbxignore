@@ -56,7 +56,9 @@ def _format_applies_to_query(roots: list[Path]) -> str:
             )
         escaped_root = root_str.replace("\\", "\\\\")
         clauses.append(f'System.ItemPathDisplay:="{escaped_root}"')
-        prefix = root_str + "\\"
+        # `root_str + "\\"` would double-append on drive roots like `D:\` where
+        # `str(Path)` already ends in a backslash; `.rstrip` + re-append normalizes.
+        prefix = root_str.rstrip("\\") + "\\"
         escaped_prefix = prefix.replace("\\", "\\\\")
         clauses.append(f'System.ItemPathDisplay:~<"{escaped_prefix}"')
     return " OR ".join(clauses)

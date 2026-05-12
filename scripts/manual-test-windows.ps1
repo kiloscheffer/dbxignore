@@ -1248,11 +1248,42 @@ function Test-Uninstall {
     }
 
     Write-Note "6e setup - re-install for --purge --no-shell-integration test"
+    # Capture the 6d-daemon's pid from the retained state.json (plain uninstall
+    # retains it, leaving the stale pid in place). 6e's `--purge` must wait
+    # until the *new* daemon's pid lands in state.json — otherwise `/Delete`
+    # fires against the live re-installed daemon without the synchronous
+    # shutdown wait. Same race PR #87 / #172 closed for the main 6b purge.
+    $sixDpid = $null
+    if (Test-Path $stateFile) {
+        try {
+            $sixDpid = (Get-Content $stateFile -Raw | ConvertFrom-Json).daemon_pid
+        } catch {
+            # leave $sixDpid as $null — best-effort
+        }
+    }
+
     dbxignore install 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) { Stop-Abort "6e setup re-install failed" }
+
+    $sixEpid = $null
     for ($i = 0; $i -lt 10; $i++) {
-        if (Test-Path $stateFile) { break }
+        if (Test-Path $stateFile) {
+            try {
+                $candidatePid = (Get-Content $stateFile -Raw | ConvertFrom-Json).daemon_pid
+                if ($candidatePid -and ($candidatePid -ne $sixDpid)) {
+                    $sixEpid = $candidatePid
+                    break
+                }
+            } catch {
+                # keep polling
+            }
+        }
         Start-Sleep -Seconds 1
+    }
+    if ($sixEpid) {
+        Write-Pass "6e setup - state.json advanced to new daemon pid=$sixEpid (was $sixDpid)"
+    } else {
+        Write-Fail "6e setup - state.json daemon_pid did not advance from old=$sixDpid within 10s; --purge below would test against stale state and miss the race PR #87 closes"
     }
 
     # 6e - --purge --no-shell-integration: --purge overrides the preserve flag.

@@ -952,7 +952,13 @@ function Test-Daemon {
         Write-Note $clearAliveContent
         Write-Fail "5e - refusal message unexpected"
     }
-    dbxignore clear "$T" --force --yes 2>$null | Out-Null
+    # Scope the --force clear to a single file (freshrule.dat, marked in 5c)
+    # rather than the whole tree: a tree-wide clear here would also clear
+    # watch-me.tmp's marker, and Phase 6's "uninstall — markers retained on
+    # watch-me.tmp" assertion would then fail vacuously (the marker is gone
+    # before uninstall even runs). The override behavior is demonstrated
+    # identically on a single-file target. Item #112.
+    dbxignore clear "$T\freshrule.dat" --force --yes 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) {
         Write-Pass "5e - clear --force overrides daemon-alive guard"
     } else {

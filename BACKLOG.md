@@ -2217,6 +2217,8 @@ Touches: `src/dbxignore/_backends/macos_xattr.py`; `tests/test_macos_xattr_unit.
 
 ## 100. Windows non-frozen install assumes `pythonw.exe` exists
 
+**Status: RESOLVED 2026-05-12 (PR #229).**
+
 `install._common.detect_invocation()` returns `Path(sys.executable).with_name("pythonw.exe")` on Windows non-frozen installs without checking that file exists. The intent is good: Task Scheduler should use the windowless interpreter to avoid console flash. But custom, embedded, Store, or otherwise unusual Python environments may not have a sibling `pythonw.exe`.
 
 The failure mode is poor: `dbxignore install` can successfully register a scheduled task pointing at a nonexistent executable, and the daemon simply never starts at logon or `/Run`.
@@ -2582,7 +2584,7 @@ Touches: `src/dbxignore/state.py:is_daemon_alive`.
 
 ### Open
 
-Twenty-four items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12). Items #117, #118 surfaced 2026-05-12 during the chore/115 work session (uv venv hygiene + an opaque error-escalation in state.is_daemon_alive); the third item from that session (#116, uv build-cache hygiene) shipped 2026-05-12 in PR #227.
+Twenty-three items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12). Items #117, #118 surfaced 2026-05-12 during the chore/115 work session (uv venv hygiene + an opaque error-escalation in state.is_daemon_alive); the third item from that session (#116, uv build-cache hygiene) shipped 2026-05-12 in PR #227.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2596,7 +2598,6 @@ Twenty-four items. Most are passive (no concrete trigger requires action) — bu
 - **#97** — `state.read()` can raise `OSError` on unreadable/locked state files. Treat unreadable advisory state like corrupt state: warning + `None`.
 - **#98** — `uninstall --purge` silently ignores marker I/O failures while claiming cleanup. Accumulate/report errors and exit nonzero on incomplete marker cleanup.
 - **#99** — macOS sync-mode detection is process-global; mixed legacy/File-Provider account setups may need per-root or write-both behavior.
-- **#100** — Windows non-frozen install assumes sibling `pythonw.exe` exists. Validate before registering a Task Scheduler command.
 - **#101** — Rule-file mutation helpers use fixed `.dropboxignore.tmp`, unsafe for concurrent `ignore` / `unignore` or user/editor temp-file collisions.
 - **#102** — Rule cache can miss same-size edits with preserved mtimes. Consider a hash or forced periodic re-read policy.
 - **#105** — `..` segments after a symlinked component are collapsed lexically by `_normalize_under_root` / `_validate_target_under_root`, dropping symlink awareness. `apply ~/Dropbox/link/../file` reconciles `~/Dropbox/file` instead of `<target>/file`. Reject paths where `..` follows a symlinked component.
@@ -2612,6 +2613,8 @@ Twenty-four items. Most are passive (no concrete trigger requires action) — bu
 ### Resolved (reverse chronological)
 
 #### 2026-05-12
+
+- **#100** (2026-05-12, PR #229) — `install._common.detect_invocation()` on Windows non-frozen installs now probes `pythonw.exe.exists()` before returning it. If present (standard CPython install), keep the windowless launch — no console flash, no orphan `conhost.exe`. If absent (Microsoft Store Python, embedded interpreters, pruned CPython installs that ship only `python.exe`), fall back to `sys.executable` with a `logger.warning` explaining the trade-off (brief console flash at every logon) and pointing at the standard CPython install as the suppression path. Graceful fallback over `RuntimeError` because console-flash is a cosmetic regression — blocking install entirely would force users on Store/embedded Python to switch interpreters before dbxignore would install at all. Builds on item #50 / PR #144 which folded the Windows non-frozen branch into `_common.detect_invocation` originally. Tests: existing `test_detect_invocation_returns_pythonw_on_windows` updated to create `pythonw.exe` in `tmp_path` alongside `python.exe` (it previously only created `python.exe`, which would now hit the new fallback path); new `test_detect_invocation_falls_back_to_python_exe_on_windows_when_pythonw_missing` pins the fallback path via `caplog`. Manual-test scripts intentionally not extended — exercising the fallback requires the test machine to be missing `pythonw.exe`, which would require touching the user's actual Python install; unit-test coverage via caplog is sufficient per AGENTS.md's "limitation called out" exception clause.
 
 - **#116** (2026-05-12, PR #227) — All three manual-test scripts' Phase 2 now runs `uv cache clean dbxignore` before `uv tool install` when `$InstallSpec` is a local directory (detection: `Test-Path -PathType Container` in PowerShell, `[[ -d "$SPEC" ]]` in bash). PyPI names and git URLs are not existing directories, so the cache clean only fires for local-source spec. Forces a fresh wheel build from current git state and prevents uv's path-keyed `sdists-v9/path/<dir-hash>/` cache from silently reusing a wheel pinned to an older SHA. Three sites updated in parallel per the project's manual-test-script convention; Windows `.PARAMETER InstallSpec` docstring extended to mention the local-directory case. Surfaced during the chore/115 (PR #225) work session, where the symptom (verb keys missing despite `-InstallSpec .`) cost ~2h to diagnose before the cache emerged as root cause.
 

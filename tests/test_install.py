@@ -974,6 +974,12 @@ def _make_cli_test_env(
     """
     from dbxignore import state
 
+    # All CLI plumbing tests in this file exercise the Windows install
+    # path's dispatcher wiring. Monkeypatch sys.platform so the CLI's
+    # Windows-only gates (e.g. _discover_roots() conditional) fire as
+    # they would on a real Windows host.
+    monkeypatch.setattr(sys, "platform", "win32")
+
     install_service = MagicMock()
     uninstall_service = MagicMock()
     install_shell = MagicMock(return_value="installed")

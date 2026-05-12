@@ -1532,8 +1532,15 @@ def install(no_shell_integration: bool) -> None:
     click.echo("Installed dbxignore daemon service.")
 
     if not no_shell_integration:
+        # Discovery is Windows-only — _discover_roots() on Linux/macOS would
+        # emit spurious WARNING-level Dropbox-discovery output (missing
+        # info.json, invalid DBXIGNORE_ROOT) even though the dispatcher's
+        # sys.platform check returns "skipped-platform" without using the
+        # roots. Gate the discovery here. The dispatcher's platform check
+        # still beats the empty-roots check for the non-Windows return.
+        dropbox_roots = _discover_roots() if sys.platform == "win32" else []
         outcome = install_shell_integration_if_supported(
-            dropbox_roots=_discover_roots(),
+            dropbox_roots=dropbox_roots,
         )
         match outcome:
             case "installed":

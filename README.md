@@ -179,6 +179,26 @@ Notes:
 2. Place both in a stable directory (e.g. `%LOCALAPPDATA%\dbxignore\bin\`) and add it to your `PATH`.
 3. Run `dbxignore install`.
 
+## Windows Explorer integration
+
+On Windows, `dbxignore install` registers two right-click verbs in Explorer:
+
+- **Ignore from Dropbox** — opens a console window asking for confirmation,
+  then runs `dbxignore.exe ignore <path>`. The confirmation prompt is intentional:
+  marking a path ignored causes Dropbox to delete it from the cloud and propagate
+  the deletion to every linked device.
+- **Restore to Dropbox** — one-click; runs `dbxignore.exe unignore --yes <path>`.
+  Safe direction (Dropbox re-syncs the path).
+
+The verbs only appear under discovered Dropbox roots — the `AppliesTo` filter is
+generated at install time from `~/.dropbox/info.json`. To skip the registry write,
+pass `--no-shell-integration` to `install` (also accepted on Linux/macOS as a no-op
+for portable scripts). To preserve the verbs across a daemon reinstall, pass
+`--no-shell-integration` to `uninstall`. `uninstall --purge` always removes them.
+
+If you move your Dropbox folder, re-run `dbxignore install` to refresh the
+`AppliesTo` filter.
+
 ## Platform support
 
 | Platform | Marker mechanism                  | Daemon mechanism                |

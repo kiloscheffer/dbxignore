@@ -1430,6 +1430,8 @@ Touches: `src/dbxignore/daemon.py` (`run`, `_sweep_once`, `_dispatch`: thread `d
 
 ## 65. No Windows Explorer right-click context-menu integration
 
+**Status: RESOLVED 2026-05-12 (PR #NNN).** Took fix candidate (1) — `dbxignore install --shell-integration` shipped, bundled into the default `install` arm with a `--no-shell-integration` opt-out. HKCU keys under `…\AllFilesystemObjects\shell\DbxignoreIgnore` and `…\DbxignoreRestore`. Asymmetric `--yes` policy (confirm on ignore, one-click on restore) — confirmed via design Q2. `AppliesTo` uses `:=` + `:~<` per discovered root to avoid sibling false-matches. Routes through `dbxignore.exe ignore "%1"` / `dbxignore.exe unignore --yes "%1"` (item #93 prerequisite landed in PR #191). Uninstall mirrors install; `uninstall --purge` overrides `--no-shell-integration` and escalates registry-cleanup errors to exit 2.
+
 **Resolved-prerequisite: item #93** (path-taking `ignore` / `unignore` verbs landed in PR #191). The shell-integration registry verb has working CLI verbs to invoke: `dbxignore.exe ignore --yes "%1"` and `dbxignore.exe unignore --yes "%1"`. #65's spec/plan/PR cycle can resume.
 
 dbxignore is CLI-and-daemon only on Windows; users wanting to ignore a single folder ad-hoc must `dbxignore apply` from a terminal or update `.dropboxignore` and wait for the daemon to react. A right-click context-menu verb in Explorer ("Ignore from Dropbox", "Un-ignore from Dropbox") would close that gap. Windows shell-extension verbs registered under `HKEY_CLASSES_ROOT\Directory\shell\…\command` (or per-user equivalents under `HKEY_CURRENT_USER\Software\Classes\…`) are a no-DLL way to add custom Explorer actions, calling out to a tool with `%1` substituted.
@@ -2486,7 +2488,7 @@ Touches: `scripts/manual-test-ubuntu-vps.sh`, `scripts/manual-test-macos.sh`.
 
 ### Open
 
-Twenty-three items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12).
+Twenty-two items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12).
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2496,7 +2498,6 @@ Twenty-three items. Most are passive (no concrete trigger requires action) — b
 - **#51** — `install/__init__.py` platform dispatch duplicated across `install_service`/`uninstall_service`. Filed for the design-tension record (precedent: #40); current 6-block shape is defensible vs a factored-out helper that would introduce stringly-typed action coupling.
 - **#53** — Initial-sweep wall-clock on a fresh install (no existing markers) was 49.62s on a 27k-dir tree, blocking systemd readiness for ~50s. Candidate 1 (ready-before-sweep) shipped in PR #162 (removed the readiness-pause symptom). Candidate 3 (per-subdir worker fan-out) shipped in PR #183 (parallelizes the sweep itself across top-level subdirs). Only candidate 2 (persisted sweep-complete hint, ~80 LOC) remains open — has reliability concerns on network FS / File Provider mtime semantics; no fired trigger yet.
 - **#54** — Watchdog observer's recursive watch schedules one inotify watch per directory under `~/Dropbox`, including marked-ignored subtrees. Architectural fix (per-directory watches with mark/unmark lifecycle) is ~200 LOC of race-condition-prone state-machine work; deferred until a beta tester hits the watch ceiling on a system with limits already raised.
-- **#65** — Windows Explorer right-click context-menu integration. Optional install arm (`dbxignore install --shell-integration`) writes per-user registry keys under `HKEY_CURRENT_USER\Software\Classes\Directory\shell\…\command`, invoking `dbxignore.exe ignore "%1"`. `AppliesTo` filter scoped to discovered Dropbox roots from `roots.discover()`. Routes through `_backends/windows_ads.py` so `\\?\` long-path correctness comes for free. ~150 LOC + Windows-only tests + symmetric uninstall. Path-taking verbs landed in PR #191 (item #93); spec/plan/PR cycle for #65 can resume.
 - **#96** — Windows ADS `_stream_path()` emits invalid long-path syntax for UNC paths. Add UNC-aware `\\?\UNC\...` conversion.
 - **#97** — `state.read()` can raise `OSError` on unreadable/locked state files. Treat unreadable advisory state like corrupt state: warning + `None`.
 - **#98** — `uninstall --purge` silently ignores marker I/O failures while claiming cleanup. Accumulate/report errors and exit nonzero on incomplete marker cleanup.
@@ -2513,6 +2514,10 @@ Twenty-three items. Most are passive (no concrete trigger requires action) — b
 - **#113** — Other `cmd | grep -q` sites in `scripts/manual-test-{ubuntu-vps,macos}.sh` (`--help`, `explain`, `uv tool list`) share the SIGPIPE+pipefail false-failure risk that bit 5f. Capture-then-grep is the preemptive fix; defer until one of them actually flakes.
 
 ### Resolved (reverse chronological)
+
+#### 2026-05-12
+
+- **#65** (2026-05-12, PR #NNN) — Windows Explorer right-click integration shipped. `dbxignore install` now writes two HKCU shell verbs ("Ignore from Dropbox" / "Restore to Dropbox") scoped to discovered Dropbox roots via an `AppliesTo` query; `dbxignore uninstall` removes them. `--no-shell-integration` opts out on either side; `--purge` overrides the preserve flag and escalates registry failures into the exit-2 path. Implementation: new `install/windows_shell.py` (lazy `winreg` import), new `_common.detect_cli_invocation()` helper, two new `install/__init__.py` dispatcher helpers with `Literal` outcome types, CLI plumbing in `install`/`uninstall`. Tests: 11 Windows-only registry-mechanics tests in `test_install_windows_shell.py` (module-level double guard) + 5 dispatcher + 7 CLI plumbing tests in `test_install.py` (cross-platform via `sys.modules` fake-injection so the dispatcher's Windows arm runs on Linux/macOS CI legs). Manual-test extensions: Phase 5 case `5g` (read-only registry assertions, doesn't mutate Phase 5 end-state); Phase 6 cases `6c`/`6d`/`6e` (registry-gone after plain uninstall, preserve-on-flag, purge-overrides-flag).
 
 #### 2026-05-12 (v0.5.1)
 

@@ -7,6 +7,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Windows Explorer right-click integration. `dbxignore install` now registers
+  two HKCU shell verbs — "Ignore from Dropbox" and "Restore to Dropbox" —
+  scoped to discovered Dropbox roots via an `AppliesTo` query filter. Pass
+  `--no-shell-integration` to opt out of the registry write; pass it to
+  `uninstall` to preserve the verbs across a daemon reinstall; `uninstall
+  --purge` always removes them. The asymmetric command bindings reflect the
+  data-loss asymmetry between the two directions: "Ignore" runs without
+  `--yes` (confirmation in the spawned console), "Restore" runs with `--yes`
+  (one-click safe). On Linux and macOS the flag is silently accepted as a
+  no-op so portable scripts work unchanged. (#65)
+
 ## [0.5.1] — 2026-05-12
 
 Patch release. Pins LF line endings on `dbxignore generate` and `dbxignore init` writes on Windows (two `cli.py` write sites that pre-dated v0.5.0's `_atomic_write_rule_file` LF pin and were never folded into the same convention); plus a README symmetry fix so the install-verification step works on every platform.

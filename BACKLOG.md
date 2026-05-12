@@ -2380,13 +2380,81 @@ Surfaced 2026-05-11 during the PR #204 review cycle (the third site needing the 
 
 Touches: `src/dbxignore/cli.py`, `src/dbxignore/state.py`, `src/dbxignore/reconcile.py` (one helper added, ~3-7 call sites updated depending on which extraction shape is picked).
 
+## 110. `cli.generate` doesn't pin LF line endings on Windows
+
+`cli.generate` writes the translated `.dropboxignore` via `target.write_text(text, encoding="utf-8")` at `cli.py:1836` without specifying `newline=""`. Python's default text-mode write translates `\n` → `\r\n` on Windows, so generate outputs CRLF on Windows and LF elsewhere for byte-identical inputs. The documented byte-for-byte invariant of `generate` is therefore broken on Windows: any source `.gitignore` with non-CRLF endings (a file created with a POSIX tool, a git checkout with `core.autocrlf=input`, or content added by a Linux dev branch) produces a `.dropboxignore` that differs byte-for-byte from the source.
+
+This inconsistency was introduced in PR #207 / v0.5.0: `_atomic_write_rule_file` (used by `ignore`/`unignore`) was pinned to LF via `newline=""`, but the parallel `generate` write site was missed. On the same Windows host, `dbxignore ignore` writes LF and `dbxignore generate` writes CRLF — visible in `git diff` if both files end up in the same repo.
+
+Surfaced 2026-05-12 by `scripts/manual-test-windows.ps1` Phase 4.5 cases 4h and 4i (both assert byte-for-byte hash equality between source and generated file). Both failed on the v0.5.0 release validation pass on a real Windows host.
+
+**Fix candidates:**
+
+- **Pin `newline=""` on `cli.generate`'s `write_text`** (preferred minimal fix). One-line change at `cli.py:1836`. Aligns with PR #207's direction that dbxignore-written rule files are LF-canonical regardless of platform.
+- **Route `cli.generate` through `_atomic_write_rule_file`.** Adds atomic-replace semantics for free (current shape writes directly, no temp). Larger change but consolidates write-path discipline.
+- **Audit other CLI write sites** for the same inconsistency. `cli.init`'s template write at the very least; possibly others.
+
+**Urgency:** medium. The byte-for-byte invariant is a documented contract of `generate`; users committing a `.dropboxignore` to a git repo with Windows + non-Windows contributors will see line-ending diffs every time `generate` re-runs.
+
+Touches: `src/dbxignore/cli.py` (generate write_text + likely init); `tests/test_cli_generate.py`; `tests/test_cli_init.py` (add byte-equality cross-platform test if not present); `scripts/manual-test-windows.ps1` (source-writing in cases 4h/4i may need parallel updates once the LF pin lands).
+
+## 111. Detector regression on `build/*` + `!build/keep/` on Windows (manual-test case 4m)
+
+Manual-test case 4m on Windows (Phase 4.5 coverage landed in PR #209) failed three assertions on a real Windows host running v0.5.0:
+
+- `build/foo.tmp` expected marked, actual missing
+- `build/` expected unmarked, actual marked
+- `status` expected 0 conflicts, actual >=1
+
+The CHANGELOG bullet under `[0.5.0]` explicitly states the conflict detector now distinguishes effective negations under children-only rules — `build/*` + `!build/keep/` should produce zero conflicts and the negation should be effective. The fix shipped (PR #185-era). But on Windows it doesn't fire as expected.
+
+Possible root causes (need reproduction to narrow):
+
+- **Mixed line endings in the `.dropboxignore`** created by the test. PowerShell `Set-Content -Value "build/*` `n!build/keep/"` produces `build/*<LF>!build/keep/<CRLF>` on Windows. Python's `splitlines()` handles this uniformly, but the detector may have a code path that sees raw bytes or stops at the first non-LF character.
+- **Pathspec parsing on Windows with backslash-vs-forward-slash semantics.** `build/*` is a forward-slash pattern; if pathspec normalizes paths differently when the input file uses CRLF, the rule could match unexpectedly.
+- **Genuine detector bug** that the existing Linux/macOS unit tests don't cover because they don't exercise rule files written via `Set-Content`.
+
+The observed behavior pattern (`build/` marked instead of `build/foo.tmp`; conflicts reported) is consistent with the detector dropping `!build/keep/` AND then the apply walk treating the rule set differently — but the exact mechanism needs a `dbxignore explain` trace per path on Windows.
+
+Surfaced 2026-05-12 by `scripts/manual-test-windows.ps1` Phase 4.5 case 4m on the v0.5.0 release validation pass.
+
+**Fix candidates:**
+
+- **Reproduce locally on Windows** to determine root cause. Likely a 1-hour investigation: `dbxignore explain` per path + manual byte inspection of the rule file's contents.
+- **If line-ending-related**: depends on outcome — could be a detector fix, a parser fix, or a test-side normalization.
+- **If pathspec-related**: file upstream pathspec issue + add a project-side workaround.
+
+**Urgency:** medium. The CHANGELOG promises this works in v0.5.0 — if it doesn't on Windows, that's a release-bug. Worth investigating before any v0.5.1.
+
+Touches: `src/dbxignore/rules_conflicts.py`; `tests/test_rules_conflicts.py`; possibly `src/dbxignore/rules.py`.
+
+## 112. `uninstall` (no `--purge`) appears to clear the marker on `watch-me.tmp` during Phase 5 → 6 transition
+
+Manual-test Phase 6 assertion: after `dbxignore install` (Phase 5 daemon setup) marked `$T\watch-me.tmp`, Phase 6's `dbxignore uninstall` (WITHOUT `--purge`) is expected to leave the marker intact — the documented contract is that plain `uninstall` removes the daemon service but does NOT clear markers. The assertion `uninstall — markers retained on watch-me.tmp` failed with `ADS=missing` on the v0.5.0 release validation pass on Windows.
+
+Possible root causes (need investigation):
+
+- **Daemon's hourly sweep ran during the Phase 5 → 6 transition** and cleared the marker because some rule no longer matched. If a test step removed or modified `.dropboxignore` between mark-time and uninstall-time, the daemon could legitimately clear the marker on the next sweep tick.
+- **Daemon's clean-shutdown path runs a final reconcile** that clears stale markers. If true, that's a behavior the script's expectations don't match — either the test is wrong, or shutdown's reconcile-on-exit is a regression.
+- **Test setup writes `.dropboxignore` rules that don't actually match `watch-me.tmp`** in the Phase 5 state, so the watchdog never marks it in the first place. Then the assertion is checking a marker that was never set. Possible if Phase 5's tree state changed between earlier script versions and the current one.
+
+Surfaced 2026-05-12 by `scripts/manual-test-windows.ps1` Phase 6 on the v0.5.0 release validation pass.
+
+**Fix candidates:**
+
+- **Reproduce locally** and inspect daemon.log + Phase 5/6 setup to determine which scenario applies. Likely a 30-minute investigation.
+
+**Urgency:** low-medium. Either a real regression (uninstall shouldn't touch markers — contract violation), a test-setup bug (assertion checks a marker the test never set), or a sweep-timing flake. Each has a different fix shape.
+
+Touches: TBD — depends on root cause. Likely either `src/dbxignore/install/windows_task.py` (uninstall path) or `scripts/manual-test-windows.ps1` Phase 5 setup.
+
 ---
 
 ## Status
 
 ### Open
 
-Twenty-two items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Items #97, #98, and #105 are user-facing correctness/error-handling fixes and should be prioritized ahead of purely polish work.
+Twenty-five items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Items #110, #111, and #112 are v0.5.0 release-validation findings (surfaced by the Windows manual-test run on 2026-05-12) and should be prioritized ahead of purely polish work.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2410,6 +2478,9 @@ Twenty-two items. Most are passive (no concrete trigger requires action) — bun
 - **#107** — Promote `symlink_capable` runtime-probe fixture from `test_cli_symlink_path_args.py` to `conftest.py`. The ~10 existing tests using `@pytest.mark.skipif(sys.platform == "win32", ...)` could then drop the static decorator and exercise on Windows hosts that support symlink creation (CI's Windows runner has Dev Mode).
 - **#108** — `dropbox_root` fixture from `test_cli_symlink_path_args.py` packages the ~27-site inline `monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])` pattern across `test_cli_apply.py` / `test_cli_clear.py` / `test_cli_status_list_explain.py`. Filed for design-tension record (precedent: #40, #51); current dual shape is defensible.
 - **#109** — `FileNotFoundError`-before-`OSError` 'vanished path' idiom now repeats across `reconcile._reconcile_path` (2 sites), `state._read_at` (1 site), and `cli.uninstall --purge` (4 sites after PR #204). Filed for design-tension record (precedent: #40, #51, #108); current per-site shape is defensible because the local response action varies (return None / set flag / continue / pass) and no generic helper fits all seven sites.
+- **#110** — `cli.generate` doesn't pin LF line endings on Windows; the byte-for-byte invariant breaks for any source `.gitignore` with non-CRLF endings. Concrete fix in hand: pin `newline=""` at `cli.py:1836`. Incomplete-LF-pin bug introduced in PR #207 / v0.5.0 — surfaced by manual-test cases 4h/4i.
+- **#111** — Detector reports a conflict on `build/*` + `!build/keep/` on Windows (manual-test case 4m); the CHANGELOG claims this case produces zero conflicts and an effective negation. Either a CRLF-parsing path in the detector, a pathspec-on-Windows behavior, or a genuine regression. Needs local Windows reproduction to narrow.
+- **#112** — Manual-test Phase 6 assertion `uninstall — markers retained on watch-me.tmp` fails on Windows; either a sweep-timing flake, a shutdown-reconcile regression, or a Phase 5 setup bug. Needs daemon-log inspection.
 
 ### Resolved (reverse chronological)
 

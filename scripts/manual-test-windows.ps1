@@ -130,7 +130,31 @@ function Reset-TestDir {
         [Parameter(Mandatory)] [string]$Path,
         [AllowEmptyString()] [string]$DropboxignoreContent
     )
-    if (Test-Path $Path) { Remove-Item -Path $Path -Recurse -Force }
+    if (Test-Path $Path) {
+        # Dropbox's file watcher routinely holds short-lived handles on
+        # newly-created files in the sync tree, and Windows blocks
+        # `Remove-Item` on any open handle. The bash scripts don't hit this
+        # because POSIX unlink-while-open releases the directory entry
+        # immediately. Retry on the two typical Windows lock exceptions
+        # (`IOException` for "file in use"; `UnauthorizedAccessException`
+        # when Windows reports the same condition as a permission failure).
+        # Budget: 20 × 500 ms = 10 s — comfortably above Dropbox's typical
+        # scan window (sub-second to ~2 s).
+        $attempts = 0
+        while ($true) {
+            try {
+                Remove-Item -Path $Path -Recurse -Force -ErrorAction Stop
+                break
+            } catch [System.IO.IOException], [System.UnauthorizedAccessException] {
+                $attempts++
+                if ($attempts -ge 20) {
+                    Write-Note "Reset-TestDir: gave up after 10s waiting for handles on $Path to release"
+                    throw
+                }
+                Start-Sleep -Milliseconds 500
+            }
+        }
+    }
     New-Item -ItemType Directory -Path $Path -Force | Out-Null
     if ($PSBoundParameters.ContainsKey('DropboxignoreContent')) {
         Set-Content -Path (Join-Path $Path ".dropboxignore") -Value $DropboxignoreContent -Encoding utf8

@@ -1,12 +1,14 @@
 # Sourced by scripts/manual-test-{ubuntu-vps,macos}.sh.
 #
 # Defines `phase_extended_cli()`, the Phase 4.5 block exercising the CLI
-# surface added across PRs #100, #102, #103, #107, #108. Extracted because
-# the body is byte-near-identical between the two scripts (~120 LOC each)
-# and was being maintained twice; backlog item #75 is the trigger.
+# surface added across PRs #100, #102, #103, #107, #108, #195, #203, #205.
+# Extracted because the body is byte-near-identical between the two scripts
+# (~120 LOC each) and was being maintained twice; backlog item #75 is the
+# trigger.
 #
 # Depends on the parent script's shared environment:
 #   - $DROPBOX_DIR, $TEST_SUBDIR — test-tree location
+#   - $DBXIGNORE_STATE_DIR — per-user state dir (state.json, daemon.log)
 #   - phase, note, pass, fail — output helpers
 #   - assert_grep, assert_xattr_set, assert_xattr_unset — assertion helpers
 #
@@ -220,4 +222,80 @@ phase_extended_cli() {
         fi
     fi
     assert_grep /tmp/dbx-4r-list.err 'does not exist' "4r — list stderr says 'does not exist'"
+
+    # 4s — clear fail-closed on unreadable state.json (PR #203, item #97 Codex P2 followup)
+    # state.json exists but `state.read()` returns None (chmod 000 → PermissionError
+    # → _read_at logs WARNING + returns None). cli.clear refuses to proceed because
+    # daemon liveness is unknown; --force overrides.
+    note "4s — clear fail-closed on unreadable state.json"
+    mkdir -p "$DBXIGNORE_STATE_DIR"
+    local state_json="$DBXIGNORE_STATE_DIR/state.json"
+    local state_json_existed=0
+    if [ -f "$state_json" ]; then
+        state_json_existed=1
+        cp -p "$state_json" /tmp/dbx-4s-state-backup.json
+    fi
+    printf '{}\n' > "$state_json"
+    chmod 000 "$state_json"
+
+    # Setup a marker for clear to target.
+    rm -rf "$T"; mkdir -p "$T"
+    printf '*.tmp\n' > "$T/.dropboxignore"
+    : > "$T/foo.tmp"
+    dbxignore apply "$T" --yes >/dev/null 2>&1
+
+    if dbxignore clear "$T" --yes >/tmp/dbx-4s-clear.out 2>/tmp/dbx-4s-clear.err; then
+        fail "4s — clear should refuse on unreadable state.json"
+    else
+        local exit_code=$?
+        if [ $exit_code -eq 2 ]; then
+            pass "4s — clear exits 2 on unreadable state.json"
+        else
+            fail "4s — clear exited $exit_code instead of 2"
+        fi
+    fi
+    assert_grep /tmp/dbx-4s-clear.err 'unreadable' "4s — clear stderr names 'unreadable' state file"
+    # Marker still set — fail-closed means no destructive action ran.
+    assert_xattr_set "$T/foo.tmp" "4s — clear did not clear marker (refused)"
+
+    # --force overrides the unreadable-state guard.
+    if dbxignore clear "$T" --yes --force >/tmp/dbx-4s-force.out 2>&1; then
+        pass "4s — clear --force overrides the unreadable-state guard"
+    else
+        fail "4s — clear --force should succeed"
+    fi
+    assert_xattr_unset "$T/foo.tmp" "4s — clear --force cleared the marker"
+
+    # Cleanup: restore state.json.
+    chmod 644 "$state_json" 2>/dev/null || true
+    if [ "$state_json_existed" -eq 1 ]; then
+        mv /tmp/dbx-4s-state-backup.json "$state_json"
+    else
+        rm -f "$state_json"
+    fi
+
+    # 4t — path-taking verbs refuse `..` after a symlinked component (PR #205, item #105)
+    # Lexical normalization of `link/..` differs from filesystem-true resolution;
+    # `_normalize_under_root` rejects the path up-front. Test one verb (explain)
+    # — the guard is in the shared validator and unit tests cover all 5 verbs.
+    note "4t — explain refuses '..-after-symlink' path"
+    rm -rf "$T"; mkdir -p "$T"
+    local link_target="$T/target-dir"
+    mkdir -p "$link_target"
+    : > "$link_target/file.txt"
+    ln -s "$link_target" "$T/link"
+
+    local link_dotdot_arg="$T/link/../file.txt"
+    if dbxignore explain "$link_dotdot_arg" >/tmp/dbx-4t-explain.out 2>/tmp/dbx-4t-explain.err; then
+        fail "4t — explain should refuse '..-after-symlink' path"
+    else
+        local exit_code=$?
+        if [ $exit_code -eq 2 ]; then
+            pass "4t — explain exits 2 on '..-after-symlink' path"
+        else
+            fail "4t — explain exited $exit_code instead of 2"
+        fi
+    fi
+    assert_grep /tmp/dbx-4t-explain.err 'symlinked component' \
+        "4t — explain stderr names 'symlinked component'"
 }

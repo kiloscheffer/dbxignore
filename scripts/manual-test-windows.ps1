@@ -604,6 +604,103 @@ function Test-ExtendedCli {
         Write-Note "list stderr: $listErr"
         Write-Fail "4r - list stderr missing 'does not exist'"
     }
+
+    # 4s — clear fail-closed on unreadable state.json (PR #203, item #97 Codex P2 followup)
+    # state.json exists but `state.read()` returns None (deny ACL → PermissionError
+    # → _read_at returns None). cli.clear refuses to proceed because daemon
+    # liveness is unknown; --force overrides.
+    Write-Note "4s - clear fail-closed on unreadable state.json"
+    $stateDir4s = Join-Path $env:LOCALAPPDATA "dbxignore"
+    New-Item -ItemType Directory -Force -Path $stateDir4s | Out-Null
+    $stateJson4s = Join-Path $stateDir4s "state.json"
+    $stateJson4sExisted = Test-Path $stateJson4s
+    $stateJson4sBackup = Join-Path $env:TEMP "dbx-4s-state-backup.json"
+    if ($stateJson4sExisted) {
+        Copy-Item $stateJson4s $stateJson4sBackup -Force
+    }
+    Set-Content -Path $stateJson4s -Value "{}" -Encoding utf8 -NoNewline
+    # Deny read for the current user via NTFS ACL. icacls preserves the
+    # owner's ability to chmod-back via "take ownership," but Python's
+    # `Path.read_bytes()` evaluates the deny ACE and raises PermissionError.
+    icacls $stateJson4s /deny "${env:USERNAME}:R" *> $null
+
+    # Setup a marker for clear to target.
+    Remove-Item -Recurse -Force $T -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $T | Out-Null
+    Set-Content -Path "$T\.dropboxignore" -Value "*.tmp" -Encoding utf8
+    New-Item -ItemType File -Force -Path "$T\foo.tmp" | Out-Null
+    & dbxignore apply $T --yes *> $null
+
+    $clear4sErrFile = Join-Path $env:TEMP "dbx-4s-clear.err"
+    & dbxignore clear $T --yes *> $clear4sErrFile
+    $clear4sExitCode = $LASTEXITCODE
+    if ($clear4sExitCode -eq 2) {
+        Write-Pass "4s - clear exits 2 on unreadable state.json"
+    } else {
+        Write-Fail "4s - clear exited $clear4sExitCode instead of 2"
+    }
+    $clear4sErr = if (Test-Path $clear4sErrFile) { Get-Content $clear4sErrFile -Raw } else { "" }
+    if ($clear4sErr -match 'unreadable') {
+        Write-Pass "4s - clear stderr names 'unreadable' state file"
+    } else {
+        Write-Note "clear stderr: $clear4sErr"
+        Write-Fail "4s - clear stderr missing 'unreadable'"
+    }
+    Assert-AdsSet -Path "$T\foo.tmp" -Name "4s - clear did not clear marker (refused)"
+
+    # --force overrides the unreadable-state guard.
+    & dbxignore clear $T --yes --force *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Pass "4s - clear --force overrides the unreadable-state guard"
+    } else {
+        Write-Fail "4s - clear --force should succeed"
+    }
+    Assert-AdsUnset -Path "$T\foo.tmp" -Name "4s - clear --force cleared the marker"
+
+    # Cleanup: reset ACL and restore state.json.
+    icacls $stateJson4s /reset *> $null
+    if ($stateJson4sExisted) {
+        Move-Item $stateJson4sBackup $stateJson4s -Force
+    } else {
+        Remove-Item $stateJson4s -Force
+    }
+
+    # 4t — path-taking verbs refuse `..` after a symlinked component (PR #205, item #105)
+    # Lexical normalization of `link\..` differs from filesystem-true resolution;
+    # `_normalize_under_root` rejects the path up-front. One verb (explain) suffices —
+    # the guard lives in the shared validator and unit tests cover all 5 verbs.
+    Write-Note "4t - explain refuses '..-after-symlink' path"
+    Remove-Item -Recurse -Force $T -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $T | Out-Null
+    $linkTarget4t = Join-Path $T "target-dir"
+    New-Item -ItemType Directory -Force -Path $linkTarget4t | Out-Null
+    New-Item -ItemType File -Force -Path (Join-Path $linkTarget4t "file.txt") | Out-Null
+    $link4t = Join-Path $T "link"
+    try {
+        New-Item -ItemType SymbolicLink -Path $link4t -Target $linkTarget4t -ErrorAction Stop | Out-Null
+        $link4tCreated = $true
+    } catch {
+        $link4tCreated = $false
+        Write-Note "skipping 4t (requires Developer Mode or admin to create symlinks)"
+    }
+    if ($link4tCreated) {
+        $linkDotdotArg = Join-Path $link4t "..\file.txt"
+        $explain4tErrFile = Join-Path $env:TEMP "dbx-4t-explain.err"
+        & dbxignore explain $linkDotdotArg *> $explain4tErrFile
+        $explain4tExitCode = $LASTEXITCODE
+        if ($explain4tExitCode -eq 2) {
+            Write-Pass "4t - explain exits 2 on '..-after-symlink' path"
+        } else {
+            Write-Fail "4t - explain exited $explain4tExitCode instead of 2"
+        }
+        $explain4tErr = if (Test-Path $explain4tErrFile) { Get-Content $explain4tErrFile -Raw } else { "" }
+        if ($explain4tErr -match 'symlinked component') {
+            Write-Pass "4t - explain stderr names 'symlinked component'"
+        } else {
+            Write-Note "explain stderr: $explain4tErr"
+            Write-Fail "4t - explain stderr missing 'symlinked component'"
+        }
+    }
 }
 
 # ---------------------------------------------------------------------------

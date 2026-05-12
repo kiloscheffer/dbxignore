@@ -619,9 +619,9 @@ function Test-ExtendedCli {
         Copy-Item $stateJson4s $stateJson4sBackup -Force
     }
     Set-Content -Path $stateJson4s -Value "{}" -Encoding utf8 -NoNewline
-    # Deny read for the current user via NTFS ACL. icacls preserves the
-    # owner's ability to chmod-back via "take ownership," but Python's
-    # `Path.read_bytes()` evaluates the deny ACE and raises PermissionError.
+    # Deny read for the current user via NTFS ACL. Python's `Path.read_bytes()`
+    # evaluates the deny ACE and raises PermissionError, simulating the
+    # locked / permission-denied scenario item #97 documents.
     icacls $stateJson4s /deny "${env:USERNAME}:R" *> $null
 
     # Setup a marker for clear to target.
@@ -657,8 +657,9 @@ function Test-ExtendedCli {
     }
     Assert-AdsUnset -Path "$T\foo.tmp" -Name "4s - clear --force cleared the marker"
 
-    # Cleanup: reset ACL and restore state.json.
-    icacls $stateJson4s /reset *> $null
+    # Cleanup: remove just the deny ACE we added (`/remove:d` is targeted —
+    # `/reset` would clobber any inherited/explicit ACEs the file had before).
+    icacls $stateJson4s /remove:d "${env:USERNAME}" *> $null
     if ($stateJson4sExisted) {
         Move-Item $stateJson4sBackup $stateJson4s -Force
     } else {

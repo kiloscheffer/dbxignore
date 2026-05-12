@@ -20,13 +20,13 @@ def test_unit_file_content_has_exec_start_and_wanted_by(
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(
         "dbxignore.install.linux_systemd.detect_invocation",
-        lambda: (Path("/usr/local/bin/dbxignored"), ""),
+        lambda: (Path("/usr/local/bin/dbxignore"), "daemon"),
     )
 
     from dbxignore.install import linux_systemd
 
-    content = linux_systemd.build_unit_content(Path("/usr/local/bin/dbxignored"), "")
-    assert "ExecStart=/usr/local/bin/dbxignored" in content
+    content = linux_systemd.build_unit_content(Path("/usr/local/bin/dbxignore"), "daemon")
+    assert "ExecStart=/usr/local/bin/dbxignore daemon" in content
     assert "Restart=on-failure" in content
     assert "WantedBy=default.target" in content
 
@@ -238,7 +238,7 @@ def test_install_propagates_dbxignore_root_env(
     monkeypatch.delenv("XDG_STATE_HOME", raising=False)
     monkeypatch.setattr(
         "dbxignore.install.linux_systemd.detect_invocation",
-        lambda: (Path("/usr/local/bin/dbxignored"), ""),
+        lambda: (Path("/usr/local/bin/dbxignore"), "daemon"),
     )
     monkeypatch.setattr(
         subprocess,
@@ -270,7 +270,7 @@ def test_install_propagates_xdg_state_home_env(
     monkeypatch.delenv("DBXIGNORE_ROOT", raising=False)
     monkeypatch.setattr(
         "dbxignore.install.linux_systemd.detect_invocation",
-        lambda: (Path("/usr/local/bin/dbxignored"), ""),
+        lambda: (Path("/usr/local/bin/dbxignore"), "daemon"),
     )
     monkeypatch.setattr(
         subprocess,
@@ -298,7 +298,7 @@ def test_install_omits_environment_when_dbxignore_root_unset(
     monkeypatch.delenv("XDG_STATE_HOME", raising=False)
     monkeypatch.setattr(
         "dbxignore.install.linux_systemd.detect_invocation",
-        lambda: (Path("/usr/local/bin/dbxignored"), ""),
+        lambda: (Path("/usr/local/bin/dbxignore"), "daemon"),
     )
     monkeypatch.setattr(
         subprocess,
@@ -327,7 +327,7 @@ def test_install_ignores_empty_dbxignore_root(
     monkeypatch.delenv("XDG_STATE_HOME", raising=False)
     monkeypatch.setattr(
         "dbxignore.install.linux_systemd.detect_invocation",
-        lambda: (Path("/usr/local/bin/dbxignored"), ""),
+        lambda: (Path("/usr/local/bin/dbxignore"), "daemon"),
     )
     monkeypatch.setattr(
         subprocess,
@@ -351,7 +351,7 @@ def test_install_writes_unit_and_invokes_systemctl(
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(
         "dbxignore.install.linux_systemd.detect_invocation",
-        lambda: (Path("/usr/local/bin/dbxignored"), ""),
+        lambda: (Path("/usr/local/bin/dbxignore"), "daemon"),
     )
 
     calls: list[list[str]] = []
@@ -370,7 +370,7 @@ def test_install_writes_unit_and_invokes_systemctl(
 
     unit_path = tmp_path / ".config" / "systemd" / "user" / "dbxignore.service"
     assert unit_path.exists()
-    assert "ExecStart=/usr/local/bin/dbxignored" in unit_path.read_text()
+    assert "ExecStart=/usr/local/bin/dbxignore daemon" in unit_path.read_text()
 
     assert calls == [
         ["systemctl", "--user", "daemon-reload"],
@@ -437,7 +437,7 @@ def test_install_wraps_calledprocesserror_from_systemctl(
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(
         "dbxignore.install.linux_systemd.detect_invocation",
-        lambda: (Path("/usr/local/bin/dbxignored"), ""),
+        lambda: (Path("/usr/local/bin/dbxignore"), "daemon"),
     )
 
     def fake_run_fails(

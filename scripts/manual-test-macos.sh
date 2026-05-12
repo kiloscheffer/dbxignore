@@ -603,6 +603,7 @@ phase_daemon() {
     # the closed reader and BrokenPipeError makes Python exit 1, pipefail
     # propagates that 1 to the overall pipe exit. Mirrors the `--summary`
     # poll pattern just above.
+    local human_out
     human_out="$(dbxignore status 2>&1 || true)"
     if printf '%s\n' "$human_out" | grep -qE '^daemon: running \(pid=[0-9]+\)$'; then
         pass "5f — human status reports 'daemon: running'"

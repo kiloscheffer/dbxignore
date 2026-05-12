@@ -123,11 +123,17 @@ def is_daemon_alive(pid: int | None, create_time: float | None = None) -> bool:
     recycled by another python".
 
     Lazy-imports ``psutil``; falls back to ``os.kill(pid, 0)`` for the
-    bare-existence check when ``psutil`` isn't installed (in which case
-    PID-reuse can't be detected and ``create_time`` is silently ignored —
-    a known limitation, not a behavior bug). Used by ``cli.status`` to
-    render the "running / not running / state may be stale" UI. The
-    daemon's singleton gate has moved to a process-lifetime OS lock (see
+    bare-existence check when ``psutil`` isn't installed. The fallback
+    treats ``ProcessLookupError`` as the expected "no such process" path
+    (silent — common post-daemon-death) and ``(OSError, SystemError)`` as
+    indeterminate (logs WARNING, returns False). The ``SystemError`` catch
+    covers CPython's exception-state-wrapping case where ``os.kill`` fires
+    while another exception (e.g. a partially-initialized psutil import)
+    is still being handled (item #118). With psutil unavailable, PID-reuse
+    can't be detected and ``create_time`` is silently ignored — a known
+    limitation, not a behavior bug. Used by ``cli.status`` to render the
+    "running / not running / state may be stale" UI. The daemon's
+    singleton gate has moved to a process-lifetime OS lock (see
     ``daemon._acquire_singleton_lock``), so this helper is no longer on
     that path.
     """

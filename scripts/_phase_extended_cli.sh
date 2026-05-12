@@ -1,10 +1,14 @@
 # Sourced by scripts/manual-test-{ubuntu-vps,macos}.sh.
 #
-# Defines `phase_extended_cli()`, the Phase 4.5 block exercising the CLI
-# surface added across PRs #100, #102, #103, #107, #108, #195, #203, #205.
-# Extracted because the body is byte-near-identical between the two scripts
-# (~120 LOC each) and was being maintained twice; backlog item #75 is the
-# trigger.
+# Defines shared helpers for the two bash manual-test scripts:
+# - `phase_extended_cli()`: the Phase 4.5 block exercising the CLI surface
+#   added across PRs #100, #102, #103, #107, #108, #195, #203, #205.
+#   Extracted because the body is byte-near-identical between the two scripts
+#   (~120 LOC each) and was being maintained twice; backlog item #75 is the
+#   trigger.
+# - `clean_uv_cache_for_dbxignore_if_local()`: Phase 2 cache-clean (item #116)
+#   called from each script's `phase_dbxignore_install()` before `uv tool
+#   install`. Shared because the body was an 11-line copy across both scripts.
 #
 # Depends on the parent script's shared environment:
 #   - $DROPBOX_DIR, $TEST_SUBDIR — test-tree location
@@ -33,6 +37,20 @@ _phase_4s_recover_state_json() {
     fi
     unset _4S_STATE_JSON _4S_STATE_JSON_EXISTED
 }
+
+# BACKLOG #116: invalidate uv's path-keyed sdist cache for local-source
+# installs. Without this, `uv tool install .` from a directory that's
+# been built before reuses the cached wheel at `sdists-v9/path/<dir-hash>/`
+# — the cache key is the source dir path, not the git SHA, so commits
+# don't invalidate it. Excludes PyPI names and git URLs (which aren't
+# existing directories).
+clean_uv_cache_for_dbxignore_if_local() {
+    if [[ -d "$DBXIGNORE_INSTALL_SPEC" ]]; then
+        note "local-source DBXIGNORE_INSTALL_SPEC — cleaning uv cache for dbxignore (item #116)"
+        uv cache clean dbxignore >/dev/null 2>&1 || true
+    fi
+}
+
 
 phase_extended_cli() {
     phase "Phase 4.5 — extended CLI surface (init, generate, apply variants, clear)"

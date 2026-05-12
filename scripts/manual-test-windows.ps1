@@ -795,6 +795,39 @@ function _Dump-DaemonDiagnostics {
     }
 }
 
+# Phase 5g verb-visibility probe helper. Returns a PSCustomObject with
+# `Present` (bool — "Ignore from Dropbox" appears in Verbs()) and
+# `VerbList` (the stripped verb-name array, for diagnostic logging on
+# mismatch). Returns $null AND emits Write-Fail when Shell.Application
+# can't see the folder or probe file (a COM-side failure, not a
+# verb-state observation). Factored out of 5g.5 / 5g.6 probe duplication.
+function Get-Verb5gState {
+    param(
+        [Parameter(Mandatory)][string]$FolderPath,
+        [Parameter(Mandatory)][string]$ProbeFileName,
+        [Parameter(Mandatory)][string]$ContextLabel
+    )
+    $shell = New-Object -ComObject Shell.Application
+    $folder = $shell.NameSpace($FolderPath)
+    if ($null -eq $folder) {
+        Write-Fail "5g - Shell.Application.NameSpace returned null for $ContextLabel"
+        return $null
+    }
+    $item = $folder.ParseName($ProbeFileName)
+    if ($null -eq $item) {
+        Write-Fail "5g - Shell.Application.ParseName returned null for $ContextLabel"
+        return $null
+    }
+    # Verbs().Name surfaces the MUIVerb display string; Shell may inject
+    # an `&` accelerator marker, so strip before comparing.
+    $verbNames = @($item.Verbs() | ForEach-Object { ($_.Name -replace '&', '') })
+    [PSCustomObject]@{
+        Present  = $verbNames -contains "Ignore from Dropbox"
+        VerbList = $verbNames
+    }
+}
+
+
 function Test-Daemon {
     Write-Phase "Phase 5 - daemon (Task Scheduler + watchdog)"
 
@@ -1148,24 +1181,16 @@ function Test-Daemon {
     $probeFile = Join-Path $T "_5g_probe.tmp"
     Set-Content -Path $probeFile -Value "probe" -Encoding ascii -NoNewline
     try {
-        $shell = New-Object -ComObject Shell.Application
-        $folder = $shell.NameSpace($T)
-        if ($null -eq $folder) {
-            Write-Fail "5g - Shell.Application.NameSpace returned null for $T"
-        } else {
-            $item = $folder.ParseName((Split-Path -Leaf $probeFile))
-            if ($null -eq $item) {
-                Write-Fail "5g - Shell.Application.ParseName returned null for probe file"
+        $state = Get-Verb5gState `
+            -FolderPath $T `
+            -ProbeFileName (Split-Path -Leaf $probeFile) `
+            -ContextLabel "probe file at $T"
+        if ($null -ne $state) {
+            if ($state.Present) {
+                Write-Pass "5g - 'Ignore from Dropbox' visible on Dropbox-root file"
             } else {
-                # Verbs().Name surfaces the MUIVerb display string; Shell may
-                # inject an `&` accelerator marker, so strip before comparing.
-                $verbNames = @($item.Verbs() | ForEach-Object { ($_.Name -replace '&', '') })
-                if ($verbNames -contains "Ignore from Dropbox") {
-                    Write-Pass "5g - 'Ignore from Dropbox' visible on Dropbox-root file"
-                } else {
-                    Write-Note "    verbs surfaced: $($verbNames -join '; ')"
-                    Write-Fail "5g - 'Ignore from Dropbox' NOT visible inside Dropbox (AppliesTo may not evaluate)"
-                }
+                Write-Note "    verbs surfaced: $($state.VerbList -join '; ')"
+                Write-Fail "5g - 'Ignore from Dropbox' NOT visible inside Dropbox (AppliesTo may not evaluate)"
             }
         }
     } finally {
@@ -1191,22 +1216,16 @@ function Test-Daemon {
         New-Item -ItemType Directory -Path $siblingDir | Out-Null
         Set-Content -Path $siblingProbe -Value "probe" -Encoding ascii -NoNewline
         try {
-            $shell = New-Object -ComObject Shell.Application
-            $folder = $shell.NameSpace($siblingDir)
-            if ($null -eq $folder) {
-                Write-Fail "5g - Shell.Application.NameSpace returned null for sibling $siblingDir"
-            } else {
-                $item = $folder.ParseName((Split-Path -Leaf $siblingProbe))
-                if ($null -eq $item) {
-                    Write-Fail "5g - Shell.Application.ParseName returned null for sibling probe file"
+            $state = Get-Verb5gState `
+                -FolderPath $siblingDir `
+                -ProbeFileName (Split-Path -Leaf $siblingProbe) `
+                -ContextLabel "sibling probe file at $siblingDir"
+            if ($null -ne $state) {
+                if (-not $state.Present) {
+                    Write-Pass "5g - 'Ignore from Dropbox' correctly absent on sibling folder"
                 } else {
-                    $verbNames = @($item.Verbs() | ForEach-Object { ($_.Name -replace '&', '') })
-                    if ($verbNames -notcontains "Ignore from Dropbox") {
-                        Write-Pass "5g - 'Ignore from Dropbox' correctly absent on sibling folder"
-                    } else {
-                        Write-Note "    verbs surfaced on sibling: $($verbNames -join '; ')"
-                        Write-Fail "5g - 'Ignore from Dropbox' visible outside Dropbox (AppliesTo too broad)"
-                    }
+                    Write-Note "    verbs surfaced on sibling: $($state.VerbList -join '; ')"
+                    Write-Fail "5g - 'Ignore from Dropbox' visible outside Dropbox (AppliesTo too broad)"
                 }
             }
         } finally {

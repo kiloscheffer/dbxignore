@@ -1968,20 +1968,3 @@ def generate(path: Path, output: Path | None, stdout: bool, force: bool) -> None
 
     rule_count = sum(1 for line in lines if line.strip() and not line.strip().startswith("#"))
     click.echo(f"wrote {rule_count} rules to {target}")
-
-
-@click.command()
-@click.option(
-    "--verbose",
-    "-v",
-    count=True,
-    help="Increase verbosity. Default WARNING; `-v` INFO; `-vv` DEBUG.",
-)
-@click.version_option(package_name="dbxignore")
-def daemon_main(verbose: int) -> None:
-    """Run the dbxignore watcher + hourly sweep daemon (foreground)."""
-    logging.basicConfig(
-        level=_verbosity_to_level(verbose),
-        format="%(levelname)s %(name)s: %(message)s",
-    )
-    _run_daemon()

@@ -1,8 +1,10 @@
 """Shared helpers for platform-specific install backends.
 
-Currently exposes detect_invocation() — the logic for finding the
-right dbxignore invocation in the running install (PyInstaller frozen
-binary → shutil.which("dbxignore") → `python -m dbxignore daemon` fallback).
+Exposes detect_invocation() and detect_cli_invocation() — unified binary
+lookup logic for the daemon and CLI entry points after PR #30. Frozen
+(PyInstaller) paths use the single dbxignore binary directly. Non-frozen
+paths prefer shutil.which("dbxignore") on Linux/macOS and pythonw.exe on
+Windows (with python.exe fallback), else `python -m dbxignore`.
 Originally inline in linux_systemd.py; extracted here when macos_launchd.py
 needed the same logic.
 """

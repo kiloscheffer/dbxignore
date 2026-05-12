@@ -1014,42 +1014,129 @@ function Test-Daemon {
     $ignoreKey = "$regBase\DbxignoreIgnore"
     $restoreKey = "$regBase\DbxignoreRestore"
 
+    # Dependent registry-property assertions are guarded on Test-Path —
+    # `$ErrorActionPreference = "Stop"` (script line 44) would otherwise
+    # cause `Get-ItemProperty` against a missing key to hard-crash and
+    # abort the rest of Phase 5g (and Phases 6 + 7 cleanup). Surfaced
+    # when running with the default `-InstallSpec dbxignore` against
+    # PyPI 0.5.1, which pre-dates PR #222's shell-integration.
     if ((Test-Path $ignoreKey) -and (Test-Path $restoreKey)) {
         Write-Pass "5g - both verb keys present"
+
+        # MUIVerb labels.
+        $ignoreLabel = (Get-ItemProperty -Path $ignoreKey -Name "MUIVerb").MUIVerb
+        $restoreLabel = (Get-ItemProperty -Path $restoreKey -Name "MUIVerb").MUIVerb
+        if ($ignoreLabel -eq "Ignore from Dropbox" -and $restoreLabel -eq "Restore to Dropbox") {
+            Write-Pass "5g - MUIVerb labels correct"
+        } else {
+            Write-Fail "5g - MUIVerb labels wrong: ignore='$ignoreLabel' restore='$restoreLabel'"
+        }
+
+        # AppliesTo includes the Dropbox root.
+        # AQS uses single literal backslashes — no doubling — so match the path as-is.
+        $appliesTo = (Get-ItemProperty -Path $ignoreKey -Name "AppliesTo").AppliesTo
+        if ($appliesTo -like "*$($script:DropboxDir)*") {
+            Write-Pass "5g - AppliesTo contains Dropbox root"
+        } else {
+            Write-Fail "5g - AppliesTo missing Dropbox root: $appliesTo"
+        }
+
+        # Command strings — asymmetric --yes policy.
+        $ignoreCmd = (Get-ItemProperty -Path "$ignoreKey\command" -Name "(default)").'(default)'
+        $restoreCmd = (Get-ItemProperty -Path "$restoreKey\command" -Name "(default)").'(default)'
+        if ($ignoreCmd -match '\bignore "%1"$' -and $ignoreCmd -notmatch "--yes") {
+            Write-Pass "5g - ignore command lacks --yes (confirms in console)"
+        } else {
+            Write-Fail "5g - ignore command shape unexpected: $ignoreCmd"
+        }
+        if ($restoreCmd -match '\bunignore --yes "%1"$') {
+            Write-Pass "5g - restore command has --yes (one-click safe)"
+        } else {
+            Write-Fail "5g - restore command shape unexpected: $restoreCmd"
+        }
     } else {
-        Write-Fail "5g - verb keys missing after default install"
+        Write-Fail "5g - verb keys missing after default install (skipping registry-property assertions)"
     }
 
-    # MUIVerb labels.
-    $ignoreLabel = (Get-ItemProperty -Path $ignoreKey -Name "MUIVerb").MUIVerb
-    $restoreLabel = (Get-ItemProperty -Path $restoreKey -Name "MUIVerb").MUIVerb
-    if ($ignoreLabel -eq "Ignore from Dropbox" -and $restoreLabel -eq "Restore to Dropbox") {
-        Write-Pass "5g - MUIVerb labels correct"
-    } else {
-        Write-Fail "5g - MUIVerb labels wrong: ignore='$ignoreLabel' restore='$restoreLabel'"
+    # 5g - Explorer-verb fidelity probes (BACKLOG #115)
+    # The registry-string assertions above check what we wrote but not
+    # whether Windows Explorer's AQS evaluator agrees. PR #224 fixed a
+    # backslash-doubling regression that passed every existing 5g check
+    # because the stored AppliesTo parsed fine but matched no real path —
+    # the verbs registered, then were invisible in Explorer. These two
+    # sub-cases drive Shell.Application (the same COM surface Explorer
+    # uses) against real files: one inside the Dropbox root (verb must
+    # surface) and one in a sibling folder whose name starts with the
+    # Dropbox basename (verb must NOT surface — exercises the trailing-`\`
+    # invariant in the `:~<` prefix clause).
+    Write-Note "5g - Shell.Application surfaces 'Ignore from Dropbox' inside Dropbox root"
+    $probeFile = Join-Path $T "_5g_probe.tmp"
+    Set-Content -Path $probeFile -Value "probe" -Encoding ascii -NoNewline
+    try {
+        $shell = New-Object -ComObject Shell.Application
+        $folder = $shell.NameSpace($T)
+        if ($null -eq $folder) {
+            Write-Fail "5g - Shell.Application.NameSpace returned null for $T"
+        } else {
+            $item = $folder.ParseName((Split-Path -Leaf $probeFile))
+            if ($null -eq $item) {
+                Write-Fail "5g - Shell.Application.ParseName returned null for probe file"
+            } else {
+                # Verbs().Name surfaces the MUIVerb display string; Shell may
+                # inject an `&` accelerator marker, so strip before comparing.
+                $verbNames = @($item.Verbs() | ForEach-Object { ($_.Name -replace '&', '') })
+                if ($verbNames -contains "Ignore from Dropbox") {
+                    Write-Pass "5g - 'Ignore from Dropbox' visible on Dropbox-root file"
+                } else {
+                    Write-Note "    verbs surfaced: $($verbNames -join '; ')"
+                    Write-Fail "5g - 'Ignore from Dropbox' NOT visible inside Dropbox (AppliesTo may not evaluate)"
+                }
+            }
+        }
+    } finally {
+        Remove-Item -Force -ErrorAction SilentlyContinue -Path $probeFile
     }
 
-    # AppliesTo includes the Dropbox root.
-    # AQS uses single literal backslashes — no doubling — so match the path as-is.
-    $appliesTo = (Get-ItemProperty -Path $ignoreKey -Name "AppliesTo").AppliesTo
-    if ($appliesTo -like "*$($script:DropboxDir)*") {
-        Write-Pass "5g - AppliesTo contains Dropbox root"
+    # Negative probe — sibling folder name STARTS WITH the Dropbox basename
+    # so a regression that drops the trailing `\` in `:~<"<root>\"` would
+    # make the prefix `C:\Dropbox` match `C:\Dropbox-dbxignore-5g-sibling`
+    # too, surfacing the verb here.
+    #
+    # Codex P2 (PR #225): the sibling-dir name is fixed and lives outside
+    # `$T`. A tester with a pre-existing directory at that path would have
+    # their data wiped by the `finally` block. Refuse to proceed when the
+    # path already exists so the tester can rename/remove it manually,
+    # rather than silently overwriting user data.
+    Write-Note "5g - Shell.Application does NOT surface 'Ignore from Dropbox' outside Dropbox root"
+    $siblingDir = "$($script:DropboxDir)-dbxignore-5g-sibling"
+    if (Test-Path $siblingDir) {
+        Write-Fail "5g - sibling probe dir '$siblingDir' already exists; refusing to overwrite. Rename or remove it before re-running."
     } else {
-        Write-Fail "5g - AppliesTo missing Dropbox root: $appliesTo"
-    }
-
-    # Command strings — asymmetric --yes policy.
-    $ignoreCmd = (Get-ItemProperty -Path "$ignoreKey\command" -Name "(default)").'(default)'
-    $restoreCmd = (Get-ItemProperty -Path "$restoreKey\command" -Name "(default)").'(default)'
-    if ($ignoreCmd -match '\bignore "%1"$' -and $ignoreCmd -notmatch "--yes") {
-        Write-Pass "5g - ignore command lacks --yes (confirms in console)"
-    } else {
-        Write-Fail "5g - ignore command shape unexpected: $ignoreCmd"
-    }
-    if ($restoreCmd -match '\bunignore --yes "%1"$') {
-        Write-Pass "5g - restore command has --yes (one-click safe)"
-    } else {
-        Write-Fail "5g - restore command shape unexpected: $restoreCmd"
+        $siblingProbe = Join-Path $siblingDir "probe.tmp"
+        New-Item -ItemType Directory -Path $siblingDir | Out-Null
+        Set-Content -Path $siblingProbe -Value "probe" -Encoding ascii -NoNewline
+        try {
+            $shell = New-Object -ComObject Shell.Application
+            $folder = $shell.NameSpace($siblingDir)
+            if ($null -eq $folder) {
+                Write-Fail "5g - Shell.Application.NameSpace returned null for sibling $siblingDir"
+            } else {
+                $item = $folder.ParseName((Split-Path -Leaf $siblingProbe))
+                if ($null -eq $item) {
+                    Write-Fail "5g - Shell.Application.ParseName returned null for sibling probe file"
+                } else {
+                    $verbNames = @($item.Verbs() | ForEach-Object { ($_.Name -replace '&', '') })
+                    if ($verbNames -notcontains "Ignore from Dropbox") {
+                        Write-Pass "5g - 'Ignore from Dropbox' correctly absent on sibling folder"
+                    } else {
+                        Write-Note "    verbs surfaced on sibling: $($verbNames -join '; ')"
+                        Write-Fail "5g - 'Ignore from Dropbox' visible outside Dropbox (AppliesTo too broad)"
+                    }
+                }
+            }
+        } finally {
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -Path $siblingDir
+        }
     }
 
     # Remove slow-sweep marker so phase 6's re-install + uninstall cycles
@@ -1321,6 +1408,26 @@ function Test-Cleanup {
     $slowSweepMarker = Join-Path $env:LOCALAPPDATA "dbxignore\_test_slow_sweep"
     if (Test-Path $slowSweepMarker) {
         Remove-Item $slowSweepMarker -Force -ErrorAction SilentlyContinue
+    }
+
+    # Defensive backstop for the 5g sibling probe dir (BACKLOG #115). The
+    # `try/finally` in phase 5g removes it on the happy path; a mid-phase-5
+    # abort could leave it behind, and it lives outside `$T` so the
+    # recursive cleanup above doesn't reach it.
+    #
+    # Codex P2 (PR #225): only remove if the contents match what 5g.6 would
+    # have left behind — exactly one `probe.tmp` file and nothing else. A
+    # user-owned directory that happens to share the name (with their own
+    # contents) gets left untouched, with a warning.
+    $sibling5g = "$($script:DropboxDir)-dbxignore-5g-sibling"
+    if (Test-Path $sibling5g) {
+        $contents = @(Get-ChildItem -Path $sibling5g -Force)
+        if ($contents.Count -eq 1 -and $contents[0].Name -eq "probe.tmp" -and -not $contents[0].PSIsContainer) {
+            Remove-Item -Path $sibling5g -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Note "5g sibling probe dir removed (defensive)"
+        } else {
+            Write-Note "5g sibling probe dir at '$sibling5g' has unexpected contents; leaving for manual inspection"
+        }
     }
 
     uv tool uninstall dbxignore 2>$null | Out-Null

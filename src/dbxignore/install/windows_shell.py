@@ -108,5 +108,27 @@ def install_shell_integration(dropbox_roots: list[Path]) -> None:
 
 
 def uninstall_shell_integration(*, errors: list[tuple[str, str]] | None = None) -> None:
-    """Stub — full implementation in Task 5 of #65 plan."""
-    raise NotImplementedError("uninstall_shell_integration: implemented in Task 5")
+    """Remove the two HKCU verb keys. Idempotent.
+
+    Walks each verb's tree in reverse order: command subkey first
+    (winreg.DeleteKey only deletes leaf keys), then the verb key itself.
+    FileNotFoundError on any DeleteKey call is treated as "already gone."
+
+    On non-FileNotFoundError OSError: if ``errors`` is provided, append
+    ``(registry_key_path, message)``; otherwise log WARNING. Loop always
+    continues to the next key — never aborts partway.
+    """
+    import winreg  # noqa: PLC0415  # lazy import — module loads on non-Windows
+
+    for verb_key in (_IGNORE_VERB, _RESTORE_VERB):
+        for subpath in (f"{_REG_BASE}\\{verb_key}\\command", f"{_REG_BASE}\\{verb_key}"):
+            try:
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, subpath)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                msg = f"DeleteKey failed: {exc}"
+                if errors is not None:
+                    errors.append((f"HKCU\\{subpath}", msg))
+                else:
+                    logger.warning("shell-integration uninstall: %s on %s", exc, subpath)

@@ -195,3 +195,38 @@ def test_install_overwrites_existing_keys(
     applies_to = _read_value(isolated_reg_base, "DbxignoreIgnore", "AppliesTo")
     assert str(new_root).replace("\\", "\\\\") in applies_to
     assert str(old_root).replace("\\", "\\\\") not in applies_to
+
+
+def test_install_partial_write_failure_cleans_up(
+    isolated_reg_base: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    """SetValueEx raising mid-install: no DbxignoreIgnore/DbxignoreRestore keys remain."""
+    monkeypatch.setattr(
+        windows_shell,
+        "detect_cli_invocation",
+        lambda: r'"C:\test\dbxignore.exe"',
+    )
+
+    call_count = {"n": 0}
+    real_set = winreg.SetValueEx
+
+    def flaky_set(key: int, name: str, *args: object) -> None:
+        call_count["n"] += 1
+        if call_count["n"] == 3:  # After Ignore verb's MUIVerb + AppliesTo, before command.
+            raise OSError(13, "Access denied (simulated)")
+        real_set(key, name, *args)  # type: ignore[call-overload]
+
+    monkeypatch.setattr(winreg, "SetValueEx", flaky_set)
+
+    with caplog.at_level("WARNING"), pytest.raises(OSError, match="Access denied"):
+        windows_shell.install_shell_integration([tmp_path])
+
+    # Neither verb key should be present after the partial-write recovery.
+    for verb in ("DbxignoreIgnore", "DbxignoreRestore"):
+        with pytest.raises(FileNotFoundError):
+            winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"{isolated_reg_base}\\{verb}")
+
+    assert any("install failed mid-write" in r.message for r in caplog.records)

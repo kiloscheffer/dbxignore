@@ -2265,6 +2265,8 @@ Touches: `src/dbxignore/rules.py`; `tests/test_rules_load_caching.py`; possibly 
 
 ## 103. CI uses `uv run pytest` despite the documented canonical `python -m pytest` workaround
 
+**Status: RESOLVED 2026-05-11 (PR #207, AGENTS.md doc-drift + backfill close in PR #228).**
+
 The repo's own instructions warn that plain `uv run pytest` can fail in stale environments with `ModuleNotFoundError` or `uv trampoline failed to canonicalize`, and list `uv run python -m pytest` as the canonical full-suite command. `.github/workflows/test.yml` still uses `uv run pytest` for the cross-platform and platform-specific test steps.
 
 CI is freshly provisioned today, so this is not an observed failure in the current workflow. The risk is drift: the public canonical command and CI command disagree, and future workflow reuse, cache changes, or local CI reproduction can hit the exact gotcha already documented.
@@ -2580,7 +2582,7 @@ Touches: `src/dbxignore/state.py:is_daemon_alive`.
 
 ### Open
 
-Twenty-five items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12). Items #117, #118 surfaced 2026-05-12 during the chore/115 work session (uv venv hygiene + an opaque error-escalation in state.is_daemon_alive); the third item from that session (#116, uv build-cache hygiene) shipped 2026-05-12 in PR #227.
+Twenty-four items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12). Items #117, #118 surfaced 2026-05-12 during the chore/115 work session (uv venv hygiene + an opaque error-escalation in state.is_daemon_alive); the third item from that session (#116, uv build-cache hygiene) shipped 2026-05-12 in PR #227.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2597,7 +2599,6 @@ Twenty-five items. Most are passive (no concrete trigger requires action) — bu
 - **#100** — Windows non-frozen install assumes sibling `pythonw.exe` exists. Validate before registering a Task Scheduler command.
 - **#101** — Rule-file mutation helpers use fixed `.dropboxignore.tmp`, unsafe for concurrent `ignore` / `unignore` or user/editor temp-file collisions.
 - **#102** — Rule cache can miss same-size edits with preserved mtimes. Consider a hash or forced periodic re-read policy.
-- **#103** — CI uses `uv run pytest` despite the documented canonical `uv run python -m pytest` workaround. Mechanical workflow alignment.
 - **#105** — `..` segments after a symlinked component are collapsed lexically by `_normalize_under_root` / `_validate_target_under_root`, dropping symlink awareness. `apply ~/Dropbox/link/../file` reconciles `~/Dropbox/file` instead of `<target>/file`. Reject paths where `..` follows a symlinked component.
 - **#106** — Complete the `_is_real_dir` helper consolidation: `format_literal_rule:181` still uses the inline `path.is_dir() and not path.is_symlink()` form because six tests in `test_rules_format_literal_rule.py` mock `path.is_dir`/`is_symlink` directly. Migration requires updating those mocks to stub `path.lstat().st_mode`.
 - **#107** — Promote `symlink_capable` runtime-probe fixture from `test_cli_symlink_path_args.py` to `conftest.py`. The ~10 existing tests using `@pytest.mark.skipif(sys.platform == "win32", ...)` could then drop the static decorator and exercise on Windows hosts that support symlink creation (CI's Windows runner has Dev Mode).
@@ -2625,6 +2626,8 @@ Twenty-five items. Most are passive (no concrete trigger requires action) — bu
 - **#112** (2026-05-12, PR #216) — Not an `uninstall`-path regression. Test-script setup: Phase 5 case 5e ran `dbxignore clear --force` on the entire `$T` tree, removing the marker that Phase 6 was about to assert had been retained. Narrowed 5e to clear only a single file (`$T/freshrule.dat`) so Phase 6's `watch-me.tmp` marker survives the transition. The `uninstall` (no `--purge`) contract is intact.
 
 #### 2026-05-11
+
+- **#103** (2026-05-11, PR #207; AGENTS.md doc-drift + backfill close in PR #228) — `.github/workflows/test.yml` switched to the canonical `uv run python -m pytest` invocation for all four pytest steps (cross-platform + Windows/Linux/macOS-only), avoiding the trampoline-canonicalize failure mode that the AGENTS.md gotcha already warned about. The CHANGELOG entry for PR #207 said "Resolves BACKLOG #103" but the BACKLOG item itself never got the Status marker or the move to the Resolved section — pure bookkeeping miss. PR #228 also fixed the two remaining noncanonical references in the AGENTS.md Commands section (one of which claimed `uv run pytest -m "not windows_only"` is "what Ubuntu CI runs" — factually wrong post-PR-#207). Closure recorded against 2026-05-11 (the original PR #207 merge date) per the project's backfill-close convention (see #84 / PR #178, #83 / PR #155).
 
 - **#95** (2026-05-11, PR #195) — Path-taking verbs `apply`/`clear`/`list`/`explain`/`check-ignore` now preserve the symlink object via shared `_normalize_under_root` helper. `apply` additionally fixed: broken-target symlinks accepted; symlinked-ancestor refused.
 - **#104** (2026-05-11, PR #195) — Filed and resolved in the same PR after Codex P1 and P2 findings during review. `_run_apply_pass` passes `descend=False` to `reconcile_subtree` when target is a symlink (apply mark-write surface); `_walk_marked_paths` short-circuits when target is a symlink (clear/list enumerate surface). Walk-root `is_symlink()` guard mirrors PR #183's daemon-side fix.

@@ -6,8 +6,8 @@ Cross-platform Python utility: keeps Dropbox ignore markers (NTFS alternate data
 
 - `uv sync --all-extras` — install
 - `uv run python -m pytest` — full suite (canonical form, also listed under "How to run checks"). Plain `uv run pytest` works on a fresh `uv sync` but can fail with `ModuleNotFoundError` or `uv trampoline failed to canonicalize` on stale environments — see Gotchas. Windows adds a few ADS-integration tests via `@pytest.mark.windows_only`.
-- `uv run pytest -m "not windows_only"` — portable subset (what Ubuntu CI runs)
-- `uv run pytest -W error::DeprecationWarning` — local strict mode (not enforced in CI)
+- `uv run python -m pytest -m "not windows_only"` — portable subset; CI's cross-platform leg uses a broader exclusion (`"not windows_only and not linux_only and not macos_only"`) and each platform leg then runs its own `<platform>_only` step
+- `uv run python -m pytest -W error::DeprecationWarning` — local strict mode (not enforced in CI)
 - `uv run ruff check` — lint; rule families per `pyproject.toml` `[tool.ruff.lint] select` (don't restate the list here — pyproject is the source of truth); line length 100
 - `dbxignore <apply|status|clear|list|explain|check-ignore|daemon|install|uninstall|init|generate>` — CLI console script (`cli:main`). `install` / `uninstall` register / remove the daemon with the platform's user-scoped service manager (Task Scheduler on Windows, systemd user unit on Linux, launchd LaunchAgent on macOS). `uninstall --purge` also clears every ignore marker.
 - `dbxignored` — daemon entry point (`cli:daemon_main`, a standalone `@click.command` with its own `--verbose`/`--version`), launched by the platform's installed service (Scheduled Task / systemd unit / LaunchAgent)

@@ -808,10 +808,28 @@ function Test-Daemon {
     # affect the dbxignore or dbxignored CLI shims, which are python.exe-
     # based — `dbxignore install` and `dbxignore uninstall` continue to
     # work normally under the rename.
-    $toolVenvScripts = Join-Path $env:APPDATA "uv\tools\dbxignore\Scripts"
-    $pythonwExe = Join-Path $toolVenvScripts "pythonw.exe"
-    $pythonwHide = "$pythonwExe.bak-5pre"
-    if (-not (Test-Path $pythonwExe)) {
+    #
+    # Codex P2 on PR #229: the uv tool dir location varies across uv
+    # versions and respects `UV_TOOL_DIR`, so the base path must come
+    # from `uv tool dir` rather than a hardcoded `%APPDATA%\uv\tools`.
+    $toolDir = $null
+    try {
+        $toolDir = (uv tool dir 2>$null | Out-String).Trim()
+    } catch {
+        # uv tool dir failed; skip the test.
+    }
+    if ([string]::IsNullOrWhiteSpace($toolDir)) {
+        Write-Note "5-pre - uv tool dir failed or empty; skipping pythonw.exe fallback test."
+        $pythonwExe = $null
+        $pythonwHide = $null
+    } else {
+        $toolVenvScripts = Join-Path $toolDir "dbxignore\Scripts"
+        $pythonwExe = Join-Path $toolVenvScripts "pythonw.exe"
+        $pythonwHide = "$pythonwExe.bak-5pre"
+    }
+    if ($null -eq $pythonwExe) {
+        # Already noted skip above; no further action.
+    } elseif (-not (Test-Path $pythonwExe)) {
         Write-Note "5-pre - pythonw.exe missing from tool venv at $pythonwExe (unexpected; uv tool install normally creates both). Skipping fallback test."
     } else {
         Move-Item -Path $pythonwExe -Destination $pythonwHide -Force
@@ -1462,11 +1480,21 @@ function Test-Cleanup {
     # If phase 5-pre aborted before its finally restored pythonw.exe, the
     # tool venv would be left missing pythonw.exe — daemon would fall back
     # to python.exe on every subsequent install. Phase 7 restores it.
-    $pythonwHide5pre = Join-Path $env:APPDATA "uv\tools\dbxignore\Scripts\pythonw.exe.bak-5pre"
-    if (Test-Path $pythonwHide5pre) {
-        $pythonwExe5pre = $pythonwHide5pre -replace '\.bak-5pre$', ''
-        Move-Item -Path $pythonwHide5pre -Destination $pythonwExe5pre -Force -ErrorAction SilentlyContinue
-        Write-Note "5-pre pythonw.exe restored (defensive)"
+    # Uses `uv tool dir` for the same uv-version + UV_TOOL_DIR robustness
+    # reasons as 5-pre.
+    $toolDir7 = $null
+    try {
+        $toolDir7 = (uv tool dir 2>$null | Out-String).Trim()
+    } catch {
+        # uv tool dir failed; nothing we can clean up.
+    }
+    if (-not [string]::IsNullOrWhiteSpace($toolDir7)) {
+        $pythonwHide5pre = Join-Path $toolDir7 "dbxignore\Scripts\pythonw.exe.bak-5pre"
+        if (Test-Path $pythonwHide5pre) {
+            $pythonwExe5pre = $pythonwHide5pre -replace '\.bak-5pre$', ''
+            Move-Item -Path $pythonwHide5pre -Destination $pythonwExe5pre -Force -ErrorAction SilentlyContinue
+            Write-Note "5-pre pythonw.exe restored (defensive)"
+        }
     }
 
     # Defensive backstop for the slow-sweep marker (item #89). Honoring a

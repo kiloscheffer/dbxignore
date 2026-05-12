@@ -339,7 +339,7 @@ git add src/dbxignore/install/windows_shell.py tests/test_install.py
 git commit -m "feat(install): add windows_shell module skeleton + AppliesTo query builder (#65)"
 ```
 
-**Hot-fix follow-up:** The original Step 3 implementation doubled backslashes via `.replace("\\", "\\\\")` based on a misreading of `.reg` file syntax as AQS syntax. Empirical Windows testing post-merge proved AQS does no escape interpretation; backslashes are literal. See PR #NNN for the fix. The corrected `_format_applies_to_query` embeds path strings with single backslashes and a single trailing `\` on the prefix clause.
+**Hot-fix follow-up:** The original Step 3 implementation doubled backslashes via `.replace("\\", "\\\\")` based on a misreading of `.reg` file syntax as AQS syntax. Empirical Windows testing post-merge proved AQS does no escape interpretation; backslashes are literal. See PR #224 for the fix. The corrected `_format_applies_to_query` embeds path strings with single backslashes and a single trailing `\` on the prefix clause.
 
 ---
 

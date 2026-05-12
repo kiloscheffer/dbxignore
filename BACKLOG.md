@@ -2505,7 +2505,7 @@ Touches: `src/dbxignore/cli.py` (`@main.group()` decorator, basicConfig setup); 
 
 Phase 5g (PR #222) reads the HKCU verb keys and asserts the stored `AppliesTo` string contains the Dropbox root path. This catches "did we write the right characters?" but not "does Windows Explorer evaluate the AQS query the way we expect?" — and the latter is the user-visible contract.
 
-The hot-fix (PR #NNN) caught a backslash-escape bug only through manual right-click testing on a Windows host with Dropbox installed. The unit + integration tests AND Phase 5g all passed against the broken form because they checked the wrong invariant.
+The hot-fix (PR #224) caught a backslash-escape bug only through manual right-click testing on a Windows host with Dropbox installed. The unit + integration tests AND Phase 5g all passed against the broken form because they checked the wrong invariant.
 
 **Fix candidates:**
 - Add a Phase 5g sub-case that invokes a shell extension probe via PowerShell's COM access (`Shell.Application.NameSpace(...).ParseName(...).InvokeVerb(...)` — needs investigation whether this respects `AppliesTo`).
@@ -2547,7 +2547,7 @@ Twenty-four items. Most are passive (no concrete trigger requires action) — bu
 - **#109** — `FileNotFoundError`-before-`OSError` 'vanished path' idiom now repeats across `reconcile._reconcile_path` (2 sites), `state._read_at` (1 site), and `cli.uninstall --purge` (4 sites after PR #204). Filed for design-tension record (precedent: #40, #51, #108); current per-site shape is defensible because the local response action varies (return None / set flag / continue / pass) and no generic helper fits all seven sites.
 - **#113** — Other `cmd | grep -q` sites in `scripts/manual-test-{ubuntu-vps,macos}.sh` (`--help`, `explain`, `uv tool list`) share the SIGPIPE+pipefail false-failure risk that bit 5f. Capture-then-grep is the preemptive fix; defer until one of them actually flakes.
 - **#114** — CLI `--verbose` flag for INFO logging; default to WARNING. Today INFO-level log lines from `logger.info` calls surface to users on every CLI invocation alongside intentional `click.echo` summaries. Cosmetic QoL.
-- **#115** — Manual-test Phase 5g checks registry string content but not Explorer's evaluation of the AQS query. The backslash-escape regression (PR #NNN) passed Phase 5g while verbs were invisible in Explorer. Test fidelity gap for registry-written AQS strings.
+- **#115** — Manual-test Phase 5g checks registry string content but not Explorer's evaluation of the AQS query. The backslash-escape regression (PR #224) passed Phase 5g while verbs were invisible in Explorer. Test fidelity gap for registry-written AQS strings.
 
 ### Resolved (reverse chronological)
 

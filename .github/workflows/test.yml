@@ -2,7 +2,17 @@ name: test
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+# Cancel in-progress runs when a new commit lands on the same ref. Saves
+# Windows-runner minutes (10x cost multiplier vs Linux) during fast push
+# iteration on a PR. `github.ref` is the PR merge ref for pull_request
+# events and the branch ref for push events, so push-to-main and PR runs
+# group independently.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:

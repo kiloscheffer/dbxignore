@@ -225,8 +225,13 @@ phase_extended_cli() {
 
     # 4s — clear fail-closed on unreadable state.json (PR #203, item #97 Codex P2 followup)
     # state.json exists but `state.read()` returns None (chmod 000 → PermissionError
-    # → _read_at logs WARNING + returns None). cli.clear refuses to proceed because
-    # daemon liveness is unknown; --force overrides.
+    # → _read_at returns None). cli.clear refuses to proceed because daemon liveness
+    # is unknown; --force overrides.
+    #
+    # Sequence: backup → setup tree + apply (state.json still readable, so a setup
+    # failure aborts cleanly) → narrow chmod 000 window per test → chmod 644 right
+    # after each clear call so an abort during assertions doesn't strand state.json
+    # at mode 000.
     note "4s — clear fail-closed on unreadable state.json"
     mkdir -p "$DBXIGNORE_STATE_DIR"
     local state_json="$DBXIGNORE_STATE_DIR/state.json"
@@ -236,38 +241,51 @@ phase_extended_cli() {
         cp -p "$state_json" /tmp/dbx-4s-state-backup.json
     fi
     printf '{}\n' > "$state_json"
-    chmod 000 "$state_json"
 
-    # Setup a marker for clear to target.
+    # Setup the test target FIRST, with state.json still readable. Any setup
+    # failure aborts before the lock window opens.
     rm -rf "$T"; mkdir -p "$T"
     printf '*.tmp\n' > "$T/.dropboxignore"
     : > "$T/foo.tmp"
     dbxignore apply "$T" --yes >/dev/null 2>&1
 
+    # Lock window 1: just the dbxignore clear call (no setup, no assertions inside).
+    local clear_rc
+    chmod 000 "$state_json"
     if dbxignore clear "$T" --yes >/tmp/dbx-4s-clear.out 2>/tmp/dbx-4s-clear.err; then
-        fail "4s — clear should refuse on unreadable state.json"
+        clear_rc=0
     else
-        local exit_code=$?
-        if [ $exit_code -eq 2 ]; then
-            pass "4s — clear exits 2 on unreadable state.json"
-        else
-            fail "4s — clear exited $exit_code instead of 2"
-        fi
+        clear_rc=$?
+    fi
+    chmod 644 "$state_json"
+
+    if [ "$clear_rc" -eq 2 ]; then
+        pass "4s — clear exits 2 on unreadable state.json"
+    else
+        fail "4s — clear exited $clear_rc instead of 2"
     fi
     assert_grep /tmp/dbx-4s-clear.err 'unreadable' "4s — clear stderr names 'unreadable' state file"
     # Marker still set — fail-closed means no destructive action ran.
     assert_xattr_set "$T/foo.tmp" "4s — clear did not clear marker (refused)"
 
-    # --force overrides the unreadable-state guard.
+    # Lock window 2: --force test.
+    local force_rc
+    chmod 000 "$state_json"
     if dbxignore clear "$T" --yes --force >/tmp/dbx-4s-force.out 2>&1; then
+        force_rc=0
+    else
+        force_rc=$?
+    fi
+    chmod 644 "$state_json"
+
+    if [ "$force_rc" -eq 0 ]; then
         pass "4s — clear --force overrides the unreadable-state guard"
     else
-        fail "4s — clear --force should succeed"
+        fail "4s — clear --force should succeed (exit=$force_rc)"
     fi
     assert_xattr_unset "$T/foo.tmp" "4s — clear --force cleared the marker"
 
-    # Cleanup: restore state.json.
-    chmod 644 "$state_json" 2>/dev/null || true
+    # Restore state.json content.
     if [ "$state_json_existed" -eq 1 ]; then
         mv /tmp/dbx-4s-state-backup.json "$state_json"
     else

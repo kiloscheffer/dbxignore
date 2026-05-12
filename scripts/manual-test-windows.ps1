@@ -609,6 +609,12 @@ function Test-ExtendedCli {
     # state.json exists but `state.read()` returns None (deny ACL → PermissionError
     # → _read_at returns None). cli.clear refuses to proceed because daemon
     # liveness is unknown; --force overrides.
+    #
+    # The destructive setup (deny ACE on state.json) is wrapped in try/finally so an
+    # `$ErrorActionPreference = 'Stop'` abort during the test still restores
+    # state.json via Move-Item (or Remove-Item if the test created it). Without
+    # the finally, an aborted run could leave the user's state.json with a deny
+    # ACE in effect, blocking later dbxignore commands until manual repair.
     Write-Note "4s - clear fail-closed on unreadable state.json"
     $stateDir4s = Join-Path $env:LOCALAPPDATA "dbxignore"
     New-Item -ItemType Directory -Force -Path $stateDir4s | Out-Null
@@ -619,59 +625,59 @@ function Test-ExtendedCli {
         Copy-Item $stateJson4s $stateJson4sBackup -Force
     }
     Set-Content -Path $stateJson4s -Value "{}" -Encoding utf8 -NoNewline
-    # Deny only Read Data (RD) — NOT the generic R, which includes RA
-    # (Read Attributes). `state.default_path().exists()` in cli.clear
-    # queries file attributes; if RA were denied, exists() could return
-    # False, the fail-closed arm would skip, and 4s would fail for the
-    # wrong reason. RD blocks `Path.read_bytes()` (PermissionError) but
-    # leaves attribute reads intact, simulating the locked/permission-
-    # denied scenario item #97 documents.
-    icacls $stateJson4s /deny "${env:USERNAME}:(RD)" *> $null
 
-    # Setup a marker for clear to target.
+    # Setup the test target FIRST, with state.json still readable. Setup failures
+    # abort before the deny ACE goes on.
     Remove-Item -Recurse -Force $T -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $T | Out-Null
     Set-Content -Path "$T\.dropboxignore" -Value "*.tmp" -Encoding utf8
     New-Item -ItemType File -Force -Path "$T\foo.tmp" | Out-Null
     & dbxignore apply $T --yes *> $null
 
-    $clear4sErrFile = Join-Path $env:TEMP "dbx-4s-clear.err"
-    & dbxignore clear $T --yes *> $clear4sErrFile
-    $clear4sExitCode = $LASTEXITCODE
-    if ($clear4sExitCode -eq 2) {
-        Write-Pass "4s - clear exits 2 on unreadable state.json"
-    } else {
-        Write-Fail "4s - clear exited $clear4sExitCode instead of 2"
-    }
-    $clear4sErr = if (Test-Path $clear4sErrFile) { Get-Content $clear4sErrFile -Raw } else { "" }
-    if ($clear4sErr -match 'unreadable') {
-        Write-Pass "4s - clear stderr names 'unreadable' state file"
-    } else {
-        Write-Note "clear stderr: $clear4sErr"
-        Write-Fail "4s - clear stderr missing 'unreadable'"
-    }
-    Assert-AdsSet -Path "$T\foo.tmp" -Name "4s - clear did not clear marker (refused)"
+    try {
+        # Deny only Read Data (RD) — NOT the generic R, which includes RA
+        # (Read Attributes). `state.default_path().exists()` in cli.clear
+        # queries file attributes; if RA were denied, exists() could return
+        # False, the fail-closed arm would skip, and 4s would fail for the
+        # wrong reason. RD blocks `Path.read_bytes()` (PermissionError) but
+        # leaves attribute reads intact.
+        icacls $stateJson4s /deny "${env:USERNAME}:(RD)" *> $null
 
-    # --force overrides the unreadable-state guard.
-    & dbxignore clear $T --yes --force *> $null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Pass "4s - clear --force overrides the unreadable-state guard"
-    } else {
-        Write-Fail "4s - clear --force should succeed"
-    }
-    Assert-AdsUnset -Path "$T\foo.tmp" -Name "4s - clear --force cleared the marker"
+        $clear4sErrFile = Join-Path $env:TEMP "dbx-4s-clear.err"
+        & dbxignore clear $T --yes *> $clear4sErrFile
+        $clear4sExitCode = $LASTEXITCODE
+        if ($clear4sExitCode -eq 2) {
+            Write-Pass "4s - clear exits 2 on unreadable state.json"
+        } else {
+            Write-Fail "4s - clear exited $clear4sExitCode instead of 2"
+        }
+        $clear4sErr = if (Test-Path $clear4sErrFile) { Get-Content $clear4sErrFile -Raw } else { "" }
+        if ($clear4sErr -match 'unreadable') {
+            Write-Pass "4s - clear stderr names 'unreadable' state file"
+        } else {
+            Write-Note "clear stderr: $clear4sErr"
+            Write-Fail "4s - clear stderr missing 'unreadable'"
+        }
+        Assert-AdsSet -Path "$T\foo.tmp" -Name "4s - clear did not clear marker (refused)"
 
-    # Cleanup: no explicit ACE removal needed — the next step either replaces
-    # the file entirely (Move-Item from backup, which restores both content and
-    # ACL) or deletes it (Remove-Item when the test created the file from
-    # scratch). Calling `icacls /remove:d ${env:USERNAME}` here would remove ALL
-    # deny ACEs the user has on this path, not just the (RD) one we added,
-    # silently clobbering pre-existing explicit deny rules in the rare case a
-    # tester customized state.json's ACL.
-    if ($stateJson4sExisted) {
-        Move-Item $stateJson4sBackup $stateJson4s -Force
-    } else {
-        Remove-Item $stateJson4s -Force
+        # --force overrides the unreadable-state guard.
+        & dbxignore clear $T --yes --force *> $null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Pass "4s - clear --force overrides the unreadable-state guard"
+        } else {
+            Write-Fail "4s - clear --force should succeed"
+        }
+        Assert-AdsUnset -Path "$T\foo.tmp" -Name "4s - clear --force cleared the marker"
+    } finally {
+        # Restore state.json unconditionally — Move-Item replaces both content
+        # and ACL, so the deny ACE goes with the test file regardless of how the
+        # try block exited. No explicit `icacls /remove:d` needed (and it would
+        # be over-broad — removes all deny ACEs for the user, not just (RD)).
+        if ($stateJson4sExisted) {
+            Move-Item $stateJson4sBackup $stateJson4s -Force
+        } else {
+            Remove-Item $stateJson4s -Force -ErrorAction SilentlyContinue
+        }
     }
 
     # 4t — path-taking verbs refuse `..` after a symlinked component (PR #205, item #105)

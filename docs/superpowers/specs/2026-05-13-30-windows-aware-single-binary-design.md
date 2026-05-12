@@ -204,7 +204,7 @@ The four API calls we need (`AttachConsole`, `MessageBoxW`, plus the magic `CONO
 | `src/dbxignore/_windows_console.py` | **NEW**, ~80 LOC. The module above. |
 | `src/dbxignore/__main__.py` | Wrap entry in `main_entry()` that calls `_windows_console.early_init()` on Windows, then deferred-imports `cli.main`. |
 | `src/dbxignore/cli.py` | Delete `daemon_main` function and its `@click.command()` decorator (~10 LOC). The `@main.command() def daemon(...)` subcommand stays. |
-| `src/dbxignore/state.py` | `is_daemon_alive()` process-name guard tuple gains `"dbxignore"` alongside the existing `"python"` and `"dbxignored"`. After unification, a frozen daemon process is named `dbxignore.exe` — without this addition, `cli.status` / `cli.clear`'s daemon-alive guards would misclassify the new daemon as not running. Drop `"dbxignored"` from the tuple at the same time since it can no longer exist. |
+| `src/dbxignore/state.py` | `is_daemon_alive()` process-name guard tuple: **replace the tuple with `("python", "dbxignore")`; drop `"dbxignored"`**. After unification, a frozen daemon process is named `dbxignore.exe` — without `"dbxignore"` in the guard, `cli.status` / `cli.clear`'s daemon-alive checks would misclassify the new daemon as not running. The `"dbxignored"` entry is removed in the same change since post-unification no process should bear that name; users on a non-upgraded host will see status / clear correctly identify their daemon as not running, prompting the documented migration. |
 
 ### Group 2 — Build / packaging
 
@@ -241,7 +241,7 @@ The four API calls we need (`AttachConsole`, `MessageBoxW`, plus the magic `CONO
 
 | File | Change |
 |---|---|
-| `README.md` | Drop `dbxignored` references from Install (Windows/Linux/macOS) sections. New "Upgrading from v0.5.x" subsection. New "Known limitations — Git Bash / MinTTY" note. |
+| `README.md` | Drop `dbxignored` references from Install (Windows/Linux/macOS) sections. New "Upgrading from v0.5.x" subsection. Two new "Known limitations" entries: "Windows: shells may not wait for the GUI-subsystem binary" (the foreground-async + sync-workarounds note) AND "Git Bash / MinTTY" (pseudo-terminal pipe-stdio note). |
 | `CHANGELOG.md` | `[Unreleased]` > `### Changed` gets a **Breaking** entry. |
 | `BACKLOG.md` | Inline RESOLVED marker on #30; drop from Open list; Resolved-section entry. |
 
@@ -251,7 +251,7 @@ The four API calls we need (`AttachConsole`, `MessageBoxW`, plus the magic `CONO
 |---|---|
 | `scripts/manual-test-ubuntu-vps.sh` | Phase 5: assertion that `ExecStart=` references `dbxignore daemon`. |
 | `scripts/manual-test-macos.sh` | Phase 5: assertion that `ProgramArguments` includes `daemon`. |
-| `scripts/manual-test-windows.ps1` | Phase 5: assertion that Task Scheduler `<Arguments>` includes `daemon`. New Phase 4.5 case for AttachConsole flow (`dbxignore --version` from PowerShell → terminal output reaches stdout). Manual-visual-verification note in docstring for MessageBox on Explorer double-click. |
+| `scripts/manual-test-windows.ps1` | Phase 5: assertion that Task Scheduler `<Arguments>` includes `daemon`. **Three** new Phase 4.5 cases for AttachConsole flow + stdio preservation: (1) terminal output, (2) pipe capture, (3) file redirect. Manual-visual-verification note in docstring for MessageBox on Explorer double-click. Docstring also documents the GUI-subsystem shell-wait limitation + per-shell sync workarounds. |
 
 **Rough diff size estimate**: ~750–950 LOC across 24 files. ~110 LOC pure addition for `_windows_console.py` (including the per-stream `_is_stream_connected` helper). ~250 LOC test addition (`test_windows_console.py` covers six orchestrator decision branches + three predicate edges + per-stream mixed-case behavior). The rest is small per-file deletions and one-line referent updates.
 

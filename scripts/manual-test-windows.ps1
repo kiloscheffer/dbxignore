@@ -1101,32 +1101,42 @@ function Test-Daemon {
     # so a regression that drops the trailing `\` in `:~<"<root>\"` would
     # make the prefix `C:\Dropbox` match `C:\Dropbox-dbxignore-5g-sibling`
     # too, surfacing the verb here.
+    #
+    # Codex P2 (PR #225): the sibling-dir name is fixed and lives outside
+    # `$T`. A tester with a pre-existing directory at that path would have
+    # their data wiped by the `finally` block. Refuse to proceed when the
+    # path already exists so the tester can rename/remove it manually,
+    # rather than silently overwriting user data.
     Write-Note "5g - Shell.Application does NOT surface 'Ignore from Dropbox' outside Dropbox root"
     $siblingDir = "$($script:DropboxDir)-dbxignore-5g-sibling"
-    $siblingProbe = Join-Path $siblingDir "probe.tmp"
-    New-Item -ItemType Directory -Path $siblingDir -Force | Out-Null
-    Set-Content -Path $siblingProbe -Value "probe" -Encoding ascii -NoNewline
-    try {
-        $shell = New-Object -ComObject Shell.Application
-        $folder = $shell.NameSpace($siblingDir)
-        if ($null -eq $folder) {
-            Write-Fail "5g - Shell.Application.NameSpace returned null for sibling $siblingDir"
-        } else {
-            $item = $folder.ParseName((Split-Path -Leaf $siblingProbe))
-            if ($null -eq $item) {
-                Write-Fail "5g - Shell.Application.ParseName returned null for sibling probe file"
+    if (Test-Path $siblingDir) {
+        Write-Fail "5g - sibling probe dir '$siblingDir' already exists; refusing to overwrite. Rename or remove it before re-running."
+    } else {
+        $siblingProbe = Join-Path $siblingDir "probe.tmp"
+        New-Item -ItemType Directory -Path $siblingDir | Out-Null
+        Set-Content -Path $siblingProbe -Value "probe" -Encoding ascii -NoNewline
+        try {
+            $shell = New-Object -ComObject Shell.Application
+            $folder = $shell.NameSpace($siblingDir)
+            if ($null -eq $folder) {
+                Write-Fail "5g - Shell.Application.NameSpace returned null for sibling $siblingDir"
             } else {
-                $verbNames = @($item.Verbs() | ForEach-Object { ($_.Name -replace '&', '') })
-                if ($verbNames -notcontains "Ignore from Dropbox") {
-                    Write-Pass "5g - 'Ignore from Dropbox' correctly absent on sibling folder"
+                $item = $folder.ParseName((Split-Path -Leaf $siblingProbe))
+                if ($null -eq $item) {
+                    Write-Fail "5g - Shell.Application.ParseName returned null for sibling probe file"
                 } else {
-                    Write-Note "    verbs surfaced on sibling: $($verbNames -join '; ')"
-                    Write-Fail "5g - 'Ignore from Dropbox' visible outside Dropbox (AppliesTo too broad)"
+                    $verbNames = @($item.Verbs() | ForEach-Object { ($_.Name -replace '&', '') })
+                    if ($verbNames -notcontains "Ignore from Dropbox") {
+                        Write-Pass "5g - 'Ignore from Dropbox' correctly absent on sibling folder"
+                    } else {
+                        Write-Note "    verbs surfaced on sibling: $($verbNames -join '; ')"
+                        Write-Fail "5g - 'Ignore from Dropbox' visible outside Dropbox (AppliesTo too broad)"
+                    }
                 }
             }
+        } finally {
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -Path $siblingDir
         }
-    } finally {
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -Path $siblingDir
     }
 
     # Remove slow-sweep marker so phase 6's re-install + uninstall cycles
@@ -1404,10 +1414,20 @@ function Test-Cleanup {
     # `try/finally` in phase 5g removes it on the happy path; a mid-phase-5
     # abort could leave it behind, and it lives outside `$T` so the
     # recursive cleanup above doesn't reach it.
+    #
+    # Codex P2 (PR #225): only remove if the contents match what 5g.6 would
+    # have left behind — exactly one `probe.tmp` file and nothing else. A
+    # user-owned directory that happens to share the name (with their own
+    # contents) gets left untouched, with a warning.
     $sibling5g = "$($script:DropboxDir)-dbxignore-5g-sibling"
     if (Test-Path $sibling5g) {
-        Remove-Item -Path $sibling5g -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Note "5g sibling probe dir removed (defensive)"
+        $contents = @(Get-ChildItem -Path $sibling5g -Force)
+        if ($contents.Count -eq 1 -and $contents[0].Name -eq "probe.tmp" -and -not $contents[0].PSIsContainer) {
+            Remove-Item -Path $sibling5g -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Note "5g sibling probe dir removed (defensive)"
+        } else {
+            Write-Note "5g sibling probe dir at '$sibling5g' has unexpected contents; leaving for manual inspection"
+        }
     }
 
     uv tool uninstall dbxignore 2>$null | Out-Null

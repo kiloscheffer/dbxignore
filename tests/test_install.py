@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from dbxignore.install import windows_task as install
+from dbxignore.install.windows_shell import _format_applies_to_query
 from tests.conftest import FakeMarkers
 
 
@@ -812,3 +813,35 @@ def test_purge_cleans_separate_log_dir_on_darwin(
 
     assert not state_dir.exists()
     assert not log_dir.exists()
+
+
+def test_format_applies_to_query_single_root() -> None:
+    roots = [Path(r"C:\Users\kilo\Dropbox")]
+    result = _format_applies_to_query(roots)
+    assert result == (
+        r'System.ItemPathDisplay:="C:\\Users\\kilo\\Dropbox" OR '
+        r'System.ItemPathDisplay:~<"C:\\Users\\kilo\\Dropbox\\"'
+    )
+
+
+def test_format_applies_to_query_multiple_roots_or_joined() -> None:
+    roots = [Path(r"C:\Users\kilo\Dropbox"), Path(r"D:\Dropbox (Personal)")]
+    result = _format_applies_to_query(roots)
+    # Each root contributes := + :~< ; four clauses total OR-joined.
+    assert result.count(" OR ") == 3
+    assert r'System.ItemPathDisplay:="C:\\Users\\kilo\\Dropbox"' in result
+    assert r'System.ItemPathDisplay:~<"C:\\Users\\kilo\\Dropbox\\"' in result
+    assert r'System.ItemPathDisplay:="D:\\Dropbox (Personal)"' in result
+    assert r'System.ItemPathDisplay:~<"D:\\Dropbox (Personal)\\"' in result
+
+
+def test_format_applies_to_query_refuses_root_with_quote() -> None:
+    roots = [Path('C:\\bad"path')]
+    with pytest.raises(RuntimeError, match="contains a quote character"):
+        _format_applies_to_query(roots)
+
+
+def test_format_applies_to_query_empty_roots_returns_empty_string() -> None:
+    # The dispatcher guards against this case (skipped-no-roots), but
+    # the pure helper itself handles it cleanly — empty list ⇒ empty string.
+    assert _format_applies_to_query([]) == ""

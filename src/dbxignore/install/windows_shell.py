@@ -98,7 +98,7 @@ def install_shell_integration(dropbox_roots: list[Path]) -> None:
         logger.warning("shell-integration install failed mid-write (%s); attempting cleanup", exc)
         try:
             uninstall_shell_integration()
-        except OSError:
+        except Exception:  # noqa: BLE001 — cleanup is best-effort; must not mask original OSError
             # Cleanup failure on top of install failure — log but don't mask
             # the original exception below.
             logger.warning("shell-integration cleanup after failed install also failed")
@@ -108,5 +108,5 @@ def install_shell_integration(dropbox_roots: list[Path]) -> None:
 
 
 def uninstall_shell_integration(*, errors: list[tuple[str, str]] | None = None) -> None:
-    """Stub — full implementation in Task 4 of #65 plan."""
-    return
+    """Stub — full implementation in Task 5 of #65 plan."""
+    raise NotImplementedError("uninstall_shell_integration: implemented in Task 5")

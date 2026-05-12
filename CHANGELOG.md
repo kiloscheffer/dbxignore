@@ -20,6 +20,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   (one-click safe). On Linux and macOS the flag is silently accepted as a
   no-op so portable scripts work unchanged. (#65)
 
+### Changed
+
+- **Breaking** — `dbxignore` CLI default log level lowered from `INFO` to `WARNING`. The `--verbose` / `-v` flag is now a counted form: `-v` selects `INFO` (was `DEBUG` under the old boolean flag), and a new `-vv` form selects `DEBUG`. Net effect: `dbxignore install` and other CLI commands no longer emit `logger.info` chatter from install backends and other modules alongside the intentional `click.echo` summary lines by default. Operators wanting the previous noise level can pass `-v`; full debug traces are still available via `-vv`. The `dbxignored` daemon foreground entry point gets the same change for symmetry; the daemon's own `_configured_logging()` (driven by `DBXIGNORE_LOG_LEVEL`) takes over after startup, so this only affects the brief pre-startup window. (#114)
+
+### Fixed
+
+- `windows_ads._stream_path()` emits the `\\?\UNC\server\share\…` long-path form for UNC paths rather than concatenating `\\?\` with the leading `\\` (which produced the malformed `\\?\\\server\share\…`, undefined to the Win32 object manager). Dropbox roots on network shares, redirected profiles, or other UNC-backed locations now receive ignore markers correctly; drive-letter paths are unchanged. (#96)
+
 ## [0.5.1] — 2026-05-12
 
 Patch release. Pins LF line endings on `dbxignore generate` and `dbxignore init` writes on Windows (two `cli.py` write sites that pre-dated v0.5.0's `_atomic_write_rule_file` LF pin and were never folded into the same convention); plus a README symmetry fix so the install-verification step works on every platform.

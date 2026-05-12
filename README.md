@@ -444,7 +444,7 @@ Environment variables read at daemon startup:
 | `DBXIGNORE_DEBOUNCE_RULES_MS` | `100` | Debounce window for `.dropboxignore` file events. |
 | `DBXIGNORE_DEBOUNCE_DIRS_MS` | `0` | Debounce for directory-creation events (`0` = react immediately, no coalescing). |
 | `DBXIGNORE_DEBOUNCE_OTHER_MS` | `500` | Debounce for other file events. |
-| `DBXIGNORE_LOG_LEVEL` | `INFO` | Daemon log level. Accepts `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive). Unknown values fall back to `INFO`. Affects `dbxignore daemon` only — CLI commands use the top-level `--verbose` / `-v` flag (DEBUG when set, INFO otherwise). See **Log levels** below for what each level surfaces. |
+| `DBXIGNORE_LOG_LEVEL` | `INFO` | Daemon log level. Accepts `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive). Unknown values fall back to `INFO`. Affects `dbxignore daemon` only — CLI commands use the top-level `-v` / `-vv` counted flag (default WARNING; `-v` INFO; `-vv` DEBUG). See **Log levels** below for what each level surfaces. |
 | `DBXIGNORE_ROOT` | *(unset)* | Escape hatch for non-stock Dropbox installs: overrides `info.json` discovery and treats the given absolute path as the sole Dropbox root. If the path doesn't exist, a WARNING is logged and no roots are returned (so `dbxignore apply` exits with "No Dropbox roots found"). |
 
 <details>
@@ -453,15 +453,15 @@ Environment variables read at daemon startup:
 The daemon and CLI have separate log-config knobs:
 
 - **Daemon (`dbxignore daemon`)** reads `DBXIGNORE_LOG_LEVEL` from the environment at startup. Output goes to the rotating file (and stderr on Linux for journald).
-- **CLI commands (`apply`, `list`, `status`, `explain`, `install`, `uninstall`)** use the top-level `--verbose` / `-v` flag — DEBUG when set, INFO otherwise. The env var is **not** consulted here. Output goes to stderr.
+- **CLI commands (`apply`, `list`, `status`, `explain`, `install`, `uninstall`)** use the top-level `-v` / `-vv` counted flag: default WARNING (intentional `click.echo` summaries only); `-v` INFO (also surfaces install-backend chatter and similar operator-level diagnostics); `-vv` DEBUG. The env var is **not** consulted here. Output goes to stderr.
 
 What each level surfaces:
 
 | Level | What you see |
 |---|---|
 | `DEBUG` | Per-operation traces — individual marker reads/writes, watchdog event payloads, debouncer ticks, "xattr absent" / "path gone" race-condition skips on `clear_ignored`. Useful when debugging a specific reconcile decision or a marker-API edge case. |
-| `INFO` (default) | Daemon start/stop banners, sweep summaries (paths marked / cleared per sweep), install/uninstall confirmations, environment-forwarding diagnostics. The "what's the daemon doing right now" baseline. |
-| `WARNING` | Recoverable conditions — filesystems that don't support markers (`ENOTSUP`/`EOPNOTSUPP`), missing `info.json`, dropped negations under ignored ancestors, symlink `EPERM` on Linux, `schtasks /Run` failure post-install, corrupt or shape-mismatched `state.json`. None of these stop the daemon. |
+| `INFO` (daemon default) | Daemon start/stop banners, sweep summaries (paths marked / cleared per sweep), install/uninstall confirmations, environment-forwarding diagnostics. The "what's the daemon doing right now" baseline. |
+| `WARNING` (CLI default) | Recoverable conditions — filesystems that don't support markers (`ENOTSUP`/`EOPNOTSUPP`), missing `info.json`, dropped negations under ignored ancestors, symlink `EPERM` on Linux, `schtasks /Run` failure post-install, corrupt or shape-mismatched `state.json`. None of these stop the daemon. |
 | `ERROR` | Conditions that prevent progress on a specific concern — "No Dropbox roots discovered; exiting", sweep-startup failures, watchdog or debouncer handler crashes (with traceback). The daemon either continues with reduced scope or shuts down cleanly. |
 | `CRITICAL` | Accepted by the env var but no production code path emits at this level — the project tops out at `ERROR`. |
 

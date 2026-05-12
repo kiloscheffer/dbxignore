@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING
 
@@ -47,3 +48,33 @@ def test_daemon_main_verbose_flag_is_reachable(monkeypatch: pytest.MonkeyPatch) 
     result = CliRunner().invoke(cli.daemon_main, ["--verbose"], prog_name="dbxignored")
     assert result.exit_code == 0, result.output
     assert called == [True]
+
+
+def test_daemon_main_vv_flag_is_reachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`-vv` (counted twice) is the documented DEBUG-level escape hatch."""
+    called = []
+    monkeypatch.setattr(cli, "_run_daemon", lambda: called.append(True))
+    result = CliRunner().invoke(cli.daemon_main, ["-vv"], prog_name="dbxignored")
+    assert result.exit_code == 0, result.output
+    assert called == [True]
+
+
+def test_verbosity_to_level_default_is_warning() -> None:
+    """Default (no `-v` flag) lands at WARNING so `logger.info` calls in
+    install backends and other CLI-reachable modules stay off the user's
+    terminal by default."""
+    assert cli._verbosity_to_level(0) == logging.WARNING
+
+
+def test_verbosity_to_level_one_v_is_info() -> None:
+    assert cli._verbosity_to_level(1) == logging.INFO
+
+
+def test_verbosity_to_level_two_v_is_debug() -> None:
+    assert cli._verbosity_to_level(2) == logging.DEBUG
+
+
+def test_verbosity_to_level_clamps_to_debug_for_higher_counts() -> None:
+    """`-vvv` and beyond stay at DEBUG — no level deeper than DEBUG exists."""
+    assert cli._verbosity_to_level(3) == logging.DEBUG
+    assert cli._verbosity_to_level(10) == logging.DEBUG

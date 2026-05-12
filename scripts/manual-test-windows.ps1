@@ -920,6 +920,20 @@ function Test-Daemon {
         return
     }
 
+    # install verbosity defaults (PR #234) - default WARNING quiets install-backend
+    # INFO chatter; the click.echo summary line still surfaces.
+    $installContents = Get-Content $installOut -Raw
+    if ($installContents -match "Installed dbxignore daemon service") {
+        Write-Pass "install - click.echo summary present"
+    } else {
+        Write-Fail "install - click.echo summary missing"
+    }
+    if ($installContents -notmatch "(?m)^INFO ") {
+        Write-Pass "install - no INFO chatter at default level"
+    } else {
+        Write-Fail "install - INFO chatter leaked at default level"
+    }
+
     Start-Sleep -Seconds 2
 
     # Task Scheduler entry should exist + be in Ready or Running state.
@@ -1278,13 +1292,22 @@ function Test-Uninstall {
         }
     }
 
+    # -v added to verify the verbosity flag surfaces install-backend INFO
+    # chatter end-to-end (PR #234). Default-quiet side is verified in Phase 5.
     $uninstOut = "$env:TEMP\dbxignore-uninst.out"
-    dbxignore uninstall *> $uninstOut
+    dbxignore -v uninstall *> $uninstOut
     if ($LASTEXITCODE -eq 0) {
-        Write-Pass "dbxignore uninstall (rc=0)"
+        Write-Pass "dbxignore -v uninstall (rc=0)"
     } else {
-        Write-Fail "dbxignore uninstall"
+        Write-Fail "dbxignore -v uninstall"
         Get-Content $uninstOut | ForEach-Object { Write-Note "    $_" }
+    }
+
+    $uninstContents = Get-Content $uninstOut -Raw
+    if ($uninstContents -match "(?m)^INFO ") {
+        Write-Pass "uninstall -v - INFO surfaces under verbose"
+    } else {
+        Write-Fail "uninstall -v - verbose did not surface INFO"
     }
 
     schtasks /Query /TN dbxignore 2>$null | Out-Null

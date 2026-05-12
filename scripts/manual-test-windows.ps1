@@ -1062,6 +1062,17 @@ function Test-Uninstall {
         Write-Fail "dbxignore uninstall --purge"
         Get-Content $purgeOut | ForEach-Object { Write-Note "    $_" }
     }
+    # PR #204 regression guard: happy-path purge emits the "Cleared N" line but
+    # must NOT emit the partial-failure error report. Forcing a real marker
+    # OSError requires platform-specific FS contortions; the unit tests cover
+    # the partial-failure assertion tightly. This guard pins the happy path.
+    $purgeText = if (Test-Path $purgeOut) { Get-Content $purgeOut -Raw } else { "" }
+    if ($purgeText -notmatch 'Could not fully clear') {
+        Write-Pass "purge - no spurious 'Could not fully clear' on happy path (PR #204)"
+    } else {
+        Write-Fail "purge - emitted 'Could not fully clear' on happy path"
+        Get-Content $purgeOut | ForEach-Object { Write-Note "    $_" }
+    }
 
     if (Test-Path "$T\watch-me.tmp") { Assert-AdsUnset -Path "$T\watch-me.tmp" -Name "purge - watch-me.tmp marker cleared" }
     if (Test-Path "$T\cache")        { Assert-AdsUnset -Path "$T\cache"        -Name "purge - cache/ marker cleared" }

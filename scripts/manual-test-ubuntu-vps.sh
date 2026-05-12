@@ -733,6 +733,17 @@ phase_uninstall() {
     else
         fail "dbxignore uninstall --purge"; sed 's/^/    /' /tmp/dbxignore-purge.out
     fi
+    # PR #204 regression guard: happy-path purge emits the "Cleared N" line
+    # but must NOT emit the partial-failure error report. (Forcing a real
+    # marker-clear OSError for an end-to-end test requires platform-specific
+    # FS contortions; the unit tests in test_install.py cover the assertion
+    # tightly. This guard pins that the happy path stays clean.)
+    if ! grep -q 'Could not fully clear' /tmp/dbxignore-purge.out; then
+        pass "purge — no spurious 'Could not fully clear' on happy path (PR #204)"
+    else
+        fail "purge — emitted 'Could not fully clear' on happy path"
+        sed 's/^/    /' /tmp/dbxignore-purge.out
+    fi
 
     [ -f "$T/watch-me.tmp" ] && assert_xattr_unset "$T/watch-me.tmp" "purge — watch-me.tmp marker cleared"
     [ -d "$T/cache" ]        && assert_xattr_unset "$T/cache"        "purge — cache/ marker cleared"

@@ -29,6 +29,7 @@ Hierarchical `.dropboxignore` files for Dropbox. Drop a `.dropboxignore` into an
 ```powershell
 uv tool install git+https://github.com/kiloscheffer/dbxignore
 dbxignore install
+dbxignore status                     # verify: daemon running and watching Dropbox
 ```
 
 `dbxignore install` registers a Task Scheduler entry that launches the daemon (`pythonw -m dbxignore daemon`) at every user logon.
@@ -63,10 +64,10 @@ Requires a systemd user session (standard on Ubuntu, Fedora, Debian, Arch, and m
 ```bash
 uv tool install git+https://github.com/kiloscheffer/dbxignore
 dbxignore install                    # writes systemd user unit, enables it
-systemctl --user status dbxignore.service
+dbxignore status                     # verify: daemon running and watching Dropbox
 ```
 
-`dbxignore install` writes `~/.config/systemd/user/dbxignore.service` and runs `systemctl --user enable --now` so the daemon starts at login.
+`dbxignore install` writes `~/.config/systemd/user/dbxignore.service` and runs `systemctl --user enable --now` so the daemon starts at login. For systemd-level unit state or recent log output, see `systemctl --user status dbxignore.service` or `journalctl --user -u dbxignore.service`.
 
 For non-stock Dropbox installs, export `DBXIGNORE_ROOT` before running `dbxignore install` — the install step will read the variable from your shell environment and write a corresponding `Environment="DBXIGNORE_ROOT=..."` line into the generated unit's `[Service]` block. Without this, a shell-exported value won't reach the daemon when systemd launches it. If your Dropbox location ever changes, re-run `dbxignore install` after updating the export.
 
@@ -126,6 +127,7 @@ Install:
 pip install dbxignore                # or: uv tool install dbxignore
 dbxignore install                    # writes ~/Library/LaunchAgents/com.kiloscheffer.dbxignore.plist
                                      # and bootstraps it into your GUI session
+dbxignore status                     # verify: daemon running and watching Dropbox
 ```
 
 `dbxignore install` requires that you've logged into the macOS GUI at least once since the last reboot — the GUI domain that LaunchAgents bootstrap into isn't initialized until a graphical login. SSH-on-fresh-boot installs fail with `Bootstrap failed: 5: Input/output error`. Log into the GUI, then retry.

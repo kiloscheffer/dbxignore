@@ -19,7 +19,11 @@
 .PARAMETER InstallSpec
     The dbxignore package spec to install via `uv tool install`. Defaults
     to "dbxignore" (latest from PyPI). Accepts version pins
-    ("dbxignore==0.4.1") or git refs ("git+https://github.com/.../@v0.4.1").
+    ("dbxignore==0.4.1"), git refs ("git+https://github.com/.../@v0.4.1"),
+    or a local directory ("." for current checkout). When InstallSpec is
+    a local directory, Phase 2 also runs `uv cache clean dbxignore` first
+    to force a fresh build (item #116 — uv's path-keyed sdist cache
+    doesn't change-detect against git state).
     Equivalent to DBXIGNORE_INSTALL_SPEC in the bash scripts.
 
 .EXAMPLE
@@ -257,6 +261,17 @@ function Test-InstallDbxignore {
     if ($existing) {
         Write-Note "dbxignore already installed via uv tool - uninstalling first for a clean test"
         uv tool uninstall dbxignore 2>$null | Out-Null
+    }
+
+    # BACKLOG #116: invalidate uv's path-keyed sdist cache for local-source
+    # installs. Without this, `uv tool install .` from a directory that's
+    # been built before reuses the cached wheel at `sdists-v9/path/<dir-hash>/`
+    # — the cache key is the source dir path, not the git SHA, so commits
+    # don't invalidate it. Excludes PyPI names and git URLs (which aren't
+    # existing directories).
+    if (Test-Path -PathType Container $InstallSpec -ErrorAction SilentlyContinue) {
+        Write-Note "local-source InstallSpec - cleaning uv cache for dbxignore (item #116)"
+        uv cache clean dbxignore 2>$null | Out-Null
     }
 
     uv tool install $InstallSpec

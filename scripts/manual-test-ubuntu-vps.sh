@@ -291,6 +291,17 @@ phase_dbxignore_install() {
         uv tool uninstall dbxignore >/dev/null 2>&1 || true
     fi
 
+    # BACKLOG #116: invalidate uv's path-keyed sdist cache for local-source
+    # installs. Without this, `uv tool install .` from a directory that's
+    # been built before reuses the cached wheel at `sdists-v9/path/<dir-hash>/`
+    # — the cache key is the source dir path, not the git SHA, so commits
+    # don't invalidate it. Excludes PyPI names and git URLs (which aren't
+    # existing directories).
+    if [[ -d "$DBXIGNORE_INSTALL_SPEC" ]]; then
+        note "local-source DBXIGNORE_INSTALL_SPEC — cleaning uv cache for dbxignore (item #116)"
+        uv cache clean dbxignore >/dev/null 2>&1 || true
+    fi
+
     uv tool install --link-mode=copy "$DBXIGNORE_INSTALL_SPEC"
     export PATH="$HOME/.local/bin:$PATH"
 

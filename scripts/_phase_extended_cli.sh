@@ -126,20 +126,27 @@ phase_extended_cli() {
     fi
     assert_grep /tmp/dbx-noop.out 'Nothing to apply' "4l — emits 'Nothing to apply (rules already in sync)'"
 
-    # 4m — detector regression: build/* + !build/keep/ no conflict (PR #108)
-    note "4m — detector fix: build/* + !build/keep/ no conflict"
-    rm -rf "$T"; mkdir -p "$T/build/keep"
-    printf 'build/*\n!build/keep/\n' > "$T/.dropboxignore"
-    : > "$T/build/keep/inside.txt"
-    : > "$T/build/foo.tmp"
+    # 4m — detector regression: case4m_target/* + !case4m_target/keep/ no conflict (PR #108)
+    # Uses `case4m_target` instead of the generic `build` because testers who
+    # have run `dbxignore init` at their Dropbox root carry a `build/` rule
+    # at the ancestor `.dropboxignore`. Dropbox's directory-inheritance
+    # semantic would then mark the test's `build/` via the ancestor rule and
+    # mask the local `!build/keep/` negation — a real but unrelated effect
+    # that the case 4m assertion would mis-attribute as "detector fix didn't
+    # apply" (backlog item #111).
+    note "4m — detector fix: case4m_target/* + !case4m_target/keep/ no conflict"
+    rm -rf "$T"; mkdir -p "$T/case4m_target/keep"
+    printf 'case4m_target/*\n!case4m_target/keep/\n' > "$T/.dropboxignore"
+    : > "$T/case4m_target/keep/inside.txt"
+    : > "$T/case4m_target/foo.tmp"
     if dbxignore apply "$T" --yes >/dev/null 2>&1; then
         pass "4m — apply (rc=0)"
     else
         fail "4m — apply"
     fi
-    assert_xattr_set   "$T/build/foo.tmp" "4m — build/foo.tmp marked (build/* matches)"
-    assert_xattr_unset "$T/build/keep"    "4m — build/keep NOT marked (negation now effective post-fix)"
-    assert_xattr_unset "$T/build"         "4m — build/ NOT marked (children-only rule)"
+    assert_xattr_set   "$T/case4m_target/foo.tmp" "4m — case4m_target/foo.tmp marked (case4m_target/* matches)"
+    assert_xattr_unset "$T/case4m_target/keep"    "4m — case4m_target/keep NOT marked (negation now effective post-fix)"
+    assert_xattr_unset "$T/case4m_target"         "4m — case4m_target/ NOT marked (children-only rule)"
     # status should report 0 conflicts for this rule set (the negation IS effective).
     local status_out; status_out="$(dbxignore status 2>&1)"
     if printf '%s\n' "$status_out" | grep -qE 'rule conflicts \([1-9]'; then
@@ -157,7 +164,7 @@ phase_extended_cli() {
         fail "4n — clear"
         sed 's/^/    /' /tmp/dbx-clear.out
     fi
-    assert_xattr_unset "$T/build/foo.tmp" "4n — clear removed build/foo.tmp marker"
+    assert_xattr_unset "$T/case4m_target/foo.tmp" "4n — clear removed case4m_target/foo.tmp marker"
 
     # 4o — dbxignore ignore <path> happy path (PR #191)
     note "4o — dbxignore ignore (basic)"

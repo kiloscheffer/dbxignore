@@ -671,12 +671,19 @@ phase_daemon() {
     fi
     # Once --summary reports state=running, the same state.json drives the
     # human path: last_sweep is not None, so the 'daemon: running' branch
-    # fires synchronously. Single-shot is safe here.
-    if dbxignore status 2>&1 | grep -qE '^daemon: running \(pid=[0-9]+\)$'; then
+    # fires synchronously. Capture into a variable first, then grep — under
+    # `set -o pipefail`, piping a multi-line Python producer directly into
+    # `grep -q` flips the if-branch on a successful match: grep exits 0 on
+    # line 1 and closes the pipe, Python's block-buffered stdout flush hits
+    # the closed reader and BrokenPipeError makes Python exit 1, pipefail
+    # propagates that 1 to the overall pipe exit. Mirrors the `--summary`
+    # poll pattern just above.
+    human_out="$(dbxignore status 2>&1 || true)"
+    if printf '%s\n' "$human_out" | grep -qE '^daemon: running \(pid=[0-9]+\)$'; then
         pass "5f — human status reports 'daemon: running'"
     else
         note "    human status output:"
-        dbxignore status 2>&1 | sed 's/^/    /'
+        printf '%s\n' "$human_out" | sed 's/^/    /'
         fail "5f — human status did not report 'daemon: running'"
     fi
 

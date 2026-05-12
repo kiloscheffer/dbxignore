@@ -128,12 +128,41 @@ def _redirect_stdio_to_attached_console() -> None:
     # CONOUT$ / CONIN$ are magic filenames for the current console's
     # I/O buffers. Opening them gives Python text file objects backed
     # by the newly-attached console.
+    #
+    # CRITICAL: only redirect when sys.stdout/stderr aren't already
+    # connected to valid backing FDs. If the user ran `dbxignore --version
+    # > out.txt` or `dbxignore --version | findstr ...` from cmd.exe, the
+    # cmd-inherited stdio is the redirected file or pipe — overwriting
+    # with CONOUT$ would send output to the console instead, breaking
+    # the redirection contract.
+    if _stdio_already_connected():
+        return
     try:
         sys.stdout = open("CONOUT$", "w", encoding="utf-8", buffering=1)
         sys.stderr = open("CONOUT$", "w", encoding="utf-8", buffering=1)
         sys.stdin = open("CONIN$", "r", encoding="utf-8")
     except OSError:
         pass  # leave whatever was there; output may not surface
+
+
+def _stdio_already_connected() -> bool:
+    """Return True if sys.stdout AND sys.stderr have valid backing FDs.
+
+    Used to decide whether to reopen CONOUT$. If either is None or its
+    .fileno() raises, the GUI-subsystem launch had no inherited stdio
+    (Task Scheduler, Explorer) and we should reopen against the attached
+    console. If both have valid FDs, they point at either the parent
+    console (cmd / PowerShell terminal launch) or a user-supplied
+    redirect (file, pipe); leave them alone.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if stream is None:
+            return False
+        try:
+            stream.fileno()
+        except (AttributeError, OSError, ValueError):
+            return False
+    return True
 
 
 def _show_help_message_box() -> None:
@@ -173,6 +202,7 @@ The four API calls we need (`AttachConsole`, `MessageBoxW`, plus the magic `CONO
 | `src/dbxignore/_windows_console.py` | **NEW**, ~80 LOC. The module above. |
 | `src/dbxignore/__main__.py` | Wrap entry in `main_entry()` that calls `_windows_console.early_init()` on Windows, then deferred-imports `cli.main`. |
 | `src/dbxignore/cli.py` | Delete `daemon_main` function and its `@click.command()` decorator (~10 LOC). The `@main.command() def daemon(...)` subcommand stays. |
+| `src/dbxignore/state.py` | `is_daemon_alive()` process-name guard tuple gains `"dbxignore"` alongside the existing `"python"` and `"dbxignored"`. After unification, a frozen daemon process is named `dbxignore.exe` — without this addition, `cli.status` / `cli.clear`'s daemon-alive guards would misclassify the new daemon as not running. Drop `"dbxignored"` from the tuple at the same time since it can no longer exist. |
 
 ### Group 2 — Build / packaging
 
@@ -181,6 +211,7 @@ The four API calls we need (`AttachConsole`, `MessageBoxW`, plus the magic `CONO
 | `pyproject.toml` | `[project.scripts]` reduced to `dbxignore = "dbxignore.__main__:main_entry"` (was `dbxignore.cli:main`). Drop `dbxignored = "dbxignore.cli:daemon_main"`. |
 | `pyinstaller/dbxignore.spec` | Drop the second `EXE(...)` block. Remaining `EXE(...)`: switch `console=True → console=False`; entry script repoint to `src/dbxignore/__main__.py`. |
 | `pyinstaller/dbxignore-macos.spec` | Drop the second `EXE(...)` block. Entry script repoint to `__main__.py`. No console-mode change on macOS. |
+| `.github/workflows/release.yml` | Drop the `dbxignored.exe` smoke-test step (`./dist/dbxignored.exe --help`) and the corresponding `dbxignored` macOS Mach-O smoke test. Drop both binaries from the `gh release upload` step's artifact list. Only `dist/dbxignore.exe` and `dist-macos/dbxignore` ship. |
 
 ### Group 3 — Installers
 
@@ -202,6 +233,7 @@ The four API calls we need (`AttachConsole`, `MessageBoxW`, plus the magic `CONO
 | `tests/test_windows_task.py` | Update XML-content assertions. |
 | `tests/test_linux_systemd.py` | Update `ExecStart` line assertions. |
 | `tests/test_macos_launchd.py` | Update `ProgramArguments` assertions. |
+| `tests/test_state.py` | New tests for the updated `is_daemon_alive()` name-guard tuple: process named `dbxignore.exe` (or `dbxignore`) classifies as a live daemon; process named `dbxignored.exe` no longer classifies (since that name shouldn't exist post-unification — the guard's removal is intentional, to surface stale state from a non-upgraded install). |
 
 ### Group 5 — Documentation
 
@@ -219,7 +251,7 @@ The four API calls we need (`AttachConsole`, `MessageBoxW`, plus the magic `CONO
 | `scripts/manual-test-macos.sh` | Phase 5: assertion that `ProgramArguments` includes `daemon`. |
 | `scripts/manual-test-windows.ps1` | Phase 5: assertion that Task Scheduler `<Arguments>` includes `daemon`. New Phase 4.5 case for AttachConsole flow (`dbxignore --version` from PowerShell → terminal output reaches stdout). Manual-visual-verification note in docstring for MessageBox on Explorer double-click. |
 
-**Rough diff size estimate**: ~600–800 LOC across 21 files. ~80 LOC pure addition (`_windows_console.py`), ~120 LOC test addition, the rest is small per-file deletions and one-line referent updates.
+**Rough diff size estimate**: ~700–900 LOC across 24 files (revised up from 21 after review findings added `state.py`, `test_state.py`, and `release.yml` to the list). ~110 LOC pure addition (`_windows_console.py` including the new `_stdio_already_connected` helper), ~180 LOC test addition, the rest is small per-file deletions and one-line referent updates.
 
 ## Test coverage
 
@@ -281,9 +313,37 @@ def test_early_init_messagebox_oserror_still_exits(monkeypatch):
     with pytest.raises(SystemExit) as exc_info:
         _windows_console.early_init()
     assert exc_info.value.code == 0
+
+
+@pytest.mark.parametrize("flag", ["--help", "-h", "--version"])
+def test_early_init_help_or_version_does_not_take_messagebox_branch(monkeypatch, flag):
+    """`--help` and `--version` are valid CLI usage that must NEVER pop the
+    MessageBox even if AttachConsole fails (unusual edge: someone double-clicks
+    a desktop shortcut with `--help` in the target). Argv with any non-program
+    token always takes the silent-return branch; click handles --help/--version
+    normally from there."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "argv", ["dbxignore.exe", flag])
+    monkeypatch.setattr(_windows_console, "_attach_parent_console", lambda: False)
+    box_calls = []
+    monkeypatch.setattr(_windows_console, "_show_help_message_box",
+                        lambda: box_calls.append("shown"))
+    _windows_console.early_init()  # should not raise SystemExit
+    assert box_calls == []
+
+
+def test_stdio_already_connected_returns_false_when_stdout_is_none(monkeypatch):
+    monkeypatch.setattr(sys, "stdout", None)
+    assert not _windows_console._stdio_already_connected()
+
+
+def test_stdio_already_connected_returns_true_for_real_stdio():
+    """Under pytest, sys.stdout has a valid fileno (pytest's capture wrappers
+    proxy through to a real FD). Verifies the happy-path detection."""
+    assert _windows_console._stdio_already_connected()
 ```
 
-5 tests, ~120 LOC including docstrings.
+8 tests, ~180 LOC including docstrings. The added tests cover the `--help` / `--version`-doesn't-take-MessageBox invariant (Finding 5 from review) and the `_stdio_already_connected` predicate that gates the CONOUT$ reopen (Finding 1).
 
 ### Layer B — Windows-only ctypes smoke tests
 
@@ -314,8 +374,12 @@ Mechanical updates to assertions referencing `dbxignored`:
 ### Manual-test script additions
 
 - All three Phase 5 sections gain a service-entry-form assertion (`ExecStart` / `ProgramArguments` / `<Arguments>` references `daemon`).
-- Windows script gains a Phase 4.5 case running `dbxignore --version` and asserting output reaches the terminal (proves AttachConsole succeeded).
-- Windows script docstring header documents the manual visual verification: double-click `dbxignore.exe` from File Explorer; expect MessageBox dialog with title "dbxignore" and body containing "dbxignore is a command-line tool"; click OK to dismiss.
+- Windows script gains **three** new Phase 4.5 cases covering the GUI-subsystem-CLI surface:
+  1. **Terminal output** — run `dbxignore --version` and assert the version line appears in the PowerShell terminal. Proves AttachConsole succeeded and stdio is wired to the parent console.
+  2. **Pipe capture** — run `dbxignore --version 2>&1 | Out-String` and assert the captured string contains the version line. Proves piping works (i.e., that the redirected stdio is preserved rather than overwritten by CONOUT$).
+  3. **File redirect** — run `dbxignore --version > $tmpFile` and assert the file contains the version line. Proves redirection to file works (same root concern as pipe).
+- Windows script docstring header documents the **manual visual verification**: double-click `dbxignore.exe` from File Explorer; expect MessageBox dialog with title "dbxignore" and body containing "dbxignore is a command-line tool"; click OK to dismiss. (Cannot be scripted without flaky UI-automation; manual on release.)
+- Windows script docstring header documents the **known cmd.exe limitation**: when invoked from cmd.exe (not PowerShell), the GUI-subsystem binary returns the prompt immediately and output appears asynchronously after the next prompt. Use `start /wait dbxignore.exe ...` for synchronous behavior in cmd. PowerShell does not have this limitation. **Not a regression introduced by the manual-test script** — it's an artifact of cmd.exe's GUI-subsystem dispatch semantics; documented in README's Known limitations.
 
 ## Migration
 
@@ -323,7 +387,7 @@ Mechanical updates to assertions referencing `dbxignored`:
 
 Under `[Unreleased] > ### Changed`:
 
-> **Breaking** — `dbxignored` removed as a separate entry-point. The daemon is now invoked via `dbxignore daemon` (a subcommand of the main CLI). Before: `pip install dbxignore` produced both `dbxignore` and `dbxignored` console scripts, and the GitHub Release shipped both `dbxignore.exe` and `dbxignored.exe` PyInstaller binaries. After: one `dbxignore` console script, one `dbxignore.exe` PyInstaller binary, one `dbxignore` Mach-O on macOS. The Windows binary is now built as a GUI-subsystem executable that calls `AttachConsole(ATTACH_PARENT_PROCESS)` early in `main()`: launched from a terminal it attaches to the parent's console and behaves as a normal CLI; launched by Task Scheduler at logon (no parent console, `daemon` in argv) it runs silently; launched by Explorer double-click (no parent console, empty argv) it pops a `user32.MessageBoxW` saying "dbxignore is a command-line tool. Open Windows Terminal, PowerShell, or Command Prompt and run `dbxignore --help`." All three contexts handled by one binary. Resolves BACKLOG #30. **Migration required**: run `dbxignore uninstall && dbxignore install` after upgrading to refresh the platform service entry (Task Scheduler on Windows, systemd unit on Linux, launchd plist on macOS) — the pre-v0.6 entry references `dbxignored` which no longer exists; without the re-install the daemon won't auto-start at next logon. Shell aliases, scripts, and custom service configs that invoked `dbxignored` should be updated to `dbxignore daemon`. (#30)
+> **Breaking** — `dbxignored` removed as a separate entry-point. The daemon is now invoked via `dbxignore daemon` (a subcommand of the main CLI). Before: `pip install dbxignore` produced both `dbxignore` and `dbxignored` console scripts, and the GitHub Release shipped both `dbxignore.exe` and `dbxignored.exe` PyInstaller binaries. After: one `dbxignore` console script, one `dbxignore.exe` PyInstaller binary, one `dbxignore` Mach-O on macOS. The Windows binary is now built as a GUI-subsystem executable that calls `AttachConsole(ATTACH_PARENT_PROCESS)` early in `main()`: launched from PowerShell or Windows Terminal it attaches to the parent's console and behaves as a normal CLI; launched by Task Scheduler at logon (no parent console, `daemon` in argv) it runs silently; launched by Explorer double-click (no parent console, empty argv) it pops a `user32.MessageBoxW` saying "dbxignore is a command-line tool. Open Windows Terminal, PowerShell, or Command Prompt and run `dbxignore --help`." Known limitation: when invoked from `cmd.exe` (not PowerShell), the GUI-subsystem binary returns the prompt immediately and output appears asynchronously — use `start /wait dbxignore.exe ...` for synchronous behavior in cmd. Resolves BACKLOG #30. **Migration**: the recommended sequence is `dbxignore uninstall` *before* upgrading (while still on v0.5.x — the old `uninstall` knows how to remove its own service entry), then upgrade, then `dbxignore install` to register the new entry referencing `dbxignore daemon`. If you've already upgraded without uninstalling first, `dbxignore uninstall && dbxignore install` should still refresh the service entry — both versions identify the entry by the same service name and the new uninstall code path tolerates the old `ExecStart` / `ProgramArguments` / `<Arguments>` shape. Shell aliases, scripts, and custom service configs that invoked `dbxignored` should be updated to `dbxignore daemon`. (#30)
 
 ### README upgrade subsection
 
@@ -333,28 +397,50 @@ New heading after the existing "Upgrading from v0.2.x" subsection:
 >
 > v0.6 collapses `dbxignored` into the main `dbxignore` command. After upgrading, the daemon is invoked as `dbxignore daemon` instead of `dbxignored`, and the old `dbxignored` / `dbxignored.exe` binary no longer exists.
 >
-> The platform service entry (Task Scheduler, systemd unit, launchd plist) written by `dbxignore install` on v0.5.x references `dbxignored`. After upgrading the binary, that entry points at a path that no longer exists — the daemon will not auto-start at next logon. Re-run install to refresh:
+> The platform service entry (Task Scheduler, systemd unit, launchd plist) written by `dbxignore install` on v0.5.x references `dbxignored`. The cleanest migration sequence runs `dbxignore uninstall` **before** upgrading — the v0.5.x uninstall knows how to remove its own service entry. Then upgrade and re-install:
 >
 > ```bash
-> # Linux / macOS
-> dbxignore uninstall
-> uv tool upgrade dbxignore     # or: pip install --upgrade dbxignore
-> dbxignore install
+> # Linux / macOS — recommended order
+> dbxignore uninstall                # while still on v0.5.x
+> uv tool upgrade dbxignore          # or: pip install --upgrade dbxignore
+> dbxignore install                  # registers the new service entry
 > ```
 >
 > ```powershell
-> # Windows
-> dbxignore uninstall
-> uv tool upgrade dbxignore     # or download new dbxignore.exe (no more dbxignored.exe)
+> # Windows — recommended order
+> dbxignore uninstall                # while still on v0.5.x
+> uv tool upgrade dbxignore          # or download new dbxignore.exe (no more dbxignored.exe)
 > dbxignore install
 > ```
+>
+> **If you've already upgraded without uninstalling first**, you can still refresh the service entry: `dbxignore uninstall && dbxignore install` from the new binary identifies the service by the same name as v0.5.x and tolerates the old entry's `ExecStart` / `ProgramArguments` shape during the uninstall step.
 >
 > If you have shell aliases or scripts that call `dbxignored` directly, replace them with `dbxignore daemon`. The two have identical behavior.
 
 ### README "Known limitations" subsection
 
-New entry:
+Two new entries:
 
+> ### Windows: cmd.exe doesn't wait for the binary to exit
+>
+> Because `dbxignore.exe` is built as a GUI-subsystem executable (to suppress the console flash at Task Scheduler logon), `cmd.exe` does not wait for it to exit before returning the prompt:
+>
+> ```cmd
+> C:\> dbxignore --version
+>
+> C:\> dbxignore, version 0.6.0       (this line may appear after the prompt)
+> ```
+>
+> Output still reaches the terminal via `AttachConsole(ATTACH_PARENT_PROCESS)`, but the timing is asynchronous. For scripts that need synchronous exit semantics (so subsequent commands see the correct `%ERRORLEVEL%`), wrap the call in `start /wait`:
+>
+> ```cmd
+> C:\> start /wait dbxignore --version
+> ```
+>
+> **PowerShell**, **Windows Terminal**, and the **VS Code integrated terminal (PowerShell host)** wait for GUI-subsystem children correctly and are not affected. We recommend PowerShell as the primary shell for interactive `dbxignore` use on Windows.
+>
+> Pipe (`|`) and redirect (`>`) operators work correctly in both cmd.exe and PowerShell because the binary preserves the inherited stdio handles when they're valid (only reopens against `CONOUT$` when no inherited stdio exists, such as Task Scheduler launches).
+>
 > ### Git Bash / MinTTY
 >
 > On Windows, running `dbxignore.exe` directly inside Git Bash or any MinTTY-hosted shell (`mintty`, `Cygwin Terminal`) may produce no visible output. MinTTY is a pseudo-terminal that uses pipes for stdio rather than a real Windows console; `AttachConsole` finds no console handle to attach to, so the binary runs silently. Workaround: wrap the call in `winpty`:
@@ -379,6 +465,8 @@ New entry:
 | Double-click UX on Windows | MessageBox + exit | Clean, explicit user feedback. AllocConsole + help + pause was an alternative but the press-any-key dance is clunky. Silent exit gives no feedback; URL-open feels indirect. |
 | PR shape | Single PR, all-in-one | The change is logically atomic (entry-point + binaries + installers + tests + docs all derive from "drop dbxignored"). Two- or three-PR splits create per-commit checkout states that are temporarily inconsistent. |
 | Server Core handling | `try/except OSError` around the MessageBox call | The original #30 body claimed user32 might not exist on Server Core. That's incorrect — user32 is part of the base Win32 API. The real concern is window-station unavailability. The defensive try/except covers both that case and any other unusual session state. |
+| cmd.exe wait-issue | Accept the limitation; document in README + CHANGELOG | A GUI-subsystem binary launched from cmd.exe does not block cmd.exe before returning the prompt — fundamental to how cmd dispatches GUI children. Cannot be fixed from the binary's side. Alternatives (ship two binaries; use a console-mode launcher that spawns the GUI binary) defeat #30's unification goal. PowerShell / Windows Terminal / VS Code-integrated-PowerShell users get correct waiting; cmd.exe users use `start /wait dbxignore.exe ...` for synchronous scripts. |
+| Preserve already-redirected stdio | `_redirect_stdio_to_attached_console` checks `_stdio_already_connected()` before reopening CONOUT$ | When the user runs `dbxignore --version > out.txt` or `dbxignore --version \| findstr ...` from cmd.exe, the inherited stdio points at the redirected file/pipe. Overwriting with CONOUT$ would send output to the console instead — breaking the redirection contract. Detect the case and skip the reopen. Reopen only fires when sys.stdout is None (Task Scheduler launches with no parent stdio at all). |
 | ctypes vs pywin32 | stdlib ctypes | Four API calls don't justify a 30 MB runtime dependency. ctypes is the canonical Win32 wrapper for "thin, no-deps" projects. |
 | Deprecation period | None — clean break | Pre-1.0 SemVer allows breaking changes on MINOR bumps with explicit callouts. v0.3.0 set the precedent (the project rename required a manual `uninstall --purge` + reinstall dance). The migration command is one line; deprecation shim would be more code than the migration is worth. |
 

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from . import linux_systemd as linux_systemd
     from . import macos_launchd as macos_launchd
     from . import windows_task as windows_task
@@ -49,3 +52,69 @@ def uninstall_service() -> None:
             f"uninstall: no backend for platform {sys.platform!r}; "
             "supported: 'win32', 'linux', 'darwin'"
         )
+
+
+logger = logging.getLogger(__name__)
+
+InstallOutcome = Literal[
+    "installed", "skipped-no-roots", "skipped-bad-roots", "skipped-platform", "failed-write"
+]
+UninstallOutcome = Literal["uninstalled", "skipped-platform"]
+
+
+def install_shell_integration_if_supported(*, dropbox_roots: list[Path]) -> InstallOutcome:
+    """Install Windows Explorer right-click verbs; no-op on Linux/macOS.
+
+    Branches on ``sys.platform`` first — non-Windows returns ``"skipped-platform"``
+    without referencing the windows_shell module. On Windows, an empty
+    ``dropbox_roots`` returns ``"skipped-no-roots"`` with a WARNING; a
+    ``RuntimeError`` from the platform module (typically a refused root
+    containing ``"``) returns ``"skipped-bad-roots"`` with a WARNING.
+    """
+    if sys.platform != "win32":
+        logger.debug("shell-integration install: no-op on platform %s", sys.platform)
+        return "skipped-platform"
+    if not dropbox_roots:
+        logger.warning(
+            "shell-integration install: no Dropbox roots discovered; skipping. "
+            "Re-run `dbxignore install` after Dropbox is set up."
+        )
+        return "skipped-no-roots"
+    from dbxignore.install.windows_shell import install_shell_integration
+
+    try:
+        install_shell_integration(dropbox_roots)
+    except RuntimeError as exc:
+        logger.warning("shell-integration install refused: %s", exc)
+        return "skipped-bad-roots"
+    except OSError as exc:
+        # Registry write failed mid-install (ACL/policy denied, etc.). The
+        # platform module has already attempted cleanup of partial writes
+        # before re-raising. Daemon is already installed; shell integration
+        # is convenience — WARN-and-continue rather than escalate.
+        logger.warning(
+            "shell-integration install failed: %s. Daemon service is installed; "
+            "re-run `dbxignore install` to retry the shell integration arm.",
+            exc,
+        )
+        return "failed-write"
+    return "installed"
+
+
+def uninstall_shell_integration_if_supported(
+    *, errors: list[tuple[str, str]] | None = None
+) -> UninstallOutcome:
+    """Remove Windows Explorer right-click verbs; no-op on Linux/macOS.
+
+    The optional ``errors`` accumulator is threaded through to the platform
+    module so CLI ``--purge`` can escalate registry failures into a non-zero
+    exit. When ``errors=None`` (plain ``uninstall``), the platform module
+    falls back to logging WARNINGs for each failed DeleteKey.
+    """
+    if sys.platform != "win32":
+        logger.debug("shell-integration uninstall: no-op on platform %s", sys.platform)
+        return "skipped-platform"
+    from dbxignore.install.windows_shell import uninstall_shell_integration
+
+    uninstall_shell_integration(errors=errors)
+    return "uninstalled"

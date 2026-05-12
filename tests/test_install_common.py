@@ -167,3 +167,71 @@ def test_detect_invocation_returns_pythonw_on_windows(
     exe, args = _common.detect_invocation()
     assert exe == tmp_path / "Scripts" / "pythonw.exe"
     assert args == "-m dbxignore daemon"
+
+
+def test_detect_cli_invocation_frozen_uses_sibling_exe(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Frozen PyInstaller install: dbxignore.exe sibling is the registered target."""
+    daemon_exe = tmp_path / _daemon_name()
+    daemon_exe.write_text("")
+    cli_name = "dbxignore.exe" if sys.platform == "win32" else "dbxignore"
+    cli_exe = tmp_path / cli_name
+    cli_exe.write_text("")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(daemon_exe))
+    from dbxignore.install import _common
+
+    result = _common.detect_cli_invocation()
+    assert result == f'"{cli_exe}"'
+
+
+def test_detect_cli_invocation_uses_shutil_which_shim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-frozen install: `dbxignore` PATH shim is the registered target."""
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "platform", "win32")
+    shim_path = "C:\\Users\\u\\.local\\bin\\dbxignore.exe"
+
+    def fake_which(name: str) -> str | None:
+        if name == "dbxignore":
+            return shim_path
+        return None
+
+    monkeypatch.setattr("shutil.which", fake_which)
+    from dbxignore.install import _common
+
+    result = _common.detect_cli_invocation()
+    assert result == f'"{shim_path}"'
+
+
+def test_detect_cli_invocation_falls_back_to_python_module(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """No frozen install, no `dbxignore` on PATH: use `<sys.executable> -m dbxignore`."""
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "platform", "win32")
+    python_exe = tmp_path / "Scripts" / "python.exe"
+    python_exe.parent.mkdir()
+    python_exe.write_text("")
+    monkeypatch.setattr(sys, "executable", str(python_exe))
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    from dbxignore.install import _common
+
+    result = _common.detect_cli_invocation()
+    assert result == f'"{python_exe}" -m dbxignore'
+
+
+def test_detect_cli_invocation_raises_when_no_python_and_no_sys_executable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defensive guard: empty sys.executable + no shim must raise, not return Path('.')."""
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "executable", "")
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    from dbxignore.install import _common
+
+    with pytest.raises(RuntimeError, match="dbxignore not on PATH"):
+        _common.detect_cli_invocation()

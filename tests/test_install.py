@@ -1,11 +1,15 @@
 import getpass
 import subprocess
 import sys
+import types
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
+from dbxignore import install as install_pkg
 from dbxignore.install import windows_task as install
+from dbxignore.install.windows_shell import _format_applies_to_query
 from tests.conftest import FakeMarkers
 
 
@@ -812,3 +816,308 @@ def test_purge_cleans_separate_log_dir_on_darwin(
 
     assert not state_dir.exists()
     assert not log_dir.exists()
+
+
+def test_format_applies_to_query_single_root() -> None:
+    roots = [Path(r"C:\Users\kilo\Dropbox")]
+    result = _format_applies_to_query(roots)
+    assert result == (
+        r'System.ItemPathDisplay:="C:\\Users\\kilo\\Dropbox" OR '
+        r'System.ItemPathDisplay:~<"C:\\Users\\kilo\\Dropbox\\"'
+    )
+
+
+def test_format_applies_to_query_multiple_roots_or_joined() -> None:
+    roots = [Path(r"C:\Users\kilo\Dropbox"), Path(r"D:\Dropbox (Personal)")]
+    result = _format_applies_to_query(roots)
+    # Each root contributes := + :~< ; four clauses total OR-joined.
+    assert result.count(" OR ") == 3
+    assert r'System.ItemPathDisplay:="C:\\Users\\kilo\\Dropbox"' in result
+    assert r'System.ItemPathDisplay:~<"C:\\Users\\kilo\\Dropbox\\"' in result
+    assert r'System.ItemPathDisplay:="D:\\Dropbox (Personal)"' in result
+    assert r'System.ItemPathDisplay:~<"D:\\Dropbox (Personal)\\"' in result
+
+
+def test_format_applies_to_query_refuses_root_with_quote() -> None:
+    roots = [Path('C:\\bad"path')]
+    with pytest.raises(RuntimeError, match="contains a quote character"):
+        _format_applies_to_query(roots)
+
+
+def test_format_applies_to_query_empty_roots_returns_empty_string() -> None:
+    # The dispatcher guards against this case (skipped-no-roots), but
+    # the pure helper itself handles it cleanly — empty list ⇒ empty string.
+    assert _format_applies_to_query([]) == ""
+
+
+def test_format_applies_to_query_drive_root() -> None:
+    """Drive-root Dropbox mount (e.g. `D:\\`) — str(Path) already has a trailing
+    backslash; the prefix clause must not double-append, otherwise it produces
+    `D:\\\\` in stored AQS which parses to `D:\\` (two backslashes) and matches
+    no real Windows path.
+    """
+    roots = [Path("D:\\")]
+    result = _format_applies_to_query(roots)
+    # Exact clause for the root itself: `D:` followed by one backslash, doubled
+    # in stored AQS to `D:\\`.
+    assert r'System.ItemPathDisplay:="D:\\"' in result
+    # Prefix clause: same `D:\\` — the prefix-construction normalization
+    # (`rstrip + re-append`) ensures we DON'T get `D:\\\\` here.
+    assert r'System.ItemPathDisplay:~<"D:\\"' in result
+    # And we should have exactly two clauses (no spurious extras).
+    assert result.count(" OR ") == 1
+
+
+def _inject_fake_windows_shell(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    install_side_effect: object = None,
+) -> types.ModuleType:
+    """Inject a fake dbxignore.install.windows_shell module into sys.modules.
+
+    The dispatcher uses a lazy `from dbxignore.install.windows_shell import ...`
+    inside the `if sys.platform == "win32":` arm. To exercise that arm on
+    non-Windows test legs we must populate sys.modules so the lazy import
+    resolves to our fake — patching install_pkg.windows_shell would silently
+    miss because the lazy import hasn't fired yet to create the attribute.
+    """
+    fake = types.ModuleType("dbxignore.install.windows_shell")
+    fake.install_shell_integration = MagicMock(side_effect=install_side_effect)  # type: ignore[attr-defined]
+    fake.uninstall_shell_integration = MagicMock()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "dbxignore.install.windows_shell", fake)
+    return fake
+
+
+def test_dispatcher_install_skipped_platform_on_non_windows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    fake = _inject_fake_windows_shell(monkeypatch)
+
+    outcome = install_pkg.install_shell_integration_if_supported(dropbox_roots=[tmp_path])
+
+    assert outcome == "skipped-platform"
+    fake.install_shell_integration.assert_not_called()
+
+
+def test_dispatcher_install_skipped_no_roots(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    fake = _inject_fake_windows_shell(monkeypatch)
+
+    with caplog.at_level("WARNING"):
+        outcome = install_pkg.install_shell_integration_if_supported(dropbox_roots=[])
+
+    assert outcome == "skipped-no-roots"
+    fake.install_shell_integration.assert_not_called()
+    assert any("no Dropbox roots" in r.message for r in caplog.records)
+
+
+def test_dispatcher_install_skipped_bad_roots(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    _inject_fake_windows_shell(
+        monkeypatch,
+        install_side_effect=RuntimeError("contains a quote character"),
+    )
+
+    with caplog.at_level("WARNING"):
+        outcome = install_pkg.install_shell_integration_if_supported(dropbox_roots=[tmp_path])
+
+    assert outcome == "skipped-bad-roots"
+    assert any("quote character" in r.message for r in caplog.records)
+
+
+def test_dispatcher_uninstall_skipped_platform_on_non_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    fake = _inject_fake_windows_shell(monkeypatch)
+
+    outcome = install_pkg.uninstall_shell_integration_if_supported()
+
+    assert outcome == "skipped-platform"
+    fake.uninstall_shell_integration.assert_not_called()
+
+
+def test_dispatcher_uninstall_threads_errors_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The dispatcher must pass through the exact `errors` list object."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    fake = _inject_fake_windows_shell(monkeypatch)
+
+    my_errors: list[tuple[str, str]] = []
+    outcome = install_pkg.uninstall_shell_integration_if_supported(errors=my_errors)
+
+    assert outcome == "uninstalled"
+    # The kwarg `errors=` must be the same object we passed in (identity check).
+    fake.uninstall_shell_integration.assert_called_once()
+    assert fake.uninstall_shell_integration.call_args.kwargs["errors"] is my_errors
+
+
+from click.testing import CliRunner  # noqa: E402
+
+from dbxignore import cli as cli_module  # noqa: E402
+
+
+def _make_cli_test_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> tuple[CliRunner, MagicMock, MagicMock]:
+    """Mock install_service, uninstall_service, and the shell-integration dispatcher.
+
+    Returns the runner plus the two mock objects for assertions.
+    """
+    from dbxignore import state
+
+    # All CLI plumbing tests in this file exercise the Windows install
+    # path's dispatcher wiring. Monkeypatch sys.platform so the CLI's
+    # Windows-only gates (e.g. _discover_roots() conditional) fire as
+    # they would on a real Windows host.
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    install_service = MagicMock()
+    uninstall_service = MagicMock()
+    install_shell = MagicMock(return_value="installed")
+    uninstall_shell = MagicMock(return_value="uninstalled")
+
+    monkeypatch.setattr("dbxignore.install.install_service", install_service)
+    monkeypatch.setattr("dbxignore.install.uninstall_service", uninstall_service)
+    monkeypatch.setattr("dbxignore.install.install_shell_integration_if_supported", install_shell)
+    monkeypatch.setattr(
+        "dbxignore.install.uninstall_shell_integration_if_supported", uninstall_shell
+    )
+    # Stub _discover_roots so we get deterministic roots into the dispatcher.
+    monkeypatch.setattr(cli_module, "_discover_roots", lambda: [tmp_path])
+    # Redirect state dir so --purge doesn't touch the real user state dir.
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+
+    return CliRunner(), install_shell, uninstall_shell
+
+
+def test_install_calls_shell_helper_by_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runner, install_shell, _ = _make_cli_test_env(monkeypatch, tmp_path)
+    result = runner.invoke(cli_module.main, ["install"])
+    assert result.exit_code == 0, result.output
+    install_shell.assert_called_once()
+    assert install_shell.call_args.kwargs["dropbox_roots"] == [tmp_path]
+
+
+def test_install_echoes_skipped_no_roots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """skipped-no-roots outcome surfaces a recovery hint on stderr."""
+    runner, install_shell, _ = _make_cli_test_env(monkeypatch, tmp_path)
+    install_shell.return_value = "skipped-no-roots"
+    result = runner.invoke(cli_module.main, ["install"])
+    assert result.exit_code == 0, result.output
+    assert "no Dropbox roots" in result.output
+    assert "Re-run `dbxignore install`" in result.output
+
+
+def test_install_echoes_skipped_bad_roots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """skipped-bad-roots outcome surfaces a recovery hint on stderr."""
+    runner, install_shell, _ = _make_cli_test_env(monkeypatch, tmp_path)
+    install_shell.return_value = "skipped-bad-roots"
+    result = runner.invoke(cli_module.main, ["install"])
+    assert result.exit_code == 0, result.output
+    assert "quote character" in result.output
+    assert "Rename the folder" in result.output
+
+
+def test_install_echoes_failed_write(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """failed-write outcome surfaces a recovery hint on stderr."""
+    runner, install_shell, _ = _make_cli_test_env(monkeypatch, tmp_path)
+    install_shell.return_value = "failed-write"
+    result = runner.invoke(cli_module.main, ["install"])
+    assert result.exit_code == 0, result.output
+    assert "registry write failed" in result.output
+    assert "re-run `dbxignore install` to retry" in result.output
+
+
+def test_dispatcher_install_oserror_returns_failed_write(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    """Registry OSError from windows_shell propagates as failed-write outcome with WARNING.
+
+    Mirrors the skipped-bad-roots test pattern but exercises the OSError
+    catch (registry write failure) rather than the RuntimeError catch
+    (refused root).
+    """
+    monkeypatch.setattr(sys, "platform", "win32")
+    _inject_fake_windows_shell(
+        monkeypatch,
+        install_side_effect=OSError(13, "Access denied (simulated)"),
+    )
+
+    with caplog.at_level("WARNING"):
+        outcome = install_pkg.install_shell_integration_if_supported(dropbox_roots=[tmp_path])
+
+    assert outcome == "failed-write"
+    assert any("shell-integration install failed" in r.message for r in caplog.records)
+
+
+def test_install_no_shell_integration_skips_helper(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runner, install_shell, _ = _make_cli_test_env(monkeypatch, tmp_path)
+    result = runner.invoke(cli_module.main, ["install", "--no-shell-integration"])
+    assert result.exit_code == 0, result.output
+    install_shell.assert_not_called()
+
+
+def test_uninstall_calls_shell_helper_by_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runner, _, uninstall_shell = _make_cli_test_env(monkeypatch, tmp_path)
+    result = runner.invoke(cli_module.main, ["uninstall"])
+    assert result.exit_code == 0, result.output
+    uninstall_shell.assert_called_once()
+    # Plain uninstall: no errors list, so WARN-and-continue applies.
+    assert uninstall_shell.call_args.kwargs.get("errors") is None
+
+
+def test_uninstall_no_shell_integration_skips_helper(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runner, _, uninstall_shell = _make_cli_test_env(monkeypatch, tmp_path)
+    result = runner.invoke(cli_module.main, ["uninstall", "--no-shell-integration"])
+    assert result.exit_code == 0, result.output
+    uninstall_shell.assert_not_called()
+
+
+def test_uninstall_purge_overrides_no_shell_integration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--purge --no-shell-integration: shell dispatcher invoked exactly once with errors list."""
+    runner, _, uninstall_shell = _make_cli_test_env(monkeypatch, tmp_path)
+    result = runner.invoke(cli_module.main, ["uninstall", "--purge", "--no-shell-integration"])
+    assert result.exit_code == 0, result.output
+    uninstall_shell.assert_called_once()
+    # Under --purge, errors list IS provided (escalation path).
+    assert uninstall_shell.call_args.kwargs["errors"] == []
+
+
+def test_uninstall_purge_exits_2_on_shell_errors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """If the shell-integration arm populates the errors list, --purge must exit 2."""
+    runner, _, uninstall_shell = _make_cli_test_env(monkeypatch, tmp_path)
+
+    def populate_errors(*, errors: list[tuple[str, str]]) -> str:
+        errors.append((r"HKCU\Software\Classes\…\DbxignoreIgnore", "Access denied"))
+        return "uninstalled"
+
+    uninstall_shell.side_effect = populate_errors
+    result = runner.invoke(cli_module.main, ["uninstall", "--purge"])
+    assert result.exit_code == 2, result.output
+    assert "Could not fully remove Explorer integration" in result.output
+    assert "Access denied" in result.output

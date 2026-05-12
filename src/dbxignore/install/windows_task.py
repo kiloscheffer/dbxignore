@@ -92,12 +92,18 @@ def install_task() -> None:
         tmp.write(xml)
         tmp_path = Path(tmp.name)
     try:
-        subprocess.run(  # noqa: S603 — hardcoded args, no user data
-            ["schtasks", "/Create", "/XML", str(tmp_path), "/TN", TASK_NAME, "/F"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        try:
+            subprocess.run(  # noqa: S603 — hardcoded args, no user data
+                ["schtasks", "/Create", "/XML", str(tmp_path), "/TN", TASK_NAME, "/F"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"schtasks /Create returned {exc.returncode}: "
+                f"{(exc.stderr or '').strip() or (exc.stdout or '').strip() or '(no output)'}"
+            ) from exc
     finally:
         tmp_path.unlink(missing_ok=True)
 

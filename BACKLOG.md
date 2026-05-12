@@ -2486,7 +2486,7 @@ Touches: `scripts/manual-test-ubuntu-vps.sh`, `scripts/manual-test-macos.sh`.
 
 ## 114. CLI `--verbose` flag for INFO logging; default to WARNING
 
-dbxignore's CLI configures root `logging.basicConfig` at INFO level, so every `logger.info()` call in any code path surfaces on the user's terminal. Modern Python CLIs (`uv tool install`, `pip`, `pre-commit`, `rustup`) default to terse one-line summaries with logging treated as operator-only (file handlers, not user terminals); INFO is gated behind a `--verbose` flag.
+dbxignore's CLI configures root `logging.basicConfig` at INFO level, so every `logger.info()` call in any code path surfaces on the user's terminal alongside the intentional `click.echo` summary lines. The duplication is most visible on `dbxignore install`, where each install function emits both a `logger.info` confirmation and a parallel `click.echo` line for the same operation — meaning user-facing summaries and operator-only log entries share one stderr channel rather than being routed separately.
 
 Today `dbxignore install` (and other subcommands that hit `logger.info` paths) emit log lines alongside the intentional `click.echo` summaries. PR #222 dropped two duplicate `logger.info` calls in `windows_task.install_task` and `windows_shell.install_shell_integration` to mitigate the most visible duplication on the `install` path, but the broader pattern remains: any future `logger.info` added to a CLI-reachable code path will surface to users by default.
 

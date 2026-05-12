@@ -619,10 +619,14 @@ function Test-ExtendedCli {
         Copy-Item $stateJson4s $stateJson4sBackup -Force
     }
     Set-Content -Path $stateJson4s -Value "{}" -Encoding utf8 -NoNewline
-    # Deny read for the current user via NTFS ACL. Python's `Path.read_bytes()`
-    # evaluates the deny ACE and raises PermissionError, simulating the
-    # locked / permission-denied scenario item #97 documents.
-    icacls $stateJson4s /deny "${env:USERNAME}:R" *> $null
+    # Deny only Read Data (RD) — NOT the generic R, which includes RA
+    # (Read Attributes). `state.default_path().exists()` in cli.clear
+    # queries file attributes; if RA were denied, exists() could return
+    # False, the fail-closed arm would skip, and 4s would fail for the
+    # wrong reason. RD blocks `Path.read_bytes()` (PermissionError) but
+    # leaves attribute reads intact, simulating the locked/permission-
+    # denied scenario item #97 documents.
+    icacls $stateJson4s /deny "${env:USERNAME}:(RD)" *> $null
 
     # Setup a marker for clear to target.
     Remove-Item -Recurse -Force $T -ErrorAction SilentlyContinue

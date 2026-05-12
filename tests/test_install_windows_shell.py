@@ -230,3 +230,86 @@ def test_install_partial_write_failure_cleans_up(
             winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"{isolated_reg_base}\\{verb}")
 
     assert any("install failed mid-write" in r.message for r in caplog.records)
+
+
+def test_uninstall_removes_both_verb_keys(
+    isolated_reg_base: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Clean install + clean uninstall: both verb keys are gone."""
+    monkeypatch.setattr(
+        windows_shell,
+        "detect_cli_invocation",
+        lambda: r'"C:\test\dbxignore.exe"',
+    )
+    windows_shell.install_shell_integration([tmp_path])
+    windows_shell.uninstall_shell_integration()
+
+    for verb in ("DbxignoreIgnore", "DbxignoreRestore"):
+        with pytest.raises(FileNotFoundError):
+            winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"{isolated_reg_base}\\{verb}")
+
+
+def test_uninstall_idempotent_when_keys_missing(
+    isolated_reg_base: str,
+) -> None:
+    """No error when uninstall is called against a clean registry."""
+    # Should not raise — the FileNotFoundError arms swallow the missing-key case.
+    windows_shell.uninstall_shell_integration()
+    windows_shell.uninstall_shell_integration(errors=[])
+
+
+@pytest.mark.parametrize("with_errors_list", [True, False])
+def test_uninstall_other_oserror_routes_to_errors_or_warning(
+    isolated_reg_base: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+    with_errors_list: bool,
+) -> None:
+    """Non-FileNotFoundError OSError: routed to errors list OR logged as WARNING.
+
+    Loop must always continue to the next key — never abort partway.
+    """
+    monkeypatch.setattr(
+        windows_shell,
+        "detect_cli_invocation",
+        lambda: r'"C:\test\dbxignore.exe"',
+    )
+    windows_shell.install_shell_integration([tmp_path])
+
+    real_delete = winreg.DeleteKey
+    call_count = {"n": 0}
+
+    def flaky_delete(root: int, path: str) -> None:
+        call_count["n"] += 1
+        if call_count["n"] == 1:  # First call (DbxignoreIgnore's command subkey).
+            raise OSError(5, "Access denied (simulated)")
+        real_delete(root, path)
+
+    monkeypatch.setattr(winreg, "DeleteKey", flaky_delete)
+
+    errors: list[tuple[str, str]] | None = [] if with_errors_list else None
+    with caplog.at_level("WARNING"):
+        windows_shell.uninstall_shell_integration(errors=errors)
+
+    # The second verb's keys (DbxignoreRestore) should still be removed —
+    # the loop didn't abort.
+    with pytest.raises(FileNotFoundError):
+        winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"{isolated_reg_base}\\DbxignoreRestore")
+
+    if with_errors_list:
+        # The command subkey fails (call 1). Because winreg.DeleteKey refuses to
+        # delete a non-leaf key, the verb key itself also fails — so >= 1 errors
+        # land (typically 2 on Windows: command + verb key both rejected).
+        assert errors is not None and len(errors) >= 1
+        assert errors[0][0].endswith("DbxignoreIgnore\\command")
+        assert "Access denied" in errors[0][1]
+        # WARNING path is NOT taken when errors list provided.
+        assert not any("shell-integration uninstall" in r.message for r in caplog.records)
+    else:
+        assert any(
+            "shell-integration uninstall" in r.message and "Access denied" in r.message
+            for r in caplog.records
+        )

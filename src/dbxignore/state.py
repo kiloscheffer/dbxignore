@@ -138,7 +138,22 @@ def is_daemon_alive(pid: int | None, create_time: float | None = None) -> bool:
     except ImportError:
         try:
             os.kill(pid, 0)
-        except (OSError, ProcessLookupError):
+        except ProcessLookupError:
+            return False
+        except (OSError, SystemError) as exc:
+            # SystemError can wrap an OSError when os.kill fires while
+            # another exception is still being handled — e.g. a prior
+            # ImportError on psutil left exception state dirty (item
+            # #118, surfaced by Python 3.14 + the psutil partial-init
+            # scenario from item #117). Either way the PID probe is
+            # indeterminate; log so the cause surfaces, return False
+            # so callers don't block on an opaque error.
+            logger.warning(
+                "os.kill(%d, 0) probe failed (%s: %s); treating daemon as not alive",
+                pid,
+                type(exc).__name__,
+                exc,
+            )
             return False
         return True
     if not psutil.pid_exists(pid):

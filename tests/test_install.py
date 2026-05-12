@@ -1029,6 +1029,40 @@ def test_install_echoes_skipped_bad_roots(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert "Rename the folder" in result.output
 
 
+def test_install_echoes_failed_write(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """failed-write outcome surfaces a recovery hint on stderr."""
+    runner, install_shell, _ = _make_cli_test_env(monkeypatch, tmp_path)
+    install_shell.return_value = "failed-write"
+    result = runner.invoke(cli_module.main, ["install"])
+    assert result.exit_code == 0, result.output
+    assert "registry write failed" in result.output
+    assert "re-run `dbxignore install` to retry" in result.output
+
+
+def test_dispatcher_install_oserror_returns_failed_write(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    """Registry OSError from windows_shell propagates as failed-write outcome with WARNING.
+
+    Mirrors the skipped-bad-roots test pattern but exercises the OSError
+    catch (registry write failure) rather than the RuntimeError catch
+    (refused root).
+    """
+    monkeypatch.setattr(sys, "platform", "win32")
+    _inject_fake_windows_shell(
+        monkeypatch,
+        install_side_effect=OSError(13, "Access denied (simulated)"),
+    )
+
+    with caplog.at_level("WARNING"):
+        outcome = install_pkg.install_shell_integration_if_supported(dropbox_roots=[tmp_path])
+
+    assert outcome == "failed-write"
+    assert any("shell-integration install failed" in r.message for r in caplog.records)
+
+
 def test_install_no_shell_integration_skips_helper(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

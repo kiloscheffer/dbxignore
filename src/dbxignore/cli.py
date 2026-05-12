@@ -1549,6 +1549,13 @@ def install(no_shell_integration: bool) -> None:
                 "`dbxignore install`.",
                 err=True,
             )
+        elif outcome == "failed-write":
+            click.echo(
+                "Could not install Explorer right-click integration: registry "
+                "write failed. Daemon service was installed successfully; "
+                "re-run `dbxignore install` to retry.",
+                err=True,
+            )
 
 
 @main.command()

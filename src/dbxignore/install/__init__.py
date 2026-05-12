@@ -56,7 +56,9 @@ def uninstall_service() -> None:
 
 logger = logging.getLogger(__name__)
 
-InstallOutcome = Literal["installed", "skipped-no-roots", "skipped-bad-roots", "skipped-platform"]
+InstallOutcome = Literal[
+    "installed", "skipped-no-roots", "skipped-bad-roots", "skipped-platform", "failed-write"
+]
 UninstallOutcome = Literal["uninstalled", "skipped-platform"]
 
 
@@ -85,6 +87,17 @@ def install_shell_integration_if_supported(*, dropbox_roots: list[Path]) -> Inst
     except RuntimeError as exc:
         logger.warning("shell-integration install refused: %s", exc)
         return "skipped-bad-roots"
+    except OSError as exc:
+        # Registry write failed mid-install (ACL/policy denied, etc.). The
+        # platform module has already attempted cleanup of partial writes
+        # before re-raising. Daemon is already installed; shell integration
+        # is convenience — WARN-and-continue rather than escalate.
+        logger.warning(
+            "shell-integration install failed: %s. Daemon service is installed; "
+            "re-run `dbxignore install` to retry the shell integration arm.",
+            exc,
+        )
+        return "failed-write"
     return "installed"
 
 

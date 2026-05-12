@@ -104,8 +104,6 @@ def install_shell_integration(dropbox_roots: list[Path]) -> None:
             logger.warning("shell-integration cleanup after failed install also failed")
         raise
 
-    logger.info("Installed Explorer right-click integration (HKCU verbs).")
-
 
 def uninstall_shell_integration(*, errors: list[tuple[str, str]] | None = None) -> None:
     """Remove the two HKCU verb keys. Idempotent.

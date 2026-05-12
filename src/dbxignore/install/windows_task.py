@@ -94,9 +94,10 @@ def install_task() -> None:
     try:
         subprocess.run(  # noqa: S603 — hardcoded args, no user data
             ["schtasks", "/Create", "/XML", str(tmp_path), "/TN", TASK_NAME, "/F"],
+            capture_output=True,
+            text=True,
             check=True,
         )
-        logger.info("Installed scheduled task %s", TASK_NAME)
     finally:
         tmp_path.unlink(missing_ok=True)
 
@@ -115,9 +116,7 @@ def install_task() -> None:
         text=True,
         check=False,
     )
-    if run_result.returncode == 0:
-        logger.info("Started scheduled task %s", TASK_NAME)
-    else:
+    if run_result.returncode != 0:
         logger.warning(
             "schtasks /Run returned %s: %s. Task is registered and will start "
             "at next logon; run `schtasks /Run /TN %s` to start now.",

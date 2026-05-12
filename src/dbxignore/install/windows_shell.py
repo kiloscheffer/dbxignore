@@ -88,12 +88,12 @@ def install_shell_integration(dropbox_roots: list[Path]) -> None:
     try:
         for verb_key, mui_verb, command in verbs:
             verb_path = f"{_REG_BASE}\\{verb_key}"
-            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, verb_path) as key:
-                winreg.SetValueEx(key, "MUIVerb", 0, winreg.REG_SZ, mui_verb)
-                winreg.SetValueEx(key, "AppliesTo", 0, winreg.REG_SZ, applies_to)
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, verb_path) as key:  # type: ignore[attr-defined, unused-ignore]
+                winreg.SetValueEx(key, "MUIVerb", 0, winreg.REG_SZ, mui_verb)  # type: ignore[attr-defined, unused-ignore]
+                winreg.SetValueEx(key, "AppliesTo", 0, winreg.REG_SZ, applies_to)  # type: ignore[attr-defined, unused-ignore]
             command_path = f"{verb_path}\\command"
-            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, command_path) as key:
-                winreg.SetValueEx(key, "", 0, winreg.REG_SZ, command)
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, command_path) as key:  # type: ignore[attr-defined, unused-ignore]
+                winreg.SetValueEx(key, "", 0, winreg.REG_SZ, command)  # type: ignore[attr-defined, unused-ignore]
     except OSError as exc:
         logger.warning("shell-integration install failed mid-write (%s); attempting cleanup", exc)
         try:
@@ -123,7 +123,7 @@ def uninstall_shell_integration(*, errors: list[tuple[str, str]] | None = None) 
     for verb_key in (_IGNORE_VERB, _RESTORE_VERB):
         for subpath in (f"{_REG_BASE}\\{verb_key}\\command", f"{_REG_BASE}\\{verb_key}"):
             try:
-                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, subpath)
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, subpath)  # type: ignore[attr-defined, unused-ignore]
             except FileNotFoundError:
                 pass
             except OSError as exc:

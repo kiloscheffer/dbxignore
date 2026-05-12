@@ -87,10 +87,10 @@ def _read_value(base: str, verb: str, value_name: str) -> str:
     if value_name == "(default)":
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"{base}\\{verb}\\command") as key:
             value, _ = winreg.QueryValueEx(key, "")
-            return value  # type: ignore[no-any-return]
+            return value  # type: ignore[no-any-return, unused-ignore]
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"{base}\\{verb}") as key:
         value, _ = winreg.QueryValueEx(key, value_name)
-        return value  # type: ignore[no-any-return]
+        return value  # type: ignore[no-any-return, unused-ignore]
 
 
 def test_install_writes_both_verb_keys(
@@ -193,7 +193,7 @@ def test_install_partial_write_failure_cleans_up(
         call_count["n"] += 1
         if call_count["n"] == 3:  # After Ignore verb's MUIVerb + AppliesTo, before command.
             raise OSError(13, "Access denied (simulated)")
-        real_set(key, name, *args)  # type: ignore[call-overload]
+        real_set(key, name, *args)  # type: ignore[call-overload, unused-ignore]
 
     monkeypatch.setattr(winreg, "SetValueEx", flaky_set)
 

@@ -141,10 +141,10 @@ def test_install_applies_to_query_includes_each_root(
     windows_shell.install_shell_integration(roots)
 
     applies_to = _read_value(isolated_reg_base, _IGNORE_VERB, "AppliesTo")
-    assert r'System.ItemPathDisplay:="C:\\Users\\u\\Dropbox"' in applies_to
-    assert r'System.ItemPathDisplay:~<"C:\\Users\\u\\Dropbox\\"' in applies_to
-    assert r'System.ItemPathDisplay:="D:\\Dropbox (Personal)"' in applies_to
-    assert r'System.ItemPathDisplay:~<"D:\\Dropbox (Personal)\\"' in applies_to
+    assert r'System.ItemPathDisplay:="C:\Users\u\Dropbox"' in applies_to
+    assert r'System.ItemPathDisplay:~<"C:\Users\u\Dropbox\"' in applies_to
+    assert r'System.ItemPathDisplay:="D:\Dropbox (Personal)"' in applies_to
+    assert r'System.ItemPathDisplay:~<"D:\Dropbox (Personal)\"' in applies_to
 
 
 def test_install_applies_to_same_on_both_verbs(
@@ -174,8 +174,8 @@ def test_install_overwrites_existing_keys(
     windows_shell.install_shell_integration([new_root])
 
     applies_to = _read_value(isolated_reg_base, _IGNORE_VERB, "AppliesTo")
-    assert str(new_root).replace("\\", "\\\\") in applies_to
-    assert str(old_root).replace("\\", "\\\\") not in applies_to
+    assert str(new_root) in applies_to
+    assert str(old_root) not in applies_to
 
 
 def test_install_partial_write_failure_cleans_up(

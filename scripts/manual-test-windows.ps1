@@ -1030,9 +1030,9 @@ function Test-Daemon {
     }
 
     # AppliesTo includes the Dropbox root.
+    # AQS uses single literal backslashes — no doubling — so match the path as-is.
     $appliesTo = (Get-ItemProperty -Path $ignoreKey -Name "AppliesTo").AppliesTo
-    $dropboxEscaped = $script:DropboxDir -replace "\\", "\\"
-    if ($appliesTo -like "*$dropboxEscaped*") {
+    if ($appliesTo -like "*$($script:DropboxDir)*") {
         Write-Pass "5g - AppliesTo contains Dropbox root"
     } else {
         Write-Fail "5g - AppliesTo missing Dropbox root: $appliesTo"

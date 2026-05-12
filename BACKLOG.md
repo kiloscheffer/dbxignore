@@ -2501,11 +2501,28 @@ Touches: `src/dbxignore/cli.py` (`@main.group()` decorator, basicConfig setup); 
 
 ---
 
+## 115. Manual-test Phase 5g doesn't verify Explorer actually shows the verbs
+
+Phase 5g (PR #222) reads the HKCU verb keys and asserts the stored `AppliesTo` string contains the Dropbox root path. This catches "did we write the right characters?" but not "does Windows Explorer evaluate the AQS query the way we expect?" — and the latter is the user-visible contract.
+
+The hot-fix (PR #224) caught a backslash-escape bug only through manual right-click testing on a Windows host with Dropbox installed. The unit + integration tests AND Phase 5g all passed against the broken form because they checked the wrong invariant.
+
+**Fix candidates:**
+- Add a Phase 5g sub-case that invokes a shell extension probe via PowerShell's COM access (`Shell.Application.NameSpace(...).ParseName(...).InvokeVerb(...)` — needs investigation whether this respects `AppliesTo`).
+- Add a programmatic AQS query parser test using `IConditionFactory::ParseCondition` via P/Invoke from PowerShell. Verify the `AppliesTo` string parses and evaluates against a known property bag.
+- Document Phase 5g's limitation in the assertion comments — make explicit that "registry string format" and "Explorer behavior" are different invariants.
+
+**Urgency:** medium. The hot-fix exposed that the test surface couldn't catch a class of bug that required manual verification to detect. Test fidelity gap.
+
+Touches: `scripts/manual-test-windows.ps1` (Phase 5g case extension).
+
+---
+
 ## Status
 
 ### Open
 
-Twenty-three items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12).
+Twenty-four items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12).
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2530,6 +2547,7 @@ Twenty-three items. Most are passive (no concrete trigger requires action) — b
 - **#109** — `FileNotFoundError`-before-`OSError` 'vanished path' idiom now repeats across `reconcile._reconcile_path` (2 sites), `state._read_at` (1 site), and `cli.uninstall --purge` (4 sites after PR #204). Filed for design-tension record (precedent: #40, #51, #108); current per-site shape is defensible because the local response action varies (return None / set flag / continue / pass) and no generic helper fits all seven sites.
 - **#113** — Other `cmd | grep -q` sites in `scripts/manual-test-{ubuntu-vps,macos}.sh` (`--help`, `explain`, `uv tool list`) share the SIGPIPE+pipefail false-failure risk that bit 5f. Capture-then-grep is the preemptive fix; defer until one of them actually flakes.
 - **#114** — CLI `--verbose` flag for INFO logging; default to WARNING. Today INFO-level log lines from `logger.info` calls surface to users on every CLI invocation alongside intentional `click.echo` summaries. Cosmetic QoL.
+- **#115** — Manual-test Phase 5g checks registry string content but not Explorer's evaluation of the AQS query. The backslash-escape regression (PR #224) passed Phase 5g while verbs were invisible in Explorer. Test fidelity gap for registry-written AQS strings.
 
 ### Resolved (reverse chronological)
 

@@ -2596,11 +2596,39 @@ Touches: `src/dbxignore/state.py:is_daemon_alive`.
 
 ---
 
+## 119. macOS `uninstall_agent` swallows `launchctl bootout` errors silently
+
+`src/dbxignore/install/macos_launchd.py:uninstall_agent()` calls `subprocess.run(["launchctl", "bootout", _service_target()], check=False, capture_output=True)` and discards both the return code and the captured stderr. The plist is then unlinked unconditionally and `dbxignore uninstall` returns rc=0 — even when `bootout` failed and the launchd job is still registered in the user's GUI session.
+
+Surfacing event: macOS beta tester running v0.5.1's `scripts/manual-test-macos.sh` Phase 6 on 2026-05-12 hit the case. `dbxignore uninstall (rc=0)` passed; the immediately-following `launchctl print gui/<uid>/com.kiloscheffer.dbxignore` failed with "launchd job still bootstrapped after uninstall". The LaunchAgent plist had been removed (subsequent pass), but launchd retained the registration. The follow-up `dbxignore uninstall --purge` then succeeded against a launchd domain that still knew about a job whose plist was already gone.
+
+Structurally parallel to item #87 (Windows: `schtasks /End` was fire-and-forget, daemon could be alive after `dbxignore uninstall` returned). PR #171 fixed Windows by polling `state.is_daemon_alive(pid, create_time)` until the daemon process exits, then proceeding with `/Delete`. The macOS uninstall path never got the parallel synchronous-shutdown treatment, and the swallowed-stderr pattern means there is no signal at the CLI surface that bootout failed.
+
+The same `check=False, capture_output=True` shape appears in `install/linux_systemd.py:uninstall_unit()` for `systemctl --user disable --now`. No observed Linux failure yet — file this against macOS only; if a parallel Linux symptom surfaces, file separately.
+
+**Fix candidates:**
+
+- (1) **Log bootout's captured stderr at WARNING when return code is non-zero** (preferred minimum-blast-radius). Restores diagnosability without changing the uninstall contract. The plist still gets unlinked, the CLI still returns rc=0, but the user sees `WARNING dbxignore.install.macos_launchd: launchctl bootout failed (rc=N): <stderr>`. Two-line change. The same fix shape applies to `install_agent`'s pre-install `bootout` cleanup (currently silent for the same reason).
+- (2) **Poll `launchctl print` after bootout, with timeout** (parallel to PR #171's Windows synchronous-shutdown contract). After `bootout` returns, loop `launchctl print gui/<uid>/<label>` until it fails (job deregistered) or a timeout fires. On timeout, log WARNING with the captured bootout stderr. More invasive but matches the existing Windows contract.
+- (3) **Combine: log + poll + exit-2 on confirmed bootout failure**. Most invasive; changes the uninstall contract to fail loud when bootout did not take. Reconsider once (1) and (2) data points are in hand.
+
+**Urgency:** medium. Silent failure on uninstall is the same class as #98 (purge silently dropping marker errors, fixed in PR #204). The daemon process keeps running and Dropbox-sync side effects continue until the user notices launchd still has the job. Surfacing path today is the macOS manual-test script's existing `launchctl print` check; without a tester running it, the failure mode hides.
+
+Diagnostic data to collect from the tester before deciding between (1) and (2):
+
+- `launchctl print gui/$(id -u)/com.kiloscheffer.dbxignore | head -30` — is the registration a stale entry or a `KeepAlive`-resurrected one?
+- `launchctl bootout gui/$(id -u)/com.kiloscheffer.dbxignore; echo $?` — does manual bootout succeed? What is `$?` and stderr?
+- `sw_vers` — macOS version (Tahoe / File Provider mode interactions documented in CLAUDE.md).
+
+Touches: `src/dbxignore/install/macos_launchd.py:uninstall_agent` (and `install_agent`'s pre-install bootout for symmetry); `tests/test_macos_launchd.py` (add bootout-failure-mode coverage); optionally `scripts/manual-test-macos.sh` Phase 6 (add the bootout stderr capture + WARNING-line assertion if fix candidate (1) is taken).
+
+---
+
 ## Status
 
 ### Open
 
-Fifteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12). Item #117 surfaced 2026-05-12 during the chore/115 work session (uv venv hygiene); the other two items from that session shipped 2026-05-12: #116 (uv build-cache hygiene) in PR #227, #118 (is_daemon_alive SystemError escalation) in PR #230.
+Sixteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12). Item #117 surfaced 2026-05-12 during the chore/115 work session (uv venv hygiene); the other two items from that session shipped 2026-05-12: #116 (uv build-cache hygiene) in PR #227, #118 (is_daemon_alive SystemError escalation) in PR #230. Item #119 surfaced 2026-05-12 from a macOS beta-tester run of `scripts/manual-test-macos.sh` Phase 6 on v0.5.1 — `launchctl bootout` failed silently and the launchd job survived `dbxignore uninstall`.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2617,6 +2645,7 @@ Fifteen items. Most are passive (no concrete trigger requires action) — bundle
 - **#109** — `FileNotFoundError`-before-`OSError` 'vanished path' idiom now repeats across `reconcile._reconcile_path` (2 sites), `state._read_at` (1 site), and `cli.uninstall --purge` (4 sites after PR #204). Filed for design-tension record (precedent: #40, #51, #108); current per-site shape is defensible because the local response action varies (return None / set flag / continue / pass) and no generic helper fits all seven sites.
 - **#113** — Other `cmd | grep -q` sites in `scripts/manual-test-{ubuntu-vps,macos}.sh` (`--help`, `explain`, `uv tool list`) share the SIGPIPE+pipefail false-failure risk that bit 5f. Capture-then-grep is the preemptive fix; defer until one of them actually flakes.
 - **#117** — Failed `uv tool uninstall` leaves the venv directory behind; the next `uv tool install` does an incremental update instead of fresh install, producing a hybrid venv (mixed install-event packages). Triggers subtle import / C-extension issues. Recovery is manual `Remove-Item ~\AppData\Roaming\uv\tools\<pkg>`.
+- **#119** — macOS `uninstall_agent` calls `launchctl bootout` with `check=False, capture_output=True` and discards both rc and stderr; plist gets unlinked unconditionally and `dbxignore uninstall` returns rc=0 even when bootout failed. Parallel to Windows #87/PR #171; same silent-swallow class as #98/PR #204. Surfaced by macOS beta tester on v0.5.1 2026-05-12.
 ### Resolved (reverse chronological)
 
 #### 2026-05-12

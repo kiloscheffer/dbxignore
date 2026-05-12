@@ -1005,7 +1005,7 @@ function Test-Daemon {
         Write-Fail "5f - human status did not report 'daemon: running'"
     }
 
-    # 5g — registry keys after default install (PR #NNN)
+    # 5g — registry keys after default install (PR #222)
     # Read-only: doesn't mutate state. Phase 5 ends in installed-daemon
     # state, exactly as today, so Phase 6's `dbxignore uninstall` precondition
     # is preserved.
@@ -1129,7 +1129,7 @@ function Test-Uninstall {
         Write-Fail "6a - --summary post-uninstall did not match expected pattern: $sumUninst"
     }
 
-    # 6c — registry keys gone after plain uninstall (PR #NNN)
+    # 6c — registry keys gone after plain uninstall (PR #222)
     Write-Note "6c - HKCU verb keys removed by default uninstall"
     $regBase = "HKCU:\Software\Classes\AllFilesystemObjects\shell"
     if (-not (Test-Path "$regBase\DbxignoreIgnore") -and -not (Test-Path "$regBase\DbxignoreRestore")) {
@@ -1217,7 +1217,7 @@ function Test-Uninstall {
         Write-Fail "6b - --summary post-purge did not match expected pattern: $sumPurge"
     }
 
-    # 6d / 6e — --no-shell-integration preservation + --purge override (PR #NNN)
+    # 6d / 6e — --no-shell-integration preservation + --purge override (PR #222)
     # Phase 6's existing flow ended with `dbxignore uninstall --purge` →
     # daemon gone, state gone, registry gone. We now exercise the
     # --no-shell-integration contrast cycle: re-install, plain uninstall

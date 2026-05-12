@@ -133,7 +133,7 @@ def test_detect_invocation_raises_when_no_python3_and_no_sys_executable(
 def test_detect_invocation_returns_pythonw_on_windows(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Windows non-frozen: select ``pythonw.exe`` next to ``sys.executable``.
+    """Windows non-frozen, pythonw.exe present: select ``pythonw.exe`` next to ``sys.executable``.
 
     Task Scheduler launches at logon and the daemon must not flash a
     console window or orphan a ``conhost.exe`` — ``pythonw.exe`` (the
@@ -145,6 +145,10 @@ def test_detect_invocation_returns_pythonw_on_windows(
     Item #50 — collapsed `windows_task.detect_invocation` into a re-export
     of `_common.detect_invocation` once the Windows non-frozen branch was
     folded in here.
+
+    Item #100 — the Windows branch now checks ``pythonw.exe`` actually
+    exists before returning it. This test pins the happy path: both
+    ``python.exe`` and ``pythonw.exe`` present, pythonw selected.
 
     Uses ``tmp_path`` for the executable rather than a hardcoded
     ``C:\\…\\python.exe`` literal: on POSIX hosts ``Path(r"C:\\…")`` parses
@@ -161,12 +165,43 @@ def test_detect_invocation_returns_pythonw_on_windows(
     python_exe = tmp_path / "Scripts" / "python.exe"
     python_exe.parent.mkdir()
     python_exe.write_text("")
+    pythonw_exe = tmp_path / "Scripts" / "pythonw.exe"
+    pythonw_exe.write_text("")
     monkeypatch.setattr(sys, "executable", str(python_exe))
     from dbxignore.install import _common
 
     exe, args = _common.detect_invocation()
-    assert exe == tmp_path / "Scripts" / "pythonw.exe"
+    assert exe == pythonw_exe
     assert args == "-m dbxignore daemon"
+
+
+def test_detect_invocation_falls_back_to_python_exe_on_windows_when_pythonw_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Windows non-frozen, pythonw.exe missing: fall back to python.exe with a WARNING.
+
+    Item #100 — Microsoft Store Python, embedded interpreters, and pruned
+    CPython installs may ship only ``python.exe``. Without a fallback, the
+    install previously wrote a Task Scheduler entry pointing at a
+    nonexistent ``pythonw.exe`` and the daemon silently never started at
+    logon. New behavior: return ``sys.executable`` (``python.exe``) with
+    a WARNING log explaining the console-flash trade-off.
+    """
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "platform", "win32")
+    python_exe = tmp_path / "Scripts" / "python.exe"
+    python_exe.parent.mkdir()
+    python_exe.write_text("")
+    # NB: pythonw.exe intentionally NOT created.
+    monkeypatch.setattr(sys, "executable", str(python_exe))
+    from dbxignore.install import _common
+
+    with caplog.at_level("WARNING", logger="dbxignore.install._common"):
+        exe, args = _common.detect_invocation()
+
+    assert exe == python_exe
+    assert args == "-m dbxignore daemon"
+    assert any("pythonw.exe not found" in rec.message for rec in caplog.records)
 
 
 def test_detect_cli_invocation_frozen_uses_sibling_exe(

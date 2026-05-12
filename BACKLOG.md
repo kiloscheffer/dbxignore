@@ -2450,11 +2450,37 @@ Touches: TBD — depends on root cause. Likely either `src/dbxignore/install/win
 
 ---
 
+## 113. Other `cmd | grep -q` sites in bash smoke scripts share the SIGPIPE+pipefail false-failure risk
+
+Phase 5f's human-status `dbxignore status 2>&1 | grep -qE '^daemon: running ...'` was confirmed to false-fail under `set -euo pipefail` because Python's block-buffered stdout flushes on exit, races the grep-quit-on-match pipe close, raises `BrokenPipeError`, exits 1, and pipefail propagates the 1 to the overall pipe exit — flipping the `if`-branch even when the regex matched. PR #218 fixes 5f by capture-then-grep; see `docs/internals/active-gotchas.md` for the diagnostic shape.
+
+Other `<command> | grep -q ...` sites in `scripts/manual-test-{ubuntu-vps,macos}.sh` carry the same theoretical risk wherever the producer emits more than one line:
+
+- `dbxignore --help 2>&1 | grep -q 'apply'` (`manual-test-ubuntu-vps.sh:329`, `manual-test-macos.sh:243`) — `--help` is multi-line.
+- `dbxignore explain "..." 2>&1 | grep -qF '[dropped]'` (`manual-test-ubuntu-vps.sh:388`, `manual-test-macos.sh:314`) — `explain` is multi-line.
+- `dbxignore explain "..." 2>&1 | grep -q '\*\.log'` (`manual-test-ubuntu-vps.sh:417`, `manual-test-macos.sh:348`) — same shape.
+- `uv tool list 2>/dev/null | grep -q '^dbxignore '` (`manual-test-ubuntu-vps.sh:289`, `manual-test-macos.sh:204`) — multi-line listing.
+
+None has been observed to flake in practice (PASS counts on Linux v0.5.0 = 95, on macOS in prior cycles), likely because the producers are fast enough that the entire output reaches the pipe buffer before `grep -q` closes its read end. But the trap is non-zero and the same.
+
+Surfaced 2026-05-12 by the v0.5.0 Linux smoke-test validation pass, alongside the 5f failure.
+
+**Fix candidates:**
+
+- (1) Preemptively rewrite all six sites to capture-then-grep. ~3 lines per site. Mechanical; no behavioral risk.
+- (2) Leave as-is and add the gotcha entry (PR #218 already does this) so the next surfacing is fast to diagnose. Wait for the next observed flake to trigger work.
+
+**Urgency:** low. None of these sites have flaked yet. Tracker item to bundle with the next manual-script touch.
+
+Touches: `scripts/manual-test-ubuntu-vps.sh`, `scripts/manual-test-macos.sh`.
+
+---
+
 ## Status
 
 ### Open
 
-Twenty-five items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Items #110, #111, and #112 are v0.5.0 release-validation findings (surfaced by the Windows manual-test run on 2026-05-12) and should be prioritized ahead of purely polish work.
+Twenty-six items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Items #110, #111, #112, and #113 are v0.5.0 release-validation findings (surfaced by the Windows and Linux manual-test runs on 2026-05-12) and should be prioritized ahead of purely polish work.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2481,6 +2507,7 @@ Twenty-five items. Most are passive (no concrete trigger requires action) — bu
 - **#110** — `cli.generate` doesn't pin LF line endings on Windows; the byte-for-byte invariant breaks for any source `.gitignore` with non-CRLF endings. Concrete fix in hand: pin `newline=""` at `cli.py:1836`. Incomplete-LF-pin bug introduced in PR #207 / v0.5.0 — surfaced by manual-test cases 4h/4i.
 - **#111** — Detector reports a conflict on `build/*` + `!build/keep/` on Windows (manual-test case 4m); the CHANGELOG claims this case produces zero conflicts and an effective negation. Either a CRLF-parsing path in the detector, a pathspec-on-Windows behavior, or a genuine regression. Needs local Windows reproduction to narrow.
 - **#112** — Manual-test Phase 6 assertion `uninstall — markers retained on watch-me.tmp` fails on Windows; either a sweep-timing flake, a shutdown-reconcile regression, or a Phase 5 setup bug. Needs daemon-log inspection.
+- **#113** — Other `cmd | grep -q` sites in `scripts/manual-test-{ubuntu-vps,macos}.sh` (`--help`, `explain`, `uv tool list`) share the SIGPIPE+pipefail false-failure risk that bit 5f. Capture-then-grep is the preemptive fix; defer until one of them actually flakes.
 
 ### Resolved (reverse chronological)
 

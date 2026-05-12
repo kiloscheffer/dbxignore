@@ -1506,9 +1506,22 @@ def daemon() -> None:
 
 
 @main.command()
-def install() -> None:
-    """Register the daemon with the platform's user-scoped service manager."""
-    from dbxignore.install import install_service
+@click.option(
+    "--no-shell-integration",
+    is_flag=True,
+    help=("Skip Explorer right-click integration (Windows only). No effect on Linux or macOS."),
+)
+def install(no_shell_integration: bool) -> None:
+    """Register the daemon with the platform's user-scoped service manager.
+
+    On Windows, also registers two right-click verbs in Explorer
+    ("Ignore from Dropbox" and "Restore to Dropbox"), scoped to discovered
+    Dropbox roots. Pass --no-shell-integration to skip the registry write.
+    """
+    from dbxignore.install import (
+        install_service,
+        install_shell_integration_if_supported,
+    )
 
     try:
         install_service()
@@ -1516,6 +1529,13 @@ def install() -> None:
         click.echo(f"Failed to install daemon service: {exc}", err=True)
         sys.exit(2)
     click.echo("Installed dbxignore daemon service.")
+
+    if not no_shell_integration:
+        outcome = install_shell_integration_if_supported(
+            dropbox_roots=_discover_roots(),
+        )
+        if outcome == "installed":
+            click.echo("Installed Explorer right-click integration.")
 
 
 @main.command()
@@ -1525,10 +1545,19 @@ def install() -> None:
     help=(
         "Also clear every ignore marker and remove local dbxignore state "
         "(state.json, daemon.log*, the state directory, and any systemd "
-        "drop-in directory on Linux)."
+        "drop-in directory on Linux). Under --purge, --no-shell-integration "
+        "is overridden — Explorer integration is always removed."
     ),
 )
-def uninstall(purge: bool) -> None:
+@click.option(
+    "--no-shell-integration",
+    is_flag=True,
+    help=(
+        "Preserve Explorer right-click integration across the uninstall. "
+        "Ignored under --purge. No effect on Linux or macOS."
+    ),
+)
+def uninstall(purge: bool, no_shell_integration: bool) -> None:
     """Remove the daemon service.
 
     With --purge, also clear every ignore marker under each discovered
@@ -1545,6 +1574,17 @@ def uninstall(purge: bool) -> None:
         click.echo(f"Failed to uninstall daemon service: {exc}", err=True)
         sys.exit(2)
     click.echo("Uninstalled dbxignore daemon service.")
+
+    from dbxignore.install import uninstall_shell_integration_if_supported
+
+    # Mutually exclusive: --purge ALWAYS runs the dispatcher and accumulates
+    # errors for exit-2 escalation; plain uninstall runs it only if the user
+    # didn't pass --no-shell-integration, and uses WARN-and-continue.
+    shell_errors: list[tuple[str, str]] = []
+    if purge:
+        uninstall_shell_integration_if_supported(errors=shell_errors)
+    elif not no_shell_integration:
+        uninstall_shell_integration_if_supported()
 
     if purge:
         # (1) Clear xattr markers. Read and clear arms are split so each
@@ -1621,7 +1661,9 @@ def uninstall(purge: bool) -> None:
             if removed_dropin is not None:
                 click.echo(f"Removed systemd drop-in directory {removed_dropin}.")
 
-        if errors:
+        for key, msg in shell_errors[:_MAX_REPORTED_ERRORS]:
+            click.echo(f"  error: {key} - {msg}", err=True)
+        if errors or shell_errors:
             sys.exit(2)
 
 

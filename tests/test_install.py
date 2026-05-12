@@ -958,3 +958,109 @@ def test_dispatcher_uninstall_threads_errors_list(
     # The kwarg `errors=` must be the same object we passed in (identity check).
     fake.uninstall_shell_integration.assert_called_once()
     assert fake.uninstall_shell_integration.call_args.kwargs["errors"] is my_errors
+
+
+# ---------------------------------------------------------------------------
+# CLI plumbing tests — Task 7
+# ---------------------------------------------------------------------------
+
+from click.testing import CliRunner  # noqa: E402
+
+from dbxignore import cli as cli_module  # noqa: E402
+
+
+def _make_cli_test_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> tuple[CliRunner, MagicMock, MagicMock]:
+    """Mock install_service, uninstall_service, and the shell-integration dispatcher.
+
+    Returns the runner plus the two mock objects for assertions.
+    """
+    from dbxignore import state
+
+    install_service = MagicMock()
+    uninstall_service = MagicMock()
+    install_shell = MagicMock(return_value="installed")
+    uninstall_shell = MagicMock(return_value="uninstalled")
+
+    monkeypatch.setattr("dbxignore.install.install_service", install_service)
+    monkeypatch.setattr("dbxignore.install.uninstall_service", uninstall_service)
+    monkeypatch.setattr("dbxignore.install.install_shell_integration_if_supported", install_shell)
+    monkeypatch.setattr(
+        "dbxignore.install.uninstall_shell_integration_if_supported", uninstall_shell
+    )
+    # Stub _discover_roots so we get deterministic roots into the dispatcher.
+    monkeypatch.setattr(cli_module, "_discover_roots", lambda: [tmp_path])
+    # Redirect state dir so --purge doesn't touch the real user state dir.
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+
+    return CliRunner(), install_shell, uninstall_shell
+
+
+def test_install_calls_shell_helper_by_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runner, install_shell, _ = _make_cli_test_env(monkeypatch, tmp_path)
+    result = runner.invoke(cli_module.main, ["install"])
+    assert result.exit_code == 0, result.output
+    install_shell.assert_called_once()
+    assert install_shell.call_args.kwargs["dropbox_roots"] == [tmp_path]
+
+
+def test_install_no_shell_integration_skips_helper(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runner, install_shell, _ = _make_cli_test_env(monkeypatch, tmp_path)
+    result = runner.invoke(cli_module.main, ["install", "--no-shell-integration"])
+    assert result.exit_code == 0, result.output
+    install_shell.assert_not_called()
+
+
+def test_uninstall_calls_shell_helper_by_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runner, _, uninstall_shell = _make_cli_test_env(monkeypatch, tmp_path)
+    result = runner.invoke(cli_module.main, ["uninstall"])
+    assert result.exit_code == 0, result.output
+    uninstall_shell.assert_called_once()
+    # Plain uninstall: no errors list, so WARN-and-continue applies.
+    assert uninstall_shell.call_args.kwargs.get("errors") is None
+
+
+def test_uninstall_no_shell_integration_skips_helper(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    runner, _, uninstall_shell = _make_cli_test_env(monkeypatch, tmp_path)
+    result = runner.invoke(cli_module.main, ["uninstall", "--no-shell-integration"])
+    assert result.exit_code == 0, result.output
+    uninstall_shell.assert_not_called()
+
+
+def test_uninstall_purge_overrides_no_shell_integration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--purge --no-shell-integration: shell dispatcher invoked exactly once with errors list."""
+    runner, _, uninstall_shell = _make_cli_test_env(monkeypatch, tmp_path)
+    result = runner.invoke(cli_module.main, ["uninstall", "--purge", "--no-shell-integration"])
+    assert result.exit_code == 0, result.output
+    uninstall_shell.assert_called_once()
+    # Under --purge, errors list IS provided (escalation path).
+    assert uninstall_shell.call_args.kwargs["errors"] == []
+
+
+def test_uninstall_purge_exits_2_on_shell_errors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """If the shell-integration arm populates the errors list, --purge must exit 2."""
+    runner, _, uninstall_shell = _make_cli_test_env(monkeypatch, tmp_path)
+
+    def populate_errors(*, errors: list[tuple[str, str]]) -> str:
+        errors.append((r"HKCU\Software\Classes\…\DbxignoreIgnore", "Access denied"))
+        return "uninstalled"
+
+    uninstall_shell.side_effect = populate_errors
+    result = runner.invoke(cli_module.main, ["uninstall", "--purge"])
+    assert result.exit_code == 2, result.output
+    assert "Access denied" in result.output or "Access denied" in (result.stderr or "")

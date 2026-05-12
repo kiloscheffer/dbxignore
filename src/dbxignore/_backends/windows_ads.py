@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 STREAM_NAME = "com.dropbox.ignored"
 _MARKER_VALUE = "1"
 _LONG_PATH_PREFIX = "\\\\?\\"
+_UNC_LONG_PATH_PREFIX = "\\\\?\\UNC\\"
 
 
 def _stream_path(path: Path) -> str:
@@ -29,10 +30,18 @@ def _stream_path(path: Path) -> str:
     ``path`` must be absolute — the ``\\\\?\\`` long-path prefix is only
     meaningful before a full path. Callers normalize at the CLI/daemon
     boundary; relative paths here are a caller bug.
+
+    UNC paths (``\\\\server\\share\\…``) use the ``\\\\?\\UNC\\`` form
+    rather than ``\\\\?\\`` directly; the latter concatenates to
+    ``\\\\?\\\\\\server\\…`` which the Win32 object manager does not
+    interpret as a valid long path.
     """
     if not path.is_absolute():
         raise ValueError(f"markers requires an absolute path; got {path!r}")
-    return f"{_LONG_PATH_PREFIX}{path}:{STREAM_NAME}"
+    raw = str(path)
+    if raw.startswith("\\\\"):
+        return f"{_UNC_LONG_PATH_PREFIX}{raw[2:]}:{STREAM_NAME}"
+    return f"{_LONG_PATH_PREFIX}{raw}:{STREAM_NAME}"
 
 
 def is_ignored(path: Path) -> bool:

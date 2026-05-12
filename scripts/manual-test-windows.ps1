@@ -1014,42 +1014,48 @@ function Test-Daemon {
     $ignoreKey = "$regBase\DbxignoreIgnore"
     $restoreKey = "$regBase\DbxignoreRestore"
 
+    # Dependent registry-property assertions are guarded on Test-Path —
+    # `$ErrorActionPreference = "Stop"` (script line 44) would otherwise
+    # cause `Get-ItemProperty` against a missing key to hard-crash and
+    # abort the rest of Phase 5g (and Phases 6 + 7 cleanup). Surfaced
+    # when running with the default `-InstallSpec dbxignore` against
+    # PyPI 0.5.1, which pre-dates PR #222's shell-integration.
     if ((Test-Path $ignoreKey) -and (Test-Path $restoreKey)) {
         Write-Pass "5g - both verb keys present"
-    } else {
-        Write-Fail "5g - verb keys missing after default install"
-    }
 
-    # MUIVerb labels.
-    $ignoreLabel = (Get-ItemProperty -Path $ignoreKey -Name "MUIVerb").MUIVerb
-    $restoreLabel = (Get-ItemProperty -Path $restoreKey -Name "MUIVerb").MUIVerb
-    if ($ignoreLabel -eq "Ignore from Dropbox" -and $restoreLabel -eq "Restore to Dropbox") {
-        Write-Pass "5g - MUIVerb labels correct"
-    } else {
-        Write-Fail "5g - MUIVerb labels wrong: ignore='$ignoreLabel' restore='$restoreLabel'"
-    }
+        # MUIVerb labels.
+        $ignoreLabel = (Get-ItemProperty -Path $ignoreKey -Name "MUIVerb").MUIVerb
+        $restoreLabel = (Get-ItemProperty -Path $restoreKey -Name "MUIVerb").MUIVerb
+        if ($ignoreLabel -eq "Ignore from Dropbox" -and $restoreLabel -eq "Restore to Dropbox") {
+            Write-Pass "5g - MUIVerb labels correct"
+        } else {
+            Write-Fail "5g - MUIVerb labels wrong: ignore='$ignoreLabel' restore='$restoreLabel'"
+        }
 
-    # AppliesTo includes the Dropbox root.
-    # AQS uses single literal backslashes — no doubling — so match the path as-is.
-    $appliesTo = (Get-ItemProperty -Path $ignoreKey -Name "AppliesTo").AppliesTo
-    if ($appliesTo -like "*$($script:DropboxDir)*") {
-        Write-Pass "5g - AppliesTo contains Dropbox root"
-    } else {
-        Write-Fail "5g - AppliesTo missing Dropbox root: $appliesTo"
-    }
+        # AppliesTo includes the Dropbox root.
+        # AQS uses single literal backslashes — no doubling — so match the path as-is.
+        $appliesTo = (Get-ItemProperty -Path $ignoreKey -Name "AppliesTo").AppliesTo
+        if ($appliesTo -like "*$($script:DropboxDir)*") {
+            Write-Pass "5g - AppliesTo contains Dropbox root"
+        } else {
+            Write-Fail "5g - AppliesTo missing Dropbox root: $appliesTo"
+        }
 
-    # Command strings — asymmetric --yes policy.
-    $ignoreCmd = (Get-ItemProperty -Path "$ignoreKey\command" -Name "(default)").'(default)'
-    $restoreCmd = (Get-ItemProperty -Path "$restoreKey\command" -Name "(default)").'(default)'
-    if ($ignoreCmd -match '\bignore "%1"$' -and $ignoreCmd -notmatch "--yes") {
-        Write-Pass "5g - ignore command lacks --yes (confirms in console)"
+        # Command strings — asymmetric --yes policy.
+        $ignoreCmd = (Get-ItemProperty -Path "$ignoreKey\command" -Name "(default)").'(default)'
+        $restoreCmd = (Get-ItemProperty -Path "$restoreKey\command" -Name "(default)").'(default)'
+        if ($ignoreCmd -match '\bignore "%1"$' -and $ignoreCmd -notmatch "--yes") {
+            Write-Pass "5g - ignore command lacks --yes (confirms in console)"
+        } else {
+            Write-Fail "5g - ignore command shape unexpected: $ignoreCmd"
+        }
+        if ($restoreCmd -match '\bunignore --yes "%1"$') {
+            Write-Pass "5g - restore command has --yes (one-click safe)"
+        } else {
+            Write-Fail "5g - restore command shape unexpected: $restoreCmd"
+        }
     } else {
-        Write-Fail "5g - ignore command shape unexpected: $ignoreCmd"
-    }
-    if ($restoreCmd -match '\bunignore --yes "%1"$') {
-        Write-Pass "5g - restore command has --yes (one-click safe)"
-    } else {
-        Write-Fail "5g - restore command shape unexpected: $restoreCmd"
+        Write-Fail "5g - verb keys missing after default install (skipping registry-property assertions)"
     }
 
     # Remove slow-sweep marker so phase 6's re-install + uninstall cycles

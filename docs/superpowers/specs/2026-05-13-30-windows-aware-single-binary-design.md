@@ -36,7 +36,7 @@ After this work: one `dbxignore` command everywhere. The daemon is launched as `
 ### Codebase-internal
 
 - `daemon_main` click command in `cli.py` is deleted (was the `dbxignored` entry-point body).
-- The `@main.command() def daemon(...)` subcommand at `cli.py:1505` stays. That's what `dbxignore daemon` runs through, and it's already the body of the `dbxignored` invocation today via `daemon_main` → `_run_daemon()` indirection.
+- The `@main.command() def daemon(...)` subcommand stays. That's what `dbxignore daemon` runs through, and it's already the body of the `dbxignored` invocation today via `daemon_main` → `_run_daemon()` indirection.
 - New small module `src/dbxignore/_windows_console.py` (~80 LOC, all-stdlib `ctypes`) houses the AttachConsole + MessageBox logic. Pure no-op on non-Windows.
 - `[project.scripts]` in `pyproject.toml` shrinks from 2 entries to 1.
 - Both PyInstaller spec files lose their second `EXE(...)` block.
@@ -172,7 +172,7 @@ The four API calls we need (`AttachConsole`, `MessageBoxW`, plus the magic `CONO
 |---|---|
 | `src/dbxignore/_windows_console.py` | **NEW**, ~80 LOC. The module above. |
 | `src/dbxignore/__main__.py` | Wrap entry in `main_entry()` that calls `_windows_console.early_init()` on Windows, then deferred-imports `cli.main`. |
-| `src/dbxignore/cli.py` | Delete `daemon_main` function and its `@click.command()` decorator (~10 LOC). The `@main.command() def daemon(...)` subcommand at `cli.py:1505` stays. |
+| `src/dbxignore/cli.py` | Delete `daemon_main` function and its `@click.command()` decorator (~10 LOC). The `@main.command() def daemon(...)` subcommand stays. |
 
 ### Group 2 — Build / packaging
 

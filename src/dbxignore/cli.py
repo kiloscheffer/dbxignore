@@ -1759,7 +1759,11 @@ def init(path: Path | None, force: bool, to_stdout: bool) -> None:
         )
         sys.exit(2)
 
-    output.write_text(content, encoding="utf-8")
+    # `newline=""` pins LF on every platform — the project's invariant for
+    # written rule files (PR #207). Without it, Python's default text-mode
+    # write translates `\n` → `\r\n` on Windows, producing platform-divergent
+    # bytes for the same template input. Item #110.
+    output.write_text(content, encoding="utf-8", newline="")
     if detected:
         click.echo(f"wrote {output} ({len(detected)} detected: {', '.join(detected)})")
     else:
@@ -1833,7 +1837,12 @@ def generate(path: Path, output: Path | None, stdout: bool, force: bool) -> None
         )
         sys.exit(2)
     try:
-        target.write_text(text, encoding="utf-8")
+        # `newline=""` pins LF on every platform — without it, Python's
+        # default text-mode write translates `\n` → `\r\n` on Windows and
+        # breaks `generate`'s documented byte-for-byte invariant against the
+        # source file. Same invariant as `_atomic_write_rule_file` (PR #207)
+        # and `cli.init` above. Item #110.
+        target.write_text(text, encoding="utf-8", newline="")
     except OSError as exc:
         click.echo(f"error: cannot write {target}: {exc.strerror}", err=True)
         sys.exit(2)

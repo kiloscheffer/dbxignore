@@ -425,9 +425,13 @@ function Test-ExtendedCli {
     }
 
     # 4h — dbxignore generate (byte-for-byte)
+    # `-NoNewline` + explicit trailing `` `n `` writes pure LF (matches the
+    # bash version's `printf 'X\n' >` output). Without `-NoNewline`,
+    # Set-Content appends a trailing CRLF that breaks the byte-for-byte
+    # assertion even after the cli.generate LF-pin (item #110).
     Write-Note "4h - dbxignore generate (byte-for-byte)"
     Reset-TestDir -Path $T
-    Set-Content -Path "$T\source.gitignore" -Value "node_modules/`n*.log" -Encoding utf8
+    Set-Content -Path "$T\source.gitignore" -Value "node_modules/`n*.log`n" -Encoding utf8 -NoNewline
     dbxignore generate "$T\source.gitignore" 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) { Write-Pass "4h - generate (rc=0)" } else { Write-Fail "4h - generate" }
     if ((Test-Path "$T\.dropboxignore") -and
@@ -438,9 +442,12 @@ function Test-ExtendedCli {
     }
 
     # 4i — generate warns on dropped negation (PR #108)
+    # `-NoNewline` + explicit trailing `` `n `` writes pure LF (matches the bash
+    # version's `printf 'X\n' >` output). The LF-pin in cli.generate (item
+    # #110) preserves the byte-for-byte invariant despite the conflict warning.
     Write-Note "4i - generate emits stderr warning on dropped negation"
     Reset-TestDir -Path $T
-    Set-Content -Path "$T\source.gitignore" -Value "build/`n!build/keep/" -Encoding utf8
+    Set-Content -Path "$T\source.gitignore" -Value "build/`n!build/keep/`n" -Encoding utf8 -NoNewline
     $genErr = "$env:TEMP\dbxignore-gen-warn.err"
     & dbxignore generate "$T\source.gitignore" --force 2> $genErr | Out-Null
     if ($LASTEXITCODE -eq 0) { Write-Pass "4i - generate exits 0 even with conflict warning" } else { Write-Fail "4i - generate" }

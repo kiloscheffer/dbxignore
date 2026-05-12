@@ -29,6 +29,37 @@ def test_generate_file_arg_writes_sibling(tmp_path: Path) -> None:
     assert "wrote 2 rules" in result.output
 
 
+def test_generate_preserves_bytes_lf_on_every_platform(tmp_path: Path) -> None:
+    """`generate`'s documented byte-for-byte invariant requires LF line
+    endings on every platform — backlog item #110. Pre-PR #214,
+    `cli.generate` wrote via `target.write_text(..., encoding="utf-8")`
+    without `newline=""`, so Python's default text-mode write translated
+    `\\n` → `\\r\\n` on Windows; source `.gitignore` files with pure-LF
+    bytes (which is canonical for gitignore-style files) produced
+    CRLF-converted `.dropboxignore` and the read_bytes() comparison
+    diverged.
+
+    Pin the LF invariant at the byte level so the test is platform-
+    sensitive: `read_bytes()` doesn't do universal-newlines translation
+    the way `read_text()` does, so a Windows-CRLF regression would
+    show up here even though existing text-comparison tests would
+    silently pass."""
+    source = tmp_path / ".gitignore"
+    source_bytes = b"build/\n*.log\n"
+    source.write_bytes(source_bytes)
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["generate", str(source)])
+    assert result.exit_code == 0, result.output
+
+    target = tmp_path / ".dropboxignore"
+    assert target.read_bytes() == source_bytes, (
+        f"Expected byte-for-byte equality.\n"
+        f"  source : {source_bytes!r}\n"
+        f"  target : {target.read_bytes()!r}"
+    )
+
+
 def test_generate_directory_arg_finds_gitignore(tmp_path: Path) -> None:
     (tmp_path / ".gitignore").write_text("dist/\n", encoding="utf-8")
 

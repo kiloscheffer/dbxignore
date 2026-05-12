@@ -798,6 +798,48 @@ function _Dump-DaemonDiagnostics {
 function Test-Daemon {
     Write-Phase "Phase 5 - daemon (Task Scheduler + watchdog)"
 
+    # 5-pre — pythonw.exe fallback warning (BACKLOG #100, PR #229)
+    # Temporarily rename pythonw.exe in dbxignore's tool venv to exercise
+    # the install-time fallback path. Restore in finally; Phase 7 has a
+    # defensive backstop in case the script aborts mid-test.
+    #
+    # The dbxignore tool venv's pythonw.exe is ONLY used by the daemon's
+    # Task Scheduler entry (windowless launch). Renaming it doesn't
+    # affect the dbxignore or dbxignored CLI shims, which are python.exe-
+    # based — `dbxignore install` and `dbxignore uninstall` continue to
+    # work normally under the rename.
+    $toolVenvScripts = Join-Path $env:APPDATA "uv\tools\dbxignore\Scripts"
+    $pythonwExe = Join-Path $toolVenvScripts "pythonw.exe"
+    $pythonwHide = "$pythonwExe.bak-5pre"
+    if (-not (Test-Path $pythonwExe)) {
+        Write-Note "5-pre - pythonw.exe missing from tool venv at $pythonwExe (unexpected; uv tool install normally creates both). Skipping fallback test."
+    } else {
+        Move-Item -Path $pythonwExe -Destination $pythonwHide -Force
+        try {
+            $fallbackOut = Join-Path $env:TEMP "dbxignore-install-5pre.out"
+            dbxignore install *> $fallbackOut
+            if ($LASTEXITCODE -ne 0) {
+                Write-Fail "5-pre - dbxignore install failed (rc=$LASTEXITCODE)"
+                Get-Content $fallbackOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Note "    $_" }
+            } else {
+                $content = (Get-Content $fallbackOut -Raw -ErrorAction SilentlyContinue) -as [string]
+                if ($null -ne $content -and $content -match 'pythonw\.exe not found') {
+                    Write-Pass "5-pre - install emitted pythonw.exe fallback warning"
+                } else {
+                    Write-Note "    install output (no fallback warning found):"
+                    ($content -as [string]) -split "`r?`n" | ForEach-Object { Write-Note "    $_" }
+                    Write-Fail "5-pre - install did not emit pythonw.exe fallback warning"
+                }
+            }
+            # Clean up the daemon registration before the real Phase 5
+            # install below. Don't fail the test on uninstall errors —
+            # the warning assertion above is the load-bearing check.
+            dbxignore uninstall 2>$null | Out-Null
+        } finally {
+            Move-Item -Path $pythonwHide -Destination $pythonwExe -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     # Reset to a clean test dir BEFORE installing the daemon, so the
     # daemon's initial cache.load_root() reads a known rule set with no
     # leftover phase-4 conflicts. Same pattern as Linux/macOS.
@@ -1414,6 +1456,17 @@ function Test-Cleanup {
     if (Test-Path $T) {
         Remove-Item -Path $T -Recurse -Force -ErrorAction SilentlyContinue
         Write-Note "test fixtures removed from Dropbox folder"
+    }
+
+    # Defensive backstop for the 5-pre pythonw.exe rename (BACKLOG #100).
+    # If phase 5-pre aborted before its finally restored pythonw.exe, the
+    # tool venv would be left missing pythonw.exe — daemon would fall back
+    # to python.exe on every subsequent install. Phase 7 restores it.
+    $pythonwHide5pre = Join-Path $env:APPDATA "uv\tools\dbxignore\Scripts\pythonw.exe.bak-5pre"
+    if (Test-Path $pythonwHide5pre) {
+        $pythonwExe5pre = $pythonwHide5pre -replace '\.bak-5pre$', ''
+        Move-Item -Path $pythonwHide5pre -Destination $pythonwExe5pre -Force -ErrorAction SilentlyContinue
+        Write-Note "5-pre pythonw.exe restored (defensive)"
     }
 
     # Defensive backstop for the slow-sweep marker (item #89). Honoring a

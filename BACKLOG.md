@@ -2503,6 +2503,8 @@ Touches: `src/dbxignore/cli.py` (`@main.group()` decorator, basicConfig setup); 
 
 ## 115. Manual-test Phase 5g doesn't verify Explorer actually shows the verbs
 
+**Status: RESOLVED 2026-05-12 (PR #225).**
+
 Phase 5g (PR #222) reads the HKCU verb keys and asserts the stored `AppliesTo` string contains the Dropbox root path. This catches "did we write the right characters?" but not "does Windows Explorer evaluate the AQS query the way we expect?" — and the latter is the user-visible contract.
 
 The hot-fix (PR #224) caught a backslash-escape bug only through manual right-click testing on a Windows host with Dropbox installed. The unit + integration tests AND Phase 5g all passed against the broken form because they checked the wrong invariant.
@@ -2518,11 +2520,65 @@ Touches: `scripts/manual-test-windows.ps1` (Phase 5g case extension).
 
 ---
 
+## 116. Manual-test scripts should clean uv cache before local-source install
+
+The manual-test scripts' Phase 2 (`Test-InstallDbxignore` / `phase_install_dbxignore`) runs `uv tool install $InstallSpec` after uninstalling any prior install. When `$InstallSpec` is a local path (`.`), uv can serve a **stale cached wheel** from `sdists-v9/path/<path-hash>/<input-hash>/` instead of building from current git state. The cache key is the source-dir path, not the git SHA, so commits to the working tree don't invalidate the cache. Result: a contributor testing their local branch can run the script and unknowingly install an older version of the code, producing test failures unrelated to the changes they're trying to validate.
+
+Surfaced 2026-05-12 by the chore/115 work session — script ran against a wheel pinned to a 21-commit-old SHA (`1e9c1cf3`) despite `-InstallSpec .`, producing 6 cascading FAILs (5g missing keys, 6d/6e missing `--no-shell-integration` flag, Phase 7 daemon lock) all rooted in the stale version having no shell integration. ~2 hours of debugging before the cache emerged as the root cause.
+
+**Fix candidates:**
+
+- (1) Detect local-source `InstallSpec` in Phase 2 and `uv cache clean dbxignore` before `uv tool install`. ~3 lines: check if `$InstallSpec` is `.` or a directory path, then run the cache clean. Bash scripts get the parallel treatment. Mechanical, no test-behavior change for non-local spec.
+- (2) Add a Phase 0 / preflight diagnostic that compares `uv tool list | grep dbxignore` SHA against `git rev-parse --short HEAD` after Phase 2 install; fail fast on drift. More observable, more code.
+- (3) Document in the script docstring that `-InstallSpec .` users should manually `uv cache clean dbxignore` first. Cheapest; relies on contributor discipline.
+
+**Urgency:** medium. Currently bites only when contributors test local branches. The default `-InstallSpec dbxignore` (PyPI) doesn't have this problem. The trap is silent and costly — recommend (1) preemptively.
+
+Touches: `scripts/manual-test-windows.ps1` (`Test-InstallDbxignore`), `scripts/manual-test-{ubuntu-vps,macos}.sh` (`phase_install_dbxignore`).
+
+---
+
+## 117. Stale uv tool venv survives failed uninstall, partial state on next install
+
+When `uv tool uninstall dbxignore` fails mid-cleanup (e.g. the Windows daemon is still running and holds `dbxignored.exe` mapped), the tool venv at `%APPDATA%\uv\tools\dbxignore` (or platform equivalent) is left behind in a partially-cleaned state — the entry-point shims under `~/.local/bin/` may be removed but the venv's `site-packages/` survives. A subsequent `uv tool install .` detects the existing venv and does an *incremental update* rather than a fresh install: only changed packages get reinstalled, others (psutil, watchdog, etc.) are retained from the prior install. Result: a hybrid venv with packages from two different install events that can produce subtle compatibility issues — partially-initialized module errors on Python 3.14, daemon hangs during initial sweep, etc.
+
+Surfaced 2026-05-12 by the chore/115 work session — after Phase 7's `uv tool uninstall` failed (daemon-running race), a follow-up `uv tool install .` produced a venv where freshly-installed dbxignore + click/colorama/pathspec/markdown-it-py/mdurl coexisted with carryover psutil 7.2.2 + watchdog + pygments + rich + rich-click from the prior install. The daemon hung silently after the slow-sweep WARNING (likely a watchdog C-extension state issue), and `uninstall --purge` raised an opaque `SystemError` chain rooted in a `psutil` circular import (item #118).
+
+**Fix candidates:**
+
+- (1) Add a Phase 0 sanity check: if `~/.local/bin/dbxignore.exe` exists but `uv tool list | grep dbxignore` returns empty, the previous install was partially cleaned. Abort with instructions to remove the orphan venv directory.
+- (2) Force `uv tool install --reinstall .` in Phase 2 (overrides incremental-update behavior). Trades fresh-build cost on every test run for hygiene.
+- (3) Document recovery sequence in script docstring: `Remove-Item %APPDATA%\uv\tools\dbxignore -Recurse -Force` after a failed uninstall before next install attempt.
+
+**Urgency:** low. Occurs only when a prior test run aborted mid-cleanup (script-internal precondition). Each manual-test run is supposed to leave a clean state on the happy path. But contributors hitting the failure mode lose substantial debugging time.
+
+Touches: `scripts/manual-test-windows.ps1` (Phase 0), `scripts/manual-test-{ubuntu-vps,macos}.sh`.
+
+---
+
+## 118. `state.is_daemon_alive` fall-back arm escalates recoverable errors to SystemError
+
+`src/dbxignore/state.py:is_daemon_alive` wraps `import psutil` in `try/except ImportError`, falling back to `os.kill(pid, 0)` when psutil isn't available. On 2026-05-12, a Python 3.14 partial-initialization condition (likely a venv hygiene artifact — see item #117) raised `ImportError: cannot import name '_common' from partially initialized module 'psutil'`, which the except arm caught correctly. But the fall-back `os.kill(pid, 0)` then raised `OSError: [WinError 87] The parameter is incorrect` on the same target PID. With both arms failing, the `os.kill` OSError got escalated by Python's exception machinery to `SystemError: <built-in function kill> returned a result with an exception set` — surfacing as an opaque crash from `dbxignore uninstall --purge`.
+
+The fall-back's job is to determine whether a PID is alive; both psutil and `os.kill(pid, 0)` failing simultaneously should be treated as "indeterminate" with a logged warning rather than as a crash.
+
+**Fix candidates:**
+
+- (1) Wrap the `os.kill(pid, 0)` fallback in its own `try/except OSError`, log WARNING with both exception messages, and return a conservative result (probably `False` — caller is checking "is daemon alive?"; treating indeterminate as "no" lets uninstall proceed rather than blocking).
+- (2) Also catch `SystemError` at the call site, since CPython can surface this either as OSError or as SystemError depending on what state the failed psutil import left things in.
+- (3) Add a sentinel return value (`None` for indeterminate) instead of bool, with callers handling the three-way explicitly. More invasive.
+
+**Urgency:** low. The trigger condition (psutil partial-init AND os.kill same-PID failing) is rare and requires the hybrid-venv state from item #117. But the resulting error message is opaque enough that the user blames dbxignore rather than the upstream cause.
+
+Touches: `src/dbxignore/state.py:is_daemon_alive`.
+
+---
+
 ## Status
 
 ### Open
 
-Twenty-four items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12).
+Twenty-six items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12). Items #116, #117, #118 surfaced 2026-05-12 during the chore/115 work session (uv toolchain hygiene + an opaque error-escalation in state.is_daemon_alive).
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2547,11 +2603,15 @@ Twenty-four items. Most are passive (no concrete trigger requires action) — bu
 - **#109** — `FileNotFoundError`-before-`OSError` 'vanished path' idiom now repeats across `reconcile._reconcile_path` (2 sites), `state._read_at` (1 site), and `cli.uninstall --purge` (4 sites after PR #204). Filed for design-tension record (precedent: #40, #51, #108); current per-site shape is defensible because the local response action varies (return None / set flag / continue / pass) and no generic helper fits all seven sites.
 - **#113** — Other `cmd | grep -q` sites in `scripts/manual-test-{ubuntu-vps,macos}.sh` (`--help`, `explain`, `uv tool list`) share the SIGPIPE+pipefail false-failure risk that bit 5f. Capture-then-grep is the preemptive fix; defer until one of them actually flakes.
 - **#114** — CLI `--verbose` flag for INFO logging; default to WARNING. Today INFO-level log lines from `logger.info` calls surface to users on every CLI invocation alongside intentional `click.echo` summaries. Cosmetic QoL.
-- **#115** — Manual-test Phase 5g checks registry string content but not Explorer's evaluation of the AQS query. The backslash-escape regression (PR #224) passed Phase 5g while verbs were invisible in Explorer. Test fidelity gap for registry-written AQS strings.
+- **#116** — Manual-test scripts should `uv cache clean dbxignore` before `uv tool install` when `$InstallSpec` is a local path. uv's path-keyed sdist cache doesn't invalidate on git commits, so contributors testing a local branch can silently install an old SHA. Surfaced during chore/115 (2026-05-12), cost ~2h.
+- **#117** — Failed `uv tool uninstall` leaves the venv directory behind; the next `uv tool install` does an incremental update instead of fresh install, producing a hybrid venv (mixed install-event packages). Triggers subtle import / C-extension issues. Recovery is manual `Remove-Item ~\AppData\Roaming\uv\tools\<pkg>`.
+- **#118** — `state.is_daemon_alive` fall-back arm escalates recoverable errors to SystemError. When `import psutil` raises (e.g. partial-init from venv hygiene issue), the `os.kill(pid, 0)` fall-back can also raise, and Python escalates the combo to SystemError instead of treating "both probes failed" as indeterminate.
 
 ### Resolved (reverse chronological)
 
 #### 2026-05-12
+
+- **#115** (2026-05-12, PR #225) — Manual-test Phase 5g gains two Shell.Application probes that verify Explorer actually surfaces the "Ignore from Dropbox" verb: 5g.5 (positive, probe file under `$T`) and 5g.6 (negative, sibling folder named `<DropboxDir>-dbxignore-5g-sibling` so its prefix STARTS WITH the Dropbox basename — exercises the trailing-`\` invariant in the `:~<"<root>\"` prefix clause). The probes drive the same COM surface (`Shell.Application.NameSpace(...).ParseName(...).Verbs()`) Explorer uses to populate the right-click menu, so they exercise AQS evaluation end-to-end rather than just registry content. Same PR also wraps the existing Phase 5g `Get-ItemProperty` assertions in a `Test-Path` guard so missing verb keys produce a clean FAIL + skip rather than a `$ErrorActionPreference = "Stop"`-triggered script abort (surfaced when running against PyPI 0.5.1, which pre-dates PR #222's shell integration). Phase 7 gains a defensive backstop for the sibling probe directory (lives outside `$T`). Dynamic validation: positive run against current HEAD all-pass (101 PASS / 0 FAIL on the 5g/6/7 surface); negative run against `-InstallSpec "git+https://github.com/kiloscheffer/dbxignore.git@7f07f92"` (= `d959a5a~1`, pre-AQS-fix) produces exactly 2 FAILs — the existing registry-content `AppliesTo missing Dropbox root` check + the new 5g.5 probe — defense-in-depth at two orthogonal layers (registry content vs Shell evaluation).
 
 - **#65** (2026-05-12, PR #222) — Windows Explorer right-click integration shipped. `dbxignore install` now writes two HKCU shell verbs ("Ignore from Dropbox" / "Restore to Dropbox") scoped to discovered Dropbox roots via an `AppliesTo` query; `dbxignore uninstall` removes them. `--no-shell-integration` opts out on either side; `--purge` overrides the preserve flag and escalates registry failures into the exit-2 path. Implementation: new `install/windows_shell.py` (lazy `winreg` import), new `_common.detect_cli_invocation()` helper, two new `install/__init__.py` dispatcher helpers with `Literal` outcome types, CLI plumbing in `install`/`uninstall`. Tests: 11 Windows-only registry-mechanics tests in `test_install_windows_shell.py` (module-level double guard) + 5 dispatcher + 7 CLI plumbing tests in `test_install.py` (cross-platform via `sys.modules` fake-injection so the dispatcher's Windows arm runs on Linux/macOS CI legs). Manual-test extensions: Phase 5 case `5g` (read-only registry assertions, doesn't mutate Phase 5 end-state); Phase 6 cases `6c`/`6d`/`6e` (registry-gone after plain uninstall, preserve-on-flag, purge-overrides-flag).
 

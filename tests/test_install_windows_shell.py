@@ -25,6 +25,7 @@ if sys.platform != "win32":
 import winreg  # noqa: E402  # safe — module-level skip above blocks import on non-Windows
 
 from dbxignore.install import windows_shell  # noqa: E402
+from dbxignore.install.windows_shell import _IGNORE_VERB, _RESTORE_VERB  # noqa: E402
 
 
 @pytest.fixture
@@ -45,6 +46,16 @@ def isolated_reg_base(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
         _delete_subtree_silently(
             winreg.HKEY_CURRENT_USER, f"Software\\Classes\\DbxignoreTest\\{test_id}"
         )
+
+
+@pytest.fixture
+def stub_cli_invocation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub detect_cli_invocation to a fixed quoted path for tests."""
+    monkeypatch.setattr(
+        windows_shell,
+        "detect_cli_invocation",
+        lambda: r'"C:\test\dbxignore.exe"',
+    )
 
 
 def _delete_subtree_silently(root: int, path: str) -> None:
@@ -84,72 +95,52 @@ def _read_value(base: str, verb: str, value_name: str) -> str:
 
 def test_install_writes_both_verb_keys(
     isolated_reg_base: str,
-    monkeypatch: pytest.MonkeyPatch,
+    stub_cli_invocation: None,
     tmp_path: Path,
 ) -> None:
     """Both DbxignoreIgnore and DbxignoreRestore keys present after install."""
-    monkeypatch.setattr(
-        windows_shell,
-        "detect_cli_invocation",
-        lambda: r'"C:\test\dbxignore.exe"',
-    )
     windows_shell.install_shell_integration([tmp_path])
 
     # Both verb keys should be openable.
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"{isolated_reg_base}\\DbxignoreIgnore"):
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"{isolated_reg_base}\\{_IGNORE_VERB}"):
         pass
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"{isolated_reg_base}\\DbxignoreRestore"):
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"{isolated_reg_base}\\{_RESTORE_VERB}"):
         pass
 
 
 def test_install_sets_mui_verb_labels(
     isolated_reg_base: str,
-    monkeypatch: pytest.MonkeyPatch,
+    stub_cli_invocation: None,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(
-        windows_shell,
-        "detect_cli_invocation",
-        lambda: r'"C:\test\dbxignore.exe"',
-    )
     windows_shell.install_shell_integration([tmp_path])
 
-    assert _read_value(isolated_reg_base, "DbxignoreIgnore", "MUIVerb") == "Ignore from Dropbox"
-    assert _read_value(isolated_reg_base, "DbxignoreRestore", "MUIVerb") == "Restore to Dropbox"
+    assert _read_value(isolated_reg_base, _IGNORE_VERB, "MUIVerb") == "Ignore from Dropbox"
+    assert _read_value(isolated_reg_base, _RESTORE_VERB, "MUIVerb") == "Restore to Dropbox"
 
 
 def test_install_sets_asymmetric_command_strings(
     isolated_reg_base: str,
-    monkeypatch: pytest.MonkeyPatch,
+    stub_cli_invocation: None,
     tmp_path: Path,
 ) -> None:
     """Ignore: no --yes (confirms in console). Restore: --yes (one-click safe)."""
-    monkeypatch.setattr(
-        windows_shell,
-        "detect_cli_invocation",
-        lambda: r'"C:\test\dbxignore.exe"',
-    )
     windows_shell.install_shell_integration([tmp_path])
 
-    ignore_cmd = _read_value(isolated_reg_base, "DbxignoreIgnore", "(default)")
-    restore_cmd = _read_value(isolated_reg_base, "DbxignoreRestore", "(default)")
+    ignore_cmd = _read_value(isolated_reg_base, _IGNORE_VERB, "(default)")
+    restore_cmd = _read_value(isolated_reg_base, _RESTORE_VERB, "(default)")
     assert ignore_cmd == r'"C:\test\dbxignore.exe" ignore "%1"'
     assert restore_cmd == r'"C:\test\dbxignore.exe" unignore --yes "%1"'
 
 
 def test_install_applies_to_query_includes_each_root(
     isolated_reg_base: str,
-    monkeypatch: pytest.MonkeyPatch,
+    stub_cli_invocation: None,
 ) -> None:
-    monkeypatch.setattr(
-        windows_shell,
-        "detect_cli_invocation",
-        lambda: r'"C:\test\dbxignore.exe"',
-    )
     roots = [Path(r"C:\Users\u\Dropbox"), Path(r"D:\Dropbox (Personal)")]
     windows_shell.install_shell_integration(roots)
 
-    applies_to = _read_value(isolated_reg_base, "DbxignoreIgnore", "AppliesTo")
+    applies_to = _read_value(isolated_reg_base, _IGNORE_VERB, "AppliesTo")
     assert r'System.ItemPathDisplay:="C:\\Users\\u\\Dropbox"' in applies_to
     assert r'System.ItemPathDisplay:~<"C:\\Users\\u\\Dropbox\\"' in applies_to
     assert r'System.ItemPathDisplay:="D:\\Dropbox (Personal)"' in applies_to
@@ -158,32 +149,22 @@ def test_install_applies_to_query_includes_each_root(
 
 def test_install_applies_to_same_on_both_verbs(
     isolated_reg_base: str,
-    monkeypatch: pytest.MonkeyPatch,
+    stub_cli_invocation: None,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(
-        windows_shell,
-        "detect_cli_invocation",
-        lambda: r'"C:\test\dbxignore.exe"',
-    )
     windows_shell.install_shell_integration([tmp_path])
 
-    ignore_at = _read_value(isolated_reg_base, "DbxignoreIgnore", "AppliesTo")
-    restore_at = _read_value(isolated_reg_base, "DbxignoreRestore", "AppliesTo")
+    ignore_at = _read_value(isolated_reg_base, _IGNORE_VERB, "AppliesTo")
+    restore_at = _read_value(isolated_reg_base, _RESTORE_VERB, "AppliesTo")
     assert ignore_at == restore_at
 
 
 def test_install_overwrites_existing_keys(
     isolated_reg_base: str,
-    monkeypatch: pytest.MonkeyPatch,
+    stub_cli_invocation: None,
     tmp_path: Path,
 ) -> None:
     """Re-install with different roots: AppliesTo refreshed, no stale clauses."""
-    monkeypatch.setattr(
-        windows_shell,
-        "detect_cli_invocation",
-        lambda: r'"C:\test\dbxignore.exe"',
-    )
     old_root = tmp_path / "old"
     new_root = tmp_path / "new"
     old_root.mkdir()
@@ -192,7 +173,7 @@ def test_install_overwrites_existing_keys(
     windows_shell.install_shell_integration([old_root])
     windows_shell.install_shell_integration([new_root])
 
-    applies_to = _read_value(isolated_reg_base, "DbxignoreIgnore", "AppliesTo")
+    applies_to = _read_value(isolated_reg_base, _IGNORE_VERB, "AppliesTo")
     assert str(new_root).replace("\\", "\\\\") in applies_to
     assert str(old_root).replace("\\", "\\\\") not in applies_to
 
@@ -200,16 +181,11 @@ def test_install_overwrites_existing_keys(
 def test_install_partial_write_failure_cleans_up(
     isolated_reg_base: str,
     monkeypatch: pytest.MonkeyPatch,
+    stub_cli_invocation: None,
     caplog: pytest.LogCaptureFixture,
     tmp_path: Path,
 ) -> None:
     """SetValueEx raising mid-install: no DbxignoreIgnore/DbxignoreRestore keys remain."""
-    monkeypatch.setattr(
-        windows_shell,
-        "detect_cli_invocation",
-        lambda: r'"C:\test\dbxignore.exe"',
-    )
-
     call_count = {"n": 0}
     real_set = winreg.SetValueEx
 
@@ -225,7 +201,7 @@ def test_install_partial_write_failure_cleans_up(
         windows_shell.install_shell_integration([tmp_path])
 
     # Neither verb key should be present after the partial-write recovery.
-    for verb in ("DbxignoreIgnore", "DbxignoreRestore"):
+    for verb in (_IGNORE_VERB, _RESTORE_VERB):
         with pytest.raises(FileNotFoundError):
             winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"{isolated_reg_base}\\{verb}")
 
@@ -234,19 +210,14 @@ def test_install_partial_write_failure_cleans_up(
 
 def test_uninstall_removes_both_verb_keys(
     isolated_reg_base: str,
-    monkeypatch: pytest.MonkeyPatch,
+    stub_cli_invocation: None,
     tmp_path: Path,
 ) -> None:
     """Clean install + clean uninstall: both verb keys are gone."""
-    monkeypatch.setattr(
-        windows_shell,
-        "detect_cli_invocation",
-        lambda: r'"C:\test\dbxignore.exe"',
-    )
     windows_shell.install_shell_integration([tmp_path])
     windows_shell.uninstall_shell_integration()
 
-    for verb in ("DbxignoreIgnore", "DbxignoreRestore"):
+    for verb in (_IGNORE_VERB, _RESTORE_VERB):
         with pytest.raises(FileNotFoundError):
             winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"{isolated_reg_base}\\{verb}")
 
@@ -264,6 +235,7 @@ def test_uninstall_idempotent_when_keys_missing(
 def test_uninstall_other_oserror_routes_to_errors_or_warning(
     isolated_reg_base: str,
     monkeypatch: pytest.MonkeyPatch,
+    stub_cli_invocation: None,
     caplog: pytest.LogCaptureFixture,
     tmp_path: Path,
     with_errors_list: bool,
@@ -272,11 +244,6 @@ def test_uninstall_other_oserror_routes_to_errors_or_warning(
 
     Loop must always continue to the next key — never abort partway.
     """
-    monkeypatch.setattr(
-        windows_shell,
-        "detect_cli_invocation",
-        lambda: r'"C:\test\dbxignore.exe"',
-    )
     windows_shell.install_shell_integration([tmp_path])
 
     real_delete = winreg.DeleteKey
@@ -297,14 +264,14 @@ def test_uninstall_other_oserror_routes_to_errors_or_warning(
     # The second verb's keys (DbxignoreRestore) should still be removed —
     # the loop didn't abort.
     with pytest.raises(FileNotFoundError):
-        winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"{isolated_reg_base}\\DbxignoreRestore")
+        winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"{isolated_reg_base}\\{_RESTORE_VERB}")
 
     if with_errors_list:
         # The command subkey fails (call 1). Because winreg.DeleteKey refuses to
         # delete a non-leaf key, the verb key itself also fails — so >= 1 errors
         # land (typically 2 on Windows: command + verb key both rejected).
         assert errors is not None and len(errors) >= 1
-        assert errors[0][0].endswith("DbxignoreIgnore\\command")
+        assert errors[0][0].endswith(f"{_IGNORE_VERB}\\command")
         assert "Access denied" in errors[0][1]
         # WARNING path is NOT taken when errors list provided.
         assert not any("shell-integration uninstall" in r.message for r in caplog.records)

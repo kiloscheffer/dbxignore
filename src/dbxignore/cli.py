@@ -10,6 +10,7 @@ import re
 import sys
 from importlib.resources import files
 from pathlib import Path
+from typing import assert_never
 
 import rich_click as click
 
@@ -1534,28 +1535,33 @@ def install(no_shell_integration: bool) -> None:
         outcome = install_shell_integration_if_supported(
             dropbox_roots=_discover_roots(),
         )
-        if outcome == "installed":
-            click.echo("Installed Explorer right-click integration.")
-        elif outcome == "skipped-no-roots":
-            click.echo(
-                "Skipped Explorer right-click integration: no Dropbox roots "
-                "discovered. Re-run `dbxignore install` after Dropbox is set up.",
-                err=True,
-            )
-        elif outcome == "skipped-bad-roots":
-            click.echo(
-                "Skipped Explorer right-click integration: a Dropbox root path "
-                "contains a quote character. Rename the folder and re-run "
-                "`dbxignore install`.",
-                err=True,
-            )
-        elif outcome == "failed-write":
-            click.echo(
-                "Could not install Explorer right-click integration: registry "
-                "write failed. Daemon service was installed successfully; "
-                "re-run `dbxignore install` to retry.",
-                err=True,
-            )
+        match outcome:
+            case "installed":
+                click.echo("Installed Explorer right-click integration.")
+            case "skipped-no-roots":
+                click.echo(
+                    "Skipped Explorer right-click integration: no Dropbox roots "
+                    "discovered. Re-run `dbxignore install` after Dropbox is set up.",
+                    err=True,
+                )
+            case "skipped-bad-roots":
+                click.echo(
+                    "Skipped Explorer right-click integration: a Dropbox root path "
+                    "contains a quote character. Rename the folder and re-run "
+                    "`dbxignore install`.",
+                    err=True,
+                )
+            case "failed-write":
+                click.echo(
+                    "Could not install Explorer right-click integration: registry "
+                    "write failed. Daemon service was installed successfully; "
+                    "re-run `dbxignore install` to retry.",
+                    err=True,
+                )
+            case "skipped-platform":
+                pass  # No-op on Linux/macOS — expected silent fall-through.
+            case _:
+                assert_never(outcome)
 
 
 @main.command()
@@ -1586,7 +1592,10 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
     on Linux remove the systemd drop-in directory if it exists. The goal
     is to leave no dbxignore-authored artifacts on disk.
     """
-    from dbxignore.install import uninstall_service
+    from dbxignore.install import (
+        uninstall_service,
+        uninstall_shell_integration_if_supported,
+    )
 
     try:
         uninstall_service()
@@ -1594,8 +1603,6 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
         click.echo(f"Failed to uninstall daemon service: {exc}", err=True)
         sys.exit(2)
     click.echo("Uninstalled dbxignore daemon service.")
-
-    from dbxignore.install import uninstall_shell_integration_if_supported
 
     # Mutually exclusive: --purge ALWAYS runs the dispatcher and accumulates
     # errors for exit-2 escalation; plain uninstall runs it only if the user

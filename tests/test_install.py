@@ -960,10 +960,6 @@ def test_dispatcher_uninstall_threads_errors_list(
     assert fake.uninstall_shell_integration.call_args.kwargs["errors"] is my_errors
 
 
-# ---------------------------------------------------------------------------
-# CLI plumbing tests — Task 7
-# ---------------------------------------------------------------------------
-
 from click.testing import CliRunner  # noqa: E402
 
 from dbxignore import cli as cli_module  # noqa: E402

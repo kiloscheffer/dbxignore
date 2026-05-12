@@ -2503,6 +2503,8 @@ Touches: `src/dbxignore/cli.py` (`@main.group()` decorator, basicConfig setup); 
 
 ## 115. Manual-test Phase 5g doesn't verify Explorer actually shows the verbs
 
+**Status: RESOLVED 2026-05-12 (PR #225).**
+
 Phase 5g (PR #222) reads the HKCU verb keys and asserts the stored `AppliesTo` string contains the Dropbox root path. This catches "did we write the right characters?" but not "does Windows Explorer evaluate the AQS query the way we expect?" — and the latter is the user-visible contract.
 
 The hot-fix (PR #224) caught a backslash-escape bug only through manual right-click testing on a Windows host with Dropbox installed. The unit + integration tests AND Phase 5g all passed against the broken form because they checked the wrong invariant.
@@ -2522,7 +2524,7 @@ Touches: `scripts/manual-test-windows.ps1` (Phase 5g case extension).
 
 ### Open
 
-Twenty-four items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12).
+Twenty-three items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12).
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2547,11 +2549,12 @@ Twenty-four items. Most are passive (no concrete trigger requires action) — bu
 - **#109** — `FileNotFoundError`-before-`OSError` 'vanished path' idiom now repeats across `reconcile._reconcile_path` (2 sites), `state._read_at` (1 site), and `cli.uninstall --purge` (4 sites after PR #204). Filed for design-tension record (precedent: #40, #51, #108); current per-site shape is defensible because the local response action varies (return None / set flag / continue / pass) and no generic helper fits all seven sites.
 - **#113** — Other `cmd | grep -q` sites in `scripts/manual-test-{ubuntu-vps,macos}.sh` (`--help`, `explain`, `uv tool list`) share the SIGPIPE+pipefail false-failure risk that bit 5f. Capture-then-grep is the preemptive fix; defer until one of them actually flakes.
 - **#114** — CLI `--verbose` flag for INFO logging; default to WARNING. Today INFO-level log lines from `logger.info` calls surface to users on every CLI invocation alongside intentional `click.echo` summaries. Cosmetic QoL.
-- **#115** — Manual-test Phase 5g checks registry string content but not Explorer's evaluation of the AQS query. The backslash-escape regression (PR #224) passed Phase 5g while verbs were invisible in Explorer. Test fidelity gap for registry-written AQS strings.
 
 ### Resolved (reverse chronological)
 
 #### 2026-05-12
+
+- **#115** (2026-05-12, PR #225) — Manual-test Phase 5g gains two Shell.Application probes that verify Explorer actually surfaces the "Ignore from Dropbox" verb: 5g.5 (positive, probe file under `$T`) and 5g.6 (negative, sibling folder named `<DropboxDir>-dbxignore-5g-sibling` so its prefix STARTS WITH the Dropbox basename — exercises the trailing-`\` invariant in the `:~<"<root>\"` prefix clause). The probes drive the same COM surface (`Shell.Application.NameSpace(...).ParseName(...).Verbs()`) Explorer uses to populate the right-click menu, so they exercise AQS evaluation end-to-end rather than just registry content. Same PR also wraps the existing Phase 5g `Get-ItemProperty` assertions in a `Test-Path` guard so missing verb keys produce a clean FAIL + skip rather than a `$ErrorActionPreference = "Stop"`-triggered script abort (surfaced when running against PyPI 0.5.1, which pre-dates PR #222's shell integration). Phase 7 gains a defensive backstop for the sibling probe directory (lives outside `$T`). Dynamic validation: positive run against current HEAD all-pass (101 PASS / 0 FAIL on the 5g/6/7 surface); negative run against `-InstallSpec "git+https://github.com/kiloscheffer/dbxignore.git@7f07f92"` (= `d959a5a~1`, pre-AQS-fix) produces exactly 2 FAILs — the existing registry-content `AppliesTo missing Dropbox root` check + the new 5g.5 probe — defense-in-depth at two orthogonal layers (registry content vs Shell evaluation).
 
 - **#65** (2026-05-12, PR #222) — Windows Explorer right-click integration shipped. `dbxignore install` now writes two HKCU shell verbs ("Ignore from Dropbox" / "Restore to Dropbox") scoped to discovered Dropbox roots via an `AppliesTo` query; `dbxignore uninstall` removes them. `--no-shell-integration` opts out on either side; `--purge` overrides the preserve flag and escalates registry failures into the exit-2 path. Implementation: new `install/windows_shell.py` (lazy `winreg` import), new `_common.detect_cli_invocation()` helper, two new `install/__init__.py` dispatcher helpers with `Literal` outcome types, CLI plumbing in `install`/`uninstall`. Tests: 11 Windows-only registry-mechanics tests in `test_install_windows_shell.py` (module-level double guard) + 5 dispatcher + 7 CLI plumbing tests in `test_install.py` (cross-platform via `sys.modules` fake-injection so the dispatcher's Windows arm runs on Linux/macOS CI legs). Manual-test extensions: Phase 5 case `5g` (read-only registry assertions, doesn't mutate Phase 5 end-state); Phase 6 cases `6c`/`6d`/`6e` (registry-gone after plain uninstall, preserve-on-flag, purge-overrides-flag).
 

@@ -88,3 +88,48 @@ def detect_invocation() -> tuple[Path, str]:
             "run `uv tool install .` from the dbxignore checkout first"
         )
     return Path(python), "-m dbxignore daemon"
+
+
+def detect_cli_invocation() -> str:
+    """Return a quoted command-line prefix for the dbxignore CLI.
+
+    Output is a registry-ready string: the executable plus any leading
+    arguments needed before a subcommand (e.g. `"<python>" -m dbxignore`).
+    Callers concatenate the subcommand + `"%1"` placeholder when building
+    the full ``HKCU\\…\\shell\\<verb>\\command`` default value.
+
+    Three branches mirror ``detect_invocation()``:
+
+    1. **Frozen (PyInstaller).** Prefer the ``dbxignore.exe`` sibling next
+       to ``sys.executable``. Both binaries ship from the same PyInstaller
+       Analysis; if the user invoked ``dbxignore.exe install`` the sibling
+       check returns ``sys.executable`` unchanged.
+    2. **`shutil.which("dbxignore")`** — the pip/uv-install PATH shim.
+    3. **Fallback** — ``"<sys.executable>" -m dbxignore``. Used when no
+       shim is on PATH (typical for an editable ``uv pip install -e .``
+       working directory that hasn't been exposed via ``uv tool install``).
+
+    Raises ``RuntimeError`` if all three branches are unviable — same
+    defensive guard as ``detect_invocation`` (empty ``sys.executable``
+    on embedded interpreters / misconfigured frozen deployments).
+    """
+    if getattr(sys, "frozen", False):
+        exe = Path(sys.executable)
+        cli_name = "dbxignore.exe" if sys.platform == "win32" else "dbxignore"
+        if exe.name == cli_name:
+            return f'"{exe}"'
+        sibling = exe.parent / cli_name
+        if sibling.exists():
+            return f'"{sibling}"'
+        # Fall through — shipped frozen installs always have the sibling,
+        # but defend against truncated bundles by falling through.
+    shim = shutil.which("dbxignore")
+    if shim:
+        return f'"{shim}"'
+    python = sys.executable
+    if not python:
+        raise RuntimeError(
+            "dbxignore not on PATH and sys.executable is empty; "
+            "run `uv tool install .` from the dbxignore checkout first"
+        )
+    return f'"{python}" -m dbxignore'

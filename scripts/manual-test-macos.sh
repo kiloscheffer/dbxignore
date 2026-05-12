@@ -599,8 +599,8 @@ phase_daemon() {
     # fires synchronously. Capture into a variable first, then grep — under
     # `set -o pipefail`, piping a multi-line Python producer directly into
     # `grep -q` flips the if-branch on a successful match: grep exits 0 on
-    # line 1 and closes the pipe, Python's block-buffered stdout flush hits
-    # the closed reader and BrokenPipeError makes Python exit 1, pipefail
+    # line 1 and closes the pipe; the producer's NEXT click.echo writes to
+    # the closed reader and BrokenPipeError makes Python exit 1; pipefail
     # propagates that 1 to the overall pipe exit. Mirrors the `--summary`
     # poll pattern just above.
     local human_out

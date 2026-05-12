@@ -1536,6 +1536,12 @@ def install(no_shell_integration: bool) -> None:
         )
         if outcome == "installed":
             click.echo("Installed Explorer right-click integration.")
+        elif outcome == "skipped-no-roots":
+            click.echo(
+                "Skipped Explorer right-click integration: no Dropbox roots "
+                "discovered. Re-run `dbxignore install` after Dropbox is set up.",
+                err=True,
+            )
 
 
 @main.command()
@@ -1661,8 +1667,18 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
             if removed_dropin is not None:
                 click.echo(f"Removed systemd drop-in directory {removed_dropin}.")
 
-        for key, msg in shell_errors[:_MAX_REPORTED_ERRORS]:
-            click.echo(f"  error: {key} - {msg}", err=True)
+        if shell_errors:
+            click.echo(
+                f"Could not fully remove Explorer integration ({len(shell_errors)} errors):",
+                err=True,
+            )
+            for key, msg in shell_errors[:_MAX_REPORTED_ERRORS]:
+                click.echo(f"  error: {key} - {msg}", err=True)
+            if len(shell_errors) > _MAX_REPORTED_ERRORS:
+                click.echo(
+                    f"  ... and {len(shell_errors) - _MAX_REPORTED_ERRORS} more.",
+                    err=True,
+                )
         if errors or shell_errors:
             sys.exit(2)
 

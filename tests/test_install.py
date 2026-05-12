@@ -1009,6 +1009,16 @@ def test_install_calls_shell_helper_by_default(
     assert install_shell.call_args.kwargs["dropbox_roots"] == [tmp_path]
 
 
+def test_install_echoes_skipped_no_roots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """skipped-no-roots outcome surfaces a recovery hint on stderr."""
+    runner, install_shell, _ = _make_cli_test_env(monkeypatch, tmp_path)
+    install_shell.return_value = "skipped-no-roots"
+    result = runner.invoke(cli_module.main, ["install"])
+    assert result.exit_code == 0, result.output
+    assert "no Dropbox roots" in result.output
+    assert "Re-run `dbxignore install`" in result.output
+
+
 def test_install_no_shell_integration_skips_helper(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1063,4 +1073,5 @@ def test_uninstall_purge_exits_2_on_shell_errors(
     uninstall_shell.side_effect = populate_errors
     result = runner.invoke(cli_module.main, ["uninstall", "--purge"])
     assert result.exit_code == 2, result.output
-    assert "Access denied" in result.output or "Access denied" in (result.stderr or "")
+    assert "Could not fully remove Explorer integration" in result.output
+    assert "Access denied" in result.output

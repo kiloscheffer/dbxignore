@@ -232,14 +232,35 @@ def test_is_daemon_alive_python_process_returns_true(
     assert state.is_daemon_alive(12345) is True
 
 
-def test_is_daemon_alive_dbxignored_process_returns_true(
+def test_is_daemon_alive_dbxignored_process_returns_false(
     fake_psutil_process: FakePsutilProcess,
 ) -> None:
-    """Frozen PyInstaller install: process is dbxignored.exe (or dbxignored
-    on macOS/Linux). The 'd' suffix distinguishes the daemon binary from
-    the dbxignore CLI binary."""
+    """Pre-#30 frozen install: process is dbxignored.exe. After #30
+    unification the guard no longer accepts this name — the daemon binary
+    was renamed to dbxignore.exe and 'dbxignored' was dropped from the
+    guard tuple."""
     fake_psutil_process(name="dbxignored.exe")
+    assert state.is_daemon_alive(12345) is False
+
+
+def test_is_daemon_alive_recognizes_dbxignore_process_name(
+    fake_psutil_process: FakePsutilProcess,
+) -> None:
+    """After #30 unification, a frozen daemon is named `dbxignore.exe`,
+    not `dbxignored.exe`. The process-name guard tuple must accept it."""
+    fake_psutil_process(name="dbxignore.exe")
     assert state.is_daemon_alive(12345) is True
+
+
+def test_is_daemon_alive_no_longer_recognizes_dbxignored(
+    fake_psutil_process: FakePsutilProcess,
+) -> None:
+    """The pre-#30 `dbxignored` name is intentionally dropped from the
+    guard. A surviving v0.5.x daemon process surfaces as not-alive,
+    prompting the migration. Surfacing stale state is the desired
+    behavior."""
+    fake_psutil_process(name="dbxignored.exe")
+    assert state.is_daemon_alive(12345) is False
 
 
 def test_is_daemon_alive_create_time_match_returns_true(

@@ -169,7 +169,7 @@ def is_daemon_alive(pid: int | None, create_time: float | None = None) -> bool:
         name = proc.name().lower()
     except psutil.Error:
         return False
-    if "python" not in name and "dbxignored" not in name:
+    if "python" not in name and name not in ("dbxignore", "dbxignore.exe"):
         return False
     if create_time is None:
         return True

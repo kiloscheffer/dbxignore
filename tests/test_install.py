@@ -1,10 +1,13 @@
 import getpass
 import subprocess
 import sys
+import types
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
+from dbxignore import install as install_pkg
 from dbxignore.install import windows_task as install
 from dbxignore.install.windows_shell import _format_applies_to_query
 from tests.conftest import FakeMarkers
@@ -863,3 +866,95 @@ def test_format_applies_to_query_drive_root() -> None:
     assert r'System.ItemPathDisplay:~<"D:\\"' in result
     # And we should have exactly two clauses (no spurious extras).
     assert result.count(" OR ") == 1
+
+
+def _inject_fake_windows_shell(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    install_side_effect: object = None,
+) -> types.ModuleType:
+    """Inject a fake dbxignore.install.windows_shell module into sys.modules.
+
+    The dispatcher uses a lazy `from dbxignore.install.windows_shell import ...`
+    inside the `if sys.platform == "win32":` arm. To exercise that arm on
+    non-Windows test legs we must populate sys.modules so the lazy import
+    resolves to our fake — patching install_pkg.windows_shell would silently
+    miss because the lazy import hasn't fired yet to create the attribute.
+    """
+    fake = types.ModuleType("dbxignore.install.windows_shell")
+    fake.install_shell_integration = MagicMock(side_effect=install_side_effect)  # type: ignore[attr-defined]
+    fake.uninstall_shell_integration = MagicMock()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "dbxignore.install.windows_shell", fake)
+    return fake
+
+
+def test_dispatcher_install_skipped_platform_on_non_windows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    fake = _inject_fake_windows_shell(monkeypatch)
+
+    outcome = install_pkg.install_shell_integration_if_supported(dropbox_roots=[tmp_path])
+
+    assert outcome == "skipped-platform"
+    fake.install_shell_integration.assert_not_called()
+
+
+def test_dispatcher_install_skipped_no_roots(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    fake = _inject_fake_windows_shell(monkeypatch)
+
+    with caplog.at_level("WARNING"):
+        outcome = install_pkg.install_shell_integration_if_supported(dropbox_roots=[])
+
+    assert outcome == "skipped-no-roots"
+    fake.install_shell_integration.assert_not_called()
+    assert any("no Dropbox roots" in r.message for r in caplog.records)
+
+
+def test_dispatcher_install_skipped_bad_roots(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    _inject_fake_windows_shell(
+        monkeypatch,
+        install_side_effect=RuntimeError("contains a quote character"),
+    )
+
+    with caplog.at_level("WARNING"):
+        outcome = install_pkg.install_shell_integration_if_supported(dropbox_roots=[tmp_path])
+
+    assert outcome == "skipped-bad-roots"
+    assert any("quote character" in r.message for r in caplog.records)
+
+
+def test_dispatcher_uninstall_skipped_platform_on_non_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    fake = _inject_fake_windows_shell(monkeypatch)
+
+    outcome = install_pkg.uninstall_shell_integration_if_supported()
+
+    assert outcome == "skipped-platform"
+    fake.uninstall_shell_integration.assert_not_called()
+
+
+def test_dispatcher_uninstall_threads_errors_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The dispatcher must pass through the exact `errors` list object."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    fake = _inject_fake_windows_shell(monkeypatch)
+
+    my_errors: list[tuple[str, str]] = []
+    outcome = install_pkg.uninstall_shell_integration_if_supported(errors=my_errors)
+
+    assert outcome == "uninstalled"
+    # The kwarg `errors=` must be the same object we passed in (identity check).
+    fake.uninstall_shell_integration.assert_called_once()
+    assert fake.uninstall_shell_integration.call_args.kwargs["errors"] is my_errors

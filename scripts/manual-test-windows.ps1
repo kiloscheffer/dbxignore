@@ -661,9 +661,13 @@ function Test-ExtendedCli {
     }
     Assert-AdsUnset -Path "$T\foo.tmp" -Name "4s - clear --force cleared the marker"
 
-    # Cleanup: remove just the deny ACE we added (`/remove:d` is targeted —
-    # `/reset` would clobber any inherited/explicit ACEs the file had before).
-    icacls $stateJson4s /remove:d "${env:USERNAME}" *> $null
+    # Cleanup: no explicit ACE removal needed — the next step either replaces
+    # the file entirely (Move-Item from backup, which restores both content and
+    # ACL) or deletes it (Remove-Item when the test created the file from
+    # scratch). Calling `icacls /remove:d ${env:USERNAME}` here would remove ALL
+    # deny ACEs the user has on this path, not just the (RD) one we added,
+    # silently clobbering pre-existing explicit deny rules in the rare case a
+    # tester customized state.json's ACL.
     if ($stateJson4sExisted) {
         Move-Item $stateJson4sBackup $stateJson4s -Force
     } else {

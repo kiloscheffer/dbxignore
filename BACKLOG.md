@@ -2148,6 +2148,8 @@ Touches: `src/dbxignore/cli.py` (`apply`, `clear`, `list_ignored`, `_explain`, t
 
 ## 96. Windows ADS path construction is invalid for UNC paths
 
+**Status: RESOLVED 2026-05-12 (PR #233).** `windows_ads._stream_path()` now detects UNC paths via `str(path).startswith("\\\\")` and emits the `\\?\UNC\<rest>` form rather than concatenating `\\?\` with the UNC path's leading `\\` (which produced the malformed `\\?\\\server\share\...`). Drive-letter paths keep the existing `\\?\C:\...` form. New unit test `test_stream_path_uses_unc_long_path_prefix_for_unc_path` in `tests/test_ads_unit.py` pins the UNC contract — double-gated (`@pytest.mark.windows_only` + `@pytest.mark.skipif(sys.platform != "win32")`) like the existing drive-letter test, since `Path(r"\\server\share\...").is_absolute()` is True only on Windows.
+
 `_backends/windows_ads.py:_stream_path()` blindly prefixes every absolute path with `\\?\`. That is correct for drive-letter paths (`C:\...`) but not for UNC paths (`\\server\share\...`). The long-path form for UNC is `\\?\UNC\server\share\...`; the current string becomes `\\?\\\server\share\...:com.dropbox.ignored`, which Windows APIs do not interpret as a valid long path.
 
 This matters for users whose Dropbox root is on a network share, redirected profile, or other UNC-backed location. It also affects future shell integration if right-click actions pass UNC paths through unchanged.
@@ -2590,7 +2592,7 @@ Touches: `src/dbxignore/state.py:is_daemon_alive`.
 
 ### Open
 
-Twenty items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12). Item #117 surfaced 2026-05-12 during the chore/115 work session (uv venv hygiene); the other two items from that session shipped 2026-05-12: #116 (uv build-cache hygiene) in PR #227, #118 (is_daemon_alive SystemError escalation) in PR #230.
+Nineteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12). Item #117 surfaced 2026-05-12 during the chore/115 work session (uv venv hygiene); the other two items from that session shipped 2026-05-12: #116 (uv build-cache hygiene) in PR #227, #118 (is_daemon_alive SystemError escalation) in PR #230.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2600,7 +2602,6 @@ Twenty items. Most are passive (no concrete trigger requires action) — bundle 
 - **#51** — `install/__init__.py` platform dispatch duplicated across `install_service`/`uninstall_service`. Filed for the design-tension record (precedent: #40); current 6-block shape is defensible vs a factored-out helper that would introduce stringly-typed action coupling.
 - **#53** — Initial-sweep wall-clock on a fresh install (no existing markers) was 49.62s on a 27k-dir tree, blocking systemd readiness for ~50s. Candidate 1 (ready-before-sweep) shipped in PR #162 (removed the readiness-pause symptom). Candidate 3 (per-subdir worker fan-out) shipped in PR #183 (parallelizes the sweep itself across top-level subdirs). Only candidate 2 (persisted sweep-complete hint, ~80 LOC) remains open — has reliability concerns on network FS / File Provider mtime semantics; no fired trigger yet.
 - **#54** — Watchdog observer's recursive watch schedules one inotify watch per directory under `~/Dropbox`, including marked-ignored subtrees. Architectural fix (per-directory watches with mark/unmark lifecycle) is ~200 LOC of race-condition-prone state-machine work; deferred until a beta tester hits the watch ceiling on a system with limits already raised.
-- **#96** — Windows ADS `_stream_path()` emits invalid long-path syntax for UNC paths. Add UNC-aware `\\?\UNC\...` conversion.
 - **#99** — macOS sync-mode detection is process-global; mixed legacy/File-Provider account setups may need per-root or write-both behavior.
 - **#101** — Rule-file mutation helpers use fixed `.dropboxignore.tmp`, unsafe for concurrent `ignore` / `unignore` or user/editor temp-file collisions.
 - **#102** — Rule cache can miss same-size edits with preserved mtimes. Consider a hash or forced periodic re-read policy.
@@ -2615,6 +2616,8 @@ Twenty items. Most are passive (no concrete trigger requires action) — bundle 
 ### Resolved (reverse chronological)
 
 #### 2026-05-12
+
+- **#96** (2026-05-12, PR #233) — `windows_ads._stream_path()` detects UNC paths via `str(path).startswith("\\\\")` and emits the `\\?\UNC\<rest>` form rather than concatenating `\\?\` with the UNC path's leading `\\` (which produced the malformed `\\?\\\server\share\...`, undefined to the Win32 object manager). Drive-letter paths keep the existing `\\?\C:\...` form. Bug surface: Dropbox roots on network shares, redirected profiles, or other UNC-backed locations silently failed to receive ignore markers because the long-path prefix was malformed before reaching `CreateFileW`. New unit test in `tests/test_ads_unit.py` double-gated for Windows like the existing drive-letter test (`Path(r"\\server\share\...").is_absolute()` is True only on Windows). Took fix candidate (1) — the preferred surgical conversion in `_stream_path` — rather than rejecting UNC roots outright.
 
 - **#118** (2026-05-12, PR #230) — `state.is_daemon_alive`'s no-psutil fallback (`os.kill(pid, 0)`) catches `ProcessLookupError` silently (the common "no such process" post-daemon-death path) and `(OSError, SystemError)` with a WARNING (the rarer Windows-permission / CPython-exception-state-wrapping cases). The `SystemError` addition is the load-bearing change: CPython wraps an `os.kill` `OSError` as `SystemError: <built-in function kill> returned a result with an exception set` when called while another exception (e.g. a prior `ImportError` from a partial-init psutil — item #117 trigger) is still being handled. Without the `SystemError` catch the wrapped error propagated as an opaque crash from `dbxignore uninstall --purge`. Now: indeterminate probe surfaces as a logged WARNING, function returns `False` so destructive verbs (`clear`, `uninstall --purge`) get the conservative "treat as not alive" answer rather than blocking on an uncaught exception. Four new tests in `tests/test_state.py` cover the psutil-unavailable fallback's four exit paths: `os.kill` succeeds → True; ProcessLookupError → False+silent; OSError → False+WARNING; SystemError → False+WARNING. All four use `monkeypatch.setitem(sys.modules, "psutil", None)` to poison the inline `import psutil`.
 

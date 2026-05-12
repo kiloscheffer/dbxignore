@@ -9,11 +9,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [0.5.1] — 2026-05-12
 
-Patch release. Pins LF line endings on `dbxignore generate` and `dbxignore init` writes on Windows (v0.5.0's PR #207 text-write consolidation missed two call sites); plus a README symmetry fix so the install-verification step works on every platform.
+Patch release. Pins LF line endings on `dbxignore generate` and `dbxignore init` writes on Windows (two `cli.py` write sites that pre-dated v0.5.0's `_atomic_write_rule_file` LF pin and were never folded into the same convention); plus a README symmetry fix so the install-verification step works on every platform.
 
 ### Fixed
 
-- **`dbxignore generate` and `dbxignore init` now pin LF line endings on Windows.** v0.5.0's PR #207 consolidated the project's `Path.write_text(...)` callsites, but the new shape inherited Python's `newline=None` default — translating `\n` → `\r\n` on Windows for two call sites. `generate`'s byte-for-byte invariant broke when the source `.gitignore` was LF-canonical; `init`'s LF-canonical output contract broke on every Windows install. Both call sites now pass `newline=""` explicitly so the bytes written match the bytes intended. Resolves BACKLOG #110.
+- **`dbxignore generate` and `dbxignore init` now pin LF line endings on Windows.** The two `cli.py` write sites used Python's `newline=None` default from inception, translating `\n` → `\r\n` on Windows. v0.5.0's PR #207 pinned `newline=""` on the parallel `rules._atomic_write_rule_file` write site used by `ignore`/`unignore`, but the two direct-write sites in `cli.py` were not folded into that convention. `generate`'s byte-for-byte invariant broke when the source `.gitignore` was LF-canonical; `init`'s LF-canonical output contract broke on every Windows install. Both call sites now pass `newline=""` explicitly so the bytes written match the bytes intended. Resolves BACKLOG #110.
 
 ### Changed
 

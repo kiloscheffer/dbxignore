@@ -2382,7 +2382,7 @@ Touches: `src/dbxignore/cli.py`, `src/dbxignore/state.py`, `src/dbxignore/reconc
 
 ## 110. `cli.generate` doesn't pin LF line endings on Windows
 
-**Status: RESOLVED 2026-05-12 (PR #214).** Pinned `newline=""` on both the `cli.generate` write site (the originally-filed surface) and the `cli.init` write site (the audit candidate flagged in this entry's "Fix candidates"). Test-side LF-pin for case 4h source-writing in `manual-test-windows.ps1` landed in PR #211. Shipped in v0.5.1.
+**Status: RESOLVED 2026-05-12 (PR #214).** Pinned `newline=""` on both the `cli.generate` write site (the originally-filed surface) and the `cli.init` write site (the audit candidate flagged in this entry's "Fix candidates"). The same PR also pinned `-NoNewline` on `manual-test-windows.ps1` case 4h source-writing so the test's source file is LF-canonical too. Shipped in v0.5.1.
 
 `cli.generate` writes the translated `.dropboxignore` via `target.write_text(text, encoding="utf-8")` at `cli.py:1836` without specifying `newline=""`. Python's default text-mode write translates `\n` → `\r\n` on Windows, so generate outputs CRLF on Windows and LF elsewhere for byte-identical inputs. The documented byte-for-byte invariant of `generate` is therefore broken on Windows: any source `.gitignore` with non-CRLF endings (a file created with a POSIX tool, a git checkout with `core.autocrlf=input`, or content added by a Linux dev branch) produces a `.dropboxignore` that differs byte-for-byte from the source.
 
@@ -2402,7 +2402,7 @@ Touches: `src/dbxignore/cli.py` (generate write_text + likely init); `tests/test
 
 ## 111. Detector regression on `build/*` + `!build/keep/` on Windows (manual-test case 4m)
 
-**Status: RESOLVED 2026-05-12 (PR #213).** No detector regression — the title's framing was wrong. Root cause was test-environmental: the host's `C:\Dropbox\.dropboxignore` (written by `dbxignore init`'s template) contained a `build/` rule, which is an ancestor rule that masks the test's local `!build/keep/` negation through directory-inheritance semantics. Renaming the test target from `build/` to `case4m_target/` makes the case hermetic against arbitrary ancestor rules. PR #216 followed up with the matching `4n` clear-assertion path. Shipped in v0.5.1.
+**Status: RESOLVED 2026-05-12 (PR #213).** No detector regression — the title's framing was wrong. Root cause was test-environmental: the host's `C:\Dropbox\.dropboxignore` (written by `dbxignore init`'s template) contained a `build/` rule, which is an ancestor rule that masks the test's local `!build/keep/` negation through directory-inheritance semantics. Renaming the test target from `build/` to `case4m_target/` makes the case hermetic against arbitrary ancestor rules. The same PR also updated the matching `4n` clear-assertion path. Shipped in v0.5.1.
 
 Manual-test case 4m on Windows (Phase 4.5 coverage landed in PR #209) failed three assertions on a real Windows host running v0.5.0:
 
@@ -2516,8 +2516,8 @@ Twenty-three items. Most are passive (no concrete trigger requires action) — b
 
 #### 2026-05-12 (v0.5.1)
 
-- **#110** (2026-05-12, PR #214) — `cli.generate` and `cli.init` now pin LF line endings on Windows via `newline=""` on the `write_text` calls. PR #207's text-write consolidation in v0.5.0 missed these two sites, which inherited Python's `newline=None` default and translated `\n` → `\r\n` on Windows — breaking `generate`'s documented byte-for-byte invariant and `init`'s LF-canonical output contract. Test-side LF-pin for case 4h source-writing in `manual-test-windows.ps1` landed in PR #211.
-- **#111** (2026-05-12, PR #213) — Not a detector regression. The host's `C:\Dropbox\.dropboxignore` (written by `dbxignore init`'s template) contained a `build/` rule that masked the test's local `!build/keep/` negation through directory-inheritance. Renaming the test target from `build/` to `case4m_target/` makes the case hermetic against arbitrary ancestor rules. PR #216 followed up with the matching `4n` clear-assertion path. The originally-feared regression in `rules_conflicts.py` was not present.
+- **#110** (2026-05-12, PR #214) — `cli.generate` and `cli.init` now pin LF line endings on Windows via `newline=""` on the `write_text` calls. The two CLI write sites pre-date PR #207 and used Python's `newline=None` default from inception; PR #207 (v0.5.0) had pinned `newline=""` on the parallel `rules._atomic_write_rule_file` write site used by `ignore`/`unignore`, but the two `cli.py` direct-write sites were never folded into that LF-canonical convention. Result on Windows: `\n` → `\r\n` translation broke `generate`'s documented byte-for-byte invariant and `init`'s LF-canonical output contract. PR #214 also pinned `-NoNewline` on `manual-test-windows.ps1` case 4h source-writing.
+- **#111** (2026-05-12, PR #213) — Not a detector regression. The host's `C:\Dropbox\.dropboxignore` (written by `dbxignore init`'s template) contained a `build/` rule that masked the test's local `!build/keep/` negation through directory-inheritance. Renaming the test target from `build/` to `case4m_target/` makes the case hermetic against arbitrary ancestor rules; the same PR updated the matching `4n` clear-assertion path. The originally-feared regression in `rules_conflicts.py` was not present.
 - **#112** (2026-05-12, PR #216) — Not an `uninstall`-path regression. Test-script setup: Phase 5 case 5e ran `dbxignore clear --force` on the entire `$T` tree, removing the marker that Phase 6 was about to assert had been retained. Narrowed 5e to clear only a single file (`$T/freshrule.dat`) so Phase 6's `watch-me.tmp` marker survives the transition. The `uninstall` (no `--purge`) contract is intact.
 
 #### 2026-05-11

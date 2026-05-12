@@ -822,8 +822,8 @@ def test_format_applies_to_query_single_root() -> None:
     roots = [Path(r"C:\Users\kilo\Dropbox")]
     result = _format_applies_to_query(roots)
     assert result == (
-        r'System.ItemPathDisplay:="C:\\Users\\kilo\\Dropbox" OR '
-        r'System.ItemPathDisplay:~<"C:\\Users\\kilo\\Dropbox\\"'
+        r'System.ItemPathDisplay:="C:\Users\kilo\Dropbox" OR '
+        r'System.ItemPathDisplay:~<"C:\Users\kilo\Dropbox\"'
     )
 
 
@@ -832,10 +832,10 @@ def test_format_applies_to_query_multiple_roots_or_joined() -> None:
     result = _format_applies_to_query(roots)
     # Each root contributes := + :~< ; four clauses total OR-joined.
     assert result.count(" OR ") == 3
-    assert r'System.ItemPathDisplay:="C:\\Users\\kilo\\Dropbox"' in result
-    assert r'System.ItemPathDisplay:~<"C:\\Users\\kilo\\Dropbox\\"' in result
-    assert r'System.ItemPathDisplay:="D:\\Dropbox (Personal)"' in result
-    assert r'System.ItemPathDisplay:~<"D:\\Dropbox (Personal)\\"' in result
+    assert r'System.ItemPathDisplay:="C:\Users\kilo\Dropbox"' in result
+    assert r'System.ItemPathDisplay:~<"C:\Users\kilo\Dropbox\"' in result
+    assert r'System.ItemPathDisplay:="D:\Dropbox (Personal)"' in result
+    assert r'System.ItemPathDisplay:~<"D:\Dropbox (Personal)\"' in result
 
 
 def test_format_applies_to_query_refuses_root_with_quote() -> None:
@@ -853,17 +853,16 @@ def test_format_applies_to_query_empty_roots_returns_empty_string() -> None:
 def test_format_applies_to_query_drive_root() -> None:
     """Drive-root Dropbox mount (e.g. `D:\\`) — str(Path) already has a trailing
     backslash; the prefix clause must not double-append, otherwise it produces
-    `D:\\\\` in stored AQS which parses to `D:\\` (two backslashes) and matches
-    no real Windows path.
+    `D:\\\\` in the stored value (two backslashes) and matches no real path.
     """
     roots = [Path("D:\\")]
     result = _format_applies_to_query(roots)
-    # Exact clause for the root itself: `D:` followed by one backslash, doubled
-    # in stored AQS to `D:\\`.
-    assert r'System.ItemPathDisplay:="D:\\"' in result
-    # Prefix clause: same `D:\\` — the prefix-construction normalization
-    # (`rstrip + re-append`) ensures we DON'T get `D:\\\\` here.
-    assert r'System.ItemPathDisplay:~<"D:\\"' in result
+    # Exact clause for the root itself: `D:\` (single trailing backslash).
+    # AQS embeds literal single backslashes — no doubling.
+    assert r'System.ItemPathDisplay:="D:\"' in result
+    # Prefix clause: same `D:\` — the prefix-construction normalization
+    # (`rstrip + re-append`) ensures we DON'T get `D:\\` here.
+    assert r'System.ItemPathDisplay:~<"D:\"' in result
     # And we should have exactly two clauses (no spurious extras).
     assert result.count(" OR ") == 1
 

@@ -35,14 +35,16 @@ def _format_applies_to_query(roots: list[Path]) -> str:
 
     Each root produces two clauses ORed together:
     - ``System.ItemPathDisplay:="<root>"`` — exact match the root itself
-    - ``System.ItemPathDisplay:~<"<root>\\\\"`` — prefix match for descendants
+    - ``System.ItemPathDisplay:~<"<root>\\"`` — prefix match for descendants
 
     The trailing-backslash variant prevents false matches on sibling
     folders (e.g. matching ``C:\\Dropbox-other`` when scoped to ``C:\\Dropbox``).
 
-    Inside the AppliesTo quoted string literals, ``\\\\`` is the escape for a
-    single backslash. So every backslash in the input path is doubled
-    before being embedded in the query.
+    AQS does no escape interpretation inside quoted string literals: backslashes
+    are stored and matched literally. A single trailing ``\\`` immediately before
+    the closing ``"`` is parsed as a literal trailing backslash without escaping
+    the quote. So embed each path with its natural single backslashes — no
+    doubling.
 
     Raises ``RuntimeError`` if any root contains a literal ``"`` — escaping
     quotes inside AppliesTo's grammar is unsound for typical filesystem
@@ -56,13 +58,18 @@ def _format_applies_to_query(roots: list[Path]) -> str:
                 f"Dropbox root path {root_str!r} contains a quote character; "
                 "cannot generate AppliesTo query"
             )
-        escaped_root = root_str.replace("\\", "\\\\")
-        clauses.append(f'System.ItemPathDisplay:="{escaped_root}"')
-        # `root_str + "\\"` would double-append on drive roots like `D:\` where
-        # `str(Path)` already ends in a backslash; `.rstrip` + re-append normalizes.
+        # AQS does no escape interpretation inside quoted string literals:
+        # backslashes are literal, and a single trailing `\` before the
+        # closing `"` is parsed as a literal trailing backslash without
+        # escaping the quote. So embed the path with its natural single
+        # backslashes — no doubling.
+        clauses.append(f'System.ItemPathDisplay:="{root_str}"')
+        # Prefix clause matches descendants. Trailing `\` disambiguates
+        # `C:\Dropbox\` from `C:\Dropbox-other` (which would otherwise
+        # also start with `C:\Dropbox`). Drive-root case `D:\` already
+        # ends in `\`; rstrip+re-append normalizes without double-trailing.
         prefix = root_str.rstrip("\\") + "\\"
-        escaped_prefix = prefix.replace("\\", "\\\\")
-        clauses.append(f'System.ItemPathDisplay:~<"{escaped_prefix}"')
+        clauses.append(f'System.ItemPathDisplay:~<"{prefix}"')
     return " OR ".join(clauses)
 
 

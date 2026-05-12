@@ -78,13 +78,13 @@ HKCU\Software\Classes\AllFilesystemObjects\shell\DbxignoreRestore
 The `AppliesTo` property is a Windows Property System query that gates whether the verb is shown for a given Explorer item. Built at install time from `roots.discover()`, with two clauses per root ORed together — root-itself (`:=` exact-equal) plus root-prefix-with-trailing-backslash (`:~<` starts-with) — to match the root and everything under it without falsely matching siblings (e.g. `Dropbox-other`):
 
 ```
-System.ItemPathDisplay:="C:\\Users\\kilo\\Dropbox" OR
-System.ItemPathDisplay:~<"C:\\Users\\kilo\\Dropbox\\" OR
-System.ItemPathDisplay:="D:\\Dropbox (Personal)" OR
-System.ItemPathDisplay:~<"D:\\Dropbox (Personal)\\"
+System.ItemPathDisplay:="C:\Users\kilo\Dropbox" OR
+System.ItemPathDisplay:~<"C:\Users\kilo\Dropbox\" OR
+System.ItemPathDisplay:="D:\Dropbox (Personal)" OR
+System.ItemPathDisplay:~<"D:\Dropbox (Personal)\"
 ```
 
-Inside `AppliesTo` double-quoted string literals, AQS treats `\\` as a single literal backslash — so every backslash in the input path is doubled before embedding. A path `C:\Users\kilo\Dropbox` becomes the stored string `C:\\Users\\kilo\\Dropbox`, which AQS parses back to the literal path. For drive-root mounts like `D:\`, `str(Path)` already ends in `\`, so `_format_applies_to_query` normalizes the prefix-clause path via `.rstrip("\\") + "\\"` before doubling — without that, the prefix clause would render as `D:\\\\` (four stored backslashes → AQS parses to `D:\\`), which matches no real path.
+AQS performs no escape interpretation inside quoted string literals — backslashes are stored and matched literally. A single trailing `\` immediately before the closing `"` is parsed as a literal trailing backslash without escaping the quote. So embed the discovered root path with its natural single backslashes; the prefix clause appends one trailing `\` to disambiguate `C:\Dropbox` from sibling folders like `C:\Dropbox-other`. For drive-root mounts like `D:\`, `str(Path)` already ends in `\`, so `_format_applies_to_query` normalizes via `.rstrip("\\") + "\\"` before embedding — without that, the prefix clause would have a double trailing backslash (matching nothing).
 
 Helper `_format_applies_to_query(roots: list[Path]) -> str` handles the construction.
 

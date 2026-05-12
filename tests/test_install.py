@@ -256,7 +256,7 @@ def test_uninstall_task_skips_wait_when_end_fails_and_daemon_pid_is_set(
     """schtasks /End "Stops only the instances of a program started by a
     scheduled task" (Microsoft docs), so a non-zero /End cannot make
     a non-task-instance daemon exit — e.g. a manually-launched
-    `dbxignored` or a stale state.json from a different install. The
+    `dbxignore daemon` or a stale state.json from a different install. The
     wait must be gated on /End succeeding; otherwise uninstall hangs
     for the full _END_WAIT_TIMEOUT_S window with no benefit.
 

@@ -280,7 +280,7 @@ phase_reconcile() {
     echo '*.tmp' > "$T/.dropboxignore"
     : > "$T/foo.tmp"
     : > "$T/bar.txt"
-    dbxignore apply "$T" >/dev/null 2>&1 && pass "apply 4a (rc=0)" || fail "apply 4a"
+    dbxignore apply "$T" --yes >/dev/null 2>&1 && pass "apply 4a (rc=0)" || fail "apply 4a"
     assert_xattr_set   "$T/foo.tmp" "4a — foo.tmp marked"
     assert_xattr_unset "$T/bar.txt" "4a — bar.txt unmarked"
     assert_xattr_unset "$T/.dropboxignore" "4a — .dropboxignore never marked"
@@ -290,14 +290,14 @@ phase_reconcile() {
     printf '*.tmp\ncache/\n' > "$T/.dropboxignore"
     mkdir -p "$T/cache/sub"
     : > "$T/cache/sub/file.txt"
-    dbxignore apply "$T" >/dev/null 2>&1 && pass "apply 4b" || fail "apply 4b"
+    dbxignore apply "$T" --yes >/dev/null 2>&1 && pass "apply 4b" || fail "apply 4b"
     assert_xattr_set   "$T/cache"              "4b — cache/ marked"
     assert_xattr_unset "$T/cache/sub/file.txt" "4b — descendant unmarked (subtree pruned)"
 
     # 4c. rule removal clears markers
     note "4c — rule removal clears markers"
     printf 'cache/\n' > "$T/.dropboxignore"   # removed *.tmp
-    dbxignore apply "$T" >/dev/null 2>&1 && pass "apply 4c" || fail "apply 4c"
+    dbxignore apply "$T" --yes >/dev/null 2>&1 && pass "apply 4c" || fail "apply 4c"
     assert_xattr_unset "$T/foo.tmp" "4c — foo.tmp cleared after rule removed"
     assert_xattr_set   "$T/cache"   "4c — cache/ still marked"
 
@@ -308,7 +308,7 @@ phase_reconcile() {
     rm -rf "$T"; mkdir -p "$T/build/keep"
     printf 'build/\n!build/keep/\n' > "$T/.dropboxignore"
     : > "$T/build/keep/inside.txt"
-    dbxignore apply "$T" >/dev/null 2>&1 && pass "apply 4d" || fail "apply 4d"
+    dbxignore apply "$T" --yes >/dev/null 2>&1 && pass "apply 4d" || fail "apply 4d"
     assert_xattr_set   "$T/build"      "4d — build/ marked (parent dir rule wins)"
     assert_xattr_unset "$T/build/keep" "4d — descendant not visited (subtree pruned)"
     if dbxignore explain "$T/build/keep" 2>&1 | grep -qF '[dropped]'; then
@@ -331,7 +331,7 @@ phase_reconcile() {
     echo '*.log' > "$TS/.dropboxignore"
     : > "$TS/real.log"
     ln -sfn real.log "$TS/link.log"
-    dbxignore apply "$T" >/tmp/dbxignore-apply.out 2>&1 \
+    dbxignore apply "$T" --yes >/tmp/dbxignore-apply.out 2>&1 \
         && pass "apply 4e completes" \
         || fail "apply 4e crashed"
     if grep -qiE 'WARN|symlink|permission|enotsup' /tmp/dbxignore-apply.out; then

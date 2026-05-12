@@ -2484,11 +2484,28 @@ Touches: `scripts/manual-test-ubuntu-vps.sh`, `scripts/manual-test-macos.sh`.
 
 ---
 
+## 114. CLI `--verbose` flag for INFO logging; default to WARNING
+
+dbxignore's CLI configures root `logging.basicConfig` at INFO level, so every `logger.info()` call in any code path surfaces on the user's terminal. Modern Python CLIs (`uv tool install`, `pip`, `pre-commit`, `rustup`) default to terse one-line summaries with logging treated as operator-only (file handlers, not user terminals); INFO is gated behind a `--verbose` flag.
+
+Today `dbxignore install` (and other subcommands that hit `logger.info` paths) emit log lines alongside the intentional `click.echo` summaries. PR #222 dropped two duplicate `logger.info` calls in `windows_task.install_task` and `windows_shell.install_shell_integration` to mitigate the most visible duplication on the `install` path, but the broader pattern remains: any future `logger.info` added to a CLI-reachable code path will surface to users by default.
+
+**Fix candidates:**
+
+- **Add a `--verbose` flag at the click group level.** Default `logging.basicConfig(level=logging.WARNING)`; with `--verbose`, set to INFO. Audit each subcommand (`apply`, `clear`, `status`, `daemon`, etc.) for `logger.info` calls that should stay user-visible by default — convert those to `click.echo` instead; demote the rest. ~15-25 LOC.
+- **Per-subcommand verbosity flag** instead of group-level. Less ergonomic — every command would need its own `--verbose`. Defer.
+
+**Urgency:** low. Cosmetic QoL. Affects every CLI subcommand's noise level but no correctness path.
+
+Touches: `src/dbxignore/cli.py` (`@main.group()` decorator, basicConfig setup); audit all `logger.info` callsites in code paths reachable from non-daemon CLI commands.
+
+---
+
 ## Status
 
 ### Open
 
-Twenty-two items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12).
+Twenty-three items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12).
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2512,6 +2529,7 @@ Twenty-two items. Most are passive (no concrete trigger requires action) — bun
 - **#108** — `dropbox_root` fixture from `test_cli_symlink_path_args.py` packages the ~27-site inline `monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])` pattern across `test_cli_apply.py` / `test_cli_clear.py` / `test_cli_status_list_explain.py`. Filed for design-tension record (precedent: #40, #51); current dual shape is defensible.
 - **#109** — `FileNotFoundError`-before-`OSError` 'vanished path' idiom now repeats across `reconcile._reconcile_path` (2 sites), `state._read_at` (1 site), and `cli.uninstall --purge` (4 sites after PR #204). Filed for design-tension record (precedent: #40, #51, #108); current per-site shape is defensible because the local response action varies (return None / set flag / continue / pass) and no generic helper fits all seven sites.
 - **#113** — Other `cmd | grep -q` sites in `scripts/manual-test-{ubuntu-vps,macos}.sh` (`--help`, `explain`, `uv tool list`) share the SIGPIPE+pipefail false-failure risk that bit 5f. Capture-then-grep is the preemptive fix; defer until one of them actually flakes.
+- **#114** — CLI `--verbose` flag for INFO logging; default to WARNING. Today INFO-level log lines from `logger.info` calls surface to users on every CLI invocation alongside intentional `click.echo` summaries. Cosmetic QoL.
 
 ### Resolved (reverse chronological)
 

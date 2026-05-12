@@ -285,6 +285,93 @@ def test_is_daemon_alive_psutil_error_returns_false(fake_psutil_process: FakePsu
     assert state.is_daemon_alive(12345) is False
 
 
+# ---- is_daemon_alive psutil-unavailable fallback (item #118) ---------------
+
+
+def test_is_daemon_alive_psutil_unavailable_os_kill_succeeds_returns_true(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """psutil import fails, os.kill bare-existence probe succeeds → True.
+
+    The legacy fallback path for systems without psutil. Real psutil is
+    installed in dev/CI, so simulate its absence via `sys.modules[None]`
+    (the Python idiom for poisoning a module import).
+    """
+    monkeypatch.setitem(sys.modules, "psutil", None)
+    monkeypatch.setattr("os.kill", lambda _pid, _sig: None)
+    assert state.is_daemon_alive(12345) is True
+
+
+def test_is_daemon_alive_psutil_unavailable_process_lookup_error_returns_false_silent(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """psutil unavailable, os.kill raises ProcessLookupError → False, NO warning.
+
+    ProcessLookupError is the expected "no such process" case — the common
+    path post-daemon-death. Should not generate log noise on every CLI
+    invocation after the daemon stops. Item #118 split the catch arms to
+    distinguish this routine case from the rare OSError/SystemError ones.
+    """
+    monkeypatch.setitem(sys.modules, "psutil", None)
+
+    def fake_kill(_pid: int, _sig: int) -> None:
+        raise ProcessLookupError("no such process")
+
+    monkeypatch.setattr("os.kill", fake_kill)
+    with caplog.at_level("WARNING", logger="dbxignore.state"):
+        result = state.is_daemon_alive(12345)
+    assert result is False
+    assert not any("os.kill" in rec.message for rec in caplog.records)
+
+
+def test_is_daemon_alive_psutil_unavailable_oserror_returns_false_with_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """psutil unavailable, os.kill raises generic OSError → False + WARNING.
+
+    Rare path — Windows PermissionError on the kill probe, EINVAL on a
+    non-PID-shaped pid, etc. The WARNING surfaces the underlying error so
+    callers can see that probing failed for an unusual reason rather than
+    just "daemon is not running". Item #118.
+    """
+    monkeypatch.setitem(sys.modules, "psutil", None)
+
+    def fake_kill(_pid: int, _sig: int) -> None:
+        raise OSError(87, "fake EINVAL")
+
+    monkeypatch.setattr("os.kill", fake_kill)
+    with caplog.at_level("WARNING", logger="dbxignore.state"):
+        result = state.is_daemon_alive(12345)
+    assert result is False
+    assert any("os.kill" in rec.message and "OSError" in rec.message for rec in caplog.records)
+
+
+def test_is_daemon_alive_psutil_unavailable_system_error_returns_false_with_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """psutil unavailable, os.kill raises SystemError → False + WARNING.
+
+    Item #118: CPython wraps an os.kill OSError as SystemError when called
+    while another exception is still being handled. Surfaced 2026-05-12
+    under the Python 3.14 + psutil partial-init scenario from item #117
+    — `dbxignore uninstall --purge` crashed with an opaque
+    `SystemError: <built-in function kill> returned a result with an
+    exception set` rather than treating the indeterminate PID probe as
+    "not alive". The fix catches SystemError alongside OSError so callers
+    get `False` + a diagnostic WARNING instead of an uncaught exception.
+    """
+    monkeypatch.setitem(sys.modules, "psutil", None)
+
+    def fake_kill(_pid: int, _sig: int) -> None:
+        raise SystemError("<built-in function kill> returned a result with an exception set")
+
+    monkeypatch.setattr("os.kill", fake_kill)
+    with caplog.at_level("WARNING", logger="dbxignore.state"):
+        result = state.is_daemon_alive(12345)
+    assert result is False
+    assert any("os.kill" in rec.message and "SystemError" in rec.message for rec in caplog.records)
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows path layout")
 def test_default_path_windows_under_localappdata(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path

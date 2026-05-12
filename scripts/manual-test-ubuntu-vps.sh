@@ -83,6 +83,13 @@ cleanup() {
     # crash skipped the in-phase cleanup (BACKLOG #89). Honoring a stale
     # marker on a future install would silently pad every initial sweep.
     rm -f "$DBXIGNORE_STATE_DIR/_test_slow_sweep" 2>/dev/null || true
+    # Phase 4.5 case 4s leaves recovery sentinels set across its destructive
+    # section; honor them on abort. No-op when sentinels are unset (the
+    # in-phase restore ran successfully). Function is defined in
+    # `_phase_extended_cli.sh`, sourced below before this trap fires.
+    if declare -F _phase_4s_recover_state_json >/dev/null 2>&1; then
+        _phase_4s_recover_state_json
+    fi
 }
 trap cleanup EXIT
 
@@ -732,6 +739,17 @@ phase_uninstall() {
         pass "dbxignore uninstall --purge (rc=0)"
     else
         fail "dbxignore uninstall --purge"; sed 's/^/    /' /tmp/dbxignore-purge.out
+    fi
+    # PR #204 regression guard: happy-path purge emits the "Cleared N" line
+    # but must NOT emit the partial-failure error report. (Forcing a real
+    # marker-clear OSError for an end-to-end test requires platform-specific
+    # FS contortions; the unit tests in test_install.py cover the assertion
+    # tightly. This guard pins that the happy path stays clean.)
+    if ! grep -q 'Could not fully clear' /tmp/dbxignore-purge.out; then
+        pass "purge — no spurious 'Could not fully clear' on happy path (PR #204)"
+    else
+        fail "purge — emitted 'Could not fully clear' on happy path"
+        sed 's/^/    /' /tmp/dbxignore-purge.out
     fi
 
     [ -f "$T/watch-me.tmp" ] && assert_xattr_unset "$T/watch-me.tmp" "purge — watch-me.tmp marker cleared"

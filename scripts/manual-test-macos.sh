@@ -56,6 +56,21 @@ pass()   { PASS_COUNT=$((PASS_COUNT+1)); echo "  ${G}PASS${X} $*"; }
 fail()   { FAIL_COUNT=$((FAIL_COUNT+1)); FAIL_NAMES+=("$*"); echo "  ${R}FAIL${X} $*"; }
 abort()  { echo "${R}ABORT:${X} $*" >&2; exit 1; }
 
+# EXIT trap — honor Phase 4.5 case 4s's recovery sentinels if a `set -e` abort
+# fired mid-test. No-op when sentinels are unset (the in-phase restore ran
+# successfully). The recovery function is defined in `_phase_extended_cli.sh`,
+# sourced below before this trap fires. Unlike `manual-test-ubuntu-vps.sh`,
+# macOS doesn't run a long-lived `dropboxd` foreground process during tests
+# (the .app launches the daemon out-of-band), so this cleanup is currently
+# 4s-only; expand to additional recovery hooks alongside any future
+# destructive-setup cases.
+cleanup() {
+    if declare -F _phase_4s_recover_state_json >/dev/null 2>&1; then
+        _phase_4s_recover_state_json
+    fi
+}
+trap cleanup EXIT
+
 # ---- xattr helpers ---------------------------------------------------------
 # macOS picks the active attribute name from sync mode (legacy ↔
 # com.dropbox.ignored, File Provider ↔ com.apple.fileprovider.ignore#P,
@@ -650,6 +665,17 @@ phase_uninstall() {
         pass "dbxignore uninstall --purge (rc=0)"
     else
         fail "dbxignore uninstall --purge"; sed 's/^/    /' /tmp/dbxignore-purge.out
+    fi
+    # PR #204 regression guard: happy-path purge emits the "Cleared N" line
+    # but must NOT emit the partial-failure error report. (Forcing a real
+    # marker-clear OSError for an end-to-end test requires platform-specific
+    # FS contortions; the unit tests in test_install.py cover the assertion
+    # tightly. This guard pins that the happy path stays clean.)
+    if ! grep -q 'Could not fully clear' /tmp/dbxignore-purge.out; then
+        pass "purge — no spurious 'Could not fully clear' on happy path (PR #204)"
+    else
+        fail "purge — emitted 'Could not fully clear' on happy path"
+        sed 's/^/    /' /tmp/dbxignore-purge.out
     fi
 
     [ -f "$T/watch-me.tmp" ] && assert_xattr_unset "$T/watch-me.tmp" "purge — watch-me.tmp marker cleared"

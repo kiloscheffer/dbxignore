@@ -1,17 +1,38 @@
 # Sourced by scripts/manual-test-{ubuntu-vps,macos}.sh.
 #
 # Defines `phase_extended_cli()`, the Phase 4.5 block exercising the CLI
-# surface added across PRs #100, #102, #103, #107, #108. Extracted because
-# the body is byte-near-identical between the two scripts (~120 LOC each)
-# and was being maintained twice; backlog item #75 is the trigger.
+# surface added across PRs #100, #102, #103, #107, #108, #195, #203, #205.
+# Extracted because the body is byte-near-identical between the two scripts
+# (~120 LOC each) and was being maintained twice; backlog item #75 is the
+# trigger.
 #
 # Depends on the parent script's shared environment:
 #   - $DROPBOX_DIR, $TEST_SUBDIR — test-tree location
+#   - $DBXIGNORE_STATE_DIR — per-user state dir (state.json, daemon.log)
 #   - phase, note, pass, fail — output helpers
 #   - assert_grep, assert_xattr_set, assert_xattr_unset — assertion helpers
 #
 # Windows (`scripts/manual-test-windows.ps1`) is PowerShell and does not
 # share this body — see backlog item #75.
+
+# Recovery hook for case 4s — called from each parent script's EXIT trap
+# (cleanup()) so an abort during the destructive section restores the user's
+# state.json regardless of how the script exited. The sentinels
+# (`_4S_STATE_JSON`, `_4S_STATE_JSON_EXISTED`) are set inside `phase_extended_cli`
+# right before the destructive operations and unset after successful
+# completion; this function is a no-op when sentinels are unset.
+_phase_4s_recover_state_json() {
+    if [ -z "${_4S_STATE_JSON:-}" ]; then
+        return 0
+    fi
+    chmod 644 "$_4S_STATE_JSON" 2>/dev/null || true
+    if [ "${_4S_STATE_JSON_EXISTED:-0}" = "1" ] && [ -f /tmp/dbx-4s-state-backup.json ]; then
+        mv -f /tmp/dbx-4s-state-backup.json "$_4S_STATE_JSON" 2>/dev/null || true
+    elif [ "${_4S_STATE_JSON_EXISTED:-0}" = "0" ]; then
+        rm -f "$_4S_STATE_JSON" 2>/dev/null || true
+    fi
+    unset _4S_STATE_JSON _4S_STATE_JSON_EXISTED
+}
 
 phase_extended_cli() {
     phase "Phase 4.5 — extended CLI surface (init, generate, apply variants, clear)"
@@ -220,4 +241,107 @@ phase_extended_cli() {
         fi
     fi
     assert_grep /tmp/dbx-4r-list.err 'does not exist' "4r — list stderr says 'does not exist'"
+
+    # 4s — clear fail-closed on unreadable state.json (PR #203, item #97 Codex P2 followup)
+    # state.json exists but `state.read()` returns None (chmod 000 → PermissionError
+    # → _read_at returns None). cli.clear refuses to proceed because daemon liveness
+    # is unknown; --force overrides.
+    #
+    # Recovery: sentinels (`_4S_STATE_JSON`, `_4S_STATE_JSON_EXISTED`) are set
+    # BEFORE the destructive overwrite. The parent script's EXIT trap calls
+    # `_phase_4s_recover_state_json` to chmod 644 + restore content if a `set -e`
+    # abort fires anywhere between the overwrite and the explicit restore at the
+    # end. Sentinels are unset after the successful restore, making the recovery
+    # hook a no-op.
+    note "4s — clear fail-closed on unreadable state.json"
+    mkdir -p "$DBXIGNORE_STATE_DIR"
+    local state_json="$DBXIGNORE_STATE_DIR/state.json"
+    local state_json_existed=0
+    if [ -f "$state_json" ]; then
+        state_json_existed=1
+        cp -p "$state_json" /tmp/dbx-4s-state-backup.json
+    fi
+
+    # Install recovery sentinels BEFORE the first destructive operation.
+    # The parent cleanup() trap reads these; unset on successful completion.
+    _4S_STATE_JSON="$state_json"
+    _4S_STATE_JSON_EXISTED="$state_json_existed"
+
+    printf '{}\n' > "$state_json"
+
+    # Setup the test target. Any setup failure aborts cleanly via the parent's
+    # EXIT trap, which calls _phase_4s_recover_state_json to restore state.json.
+    rm -rf "$T"; mkdir -p "$T"
+    printf '*.tmp\n' > "$T/.dropboxignore"
+    : > "$T/foo.tmp"
+    dbxignore apply "$T" --yes >/dev/null 2>&1
+
+    # Lock window 1: just the dbxignore clear call (no setup, no assertions inside).
+    local clear_rc
+    chmod 000 "$state_json"
+    if dbxignore clear "$T" --yes >/tmp/dbx-4s-clear.out 2>/tmp/dbx-4s-clear.err; then
+        clear_rc=0
+    else
+        clear_rc=$?
+    fi
+    chmod 644 "$state_json"
+
+    if [ "$clear_rc" -eq 2 ]; then
+        pass "4s — clear exits 2 on unreadable state.json"
+    else
+        fail "4s — clear exited $clear_rc instead of 2"
+    fi
+    assert_grep /tmp/dbx-4s-clear.err 'unreadable' "4s — clear stderr names 'unreadable' state file"
+    # Marker still set — fail-closed means no destructive action ran.
+    assert_xattr_set "$T/foo.tmp" "4s — clear did not clear marker (refused)"
+
+    # Lock window 2: --force test.
+    local force_rc
+    chmod 000 "$state_json"
+    if dbxignore clear "$T" --yes --force >/tmp/dbx-4s-force.out 2>&1; then
+        force_rc=0
+    else
+        force_rc=$?
+    fi
+    chmod 644 "$state_json"
+
+    if [ "$force_rc" -eq 0 ]; then
+        pass "4s — clear --force overrides the unreadable-state guard"
+    else
+        fail "4s — clear --force should succeed (exit=$force_rc)"
+    fi
+    assert_xattr_unset "$T/foo.tmp" "4s — clear --force cleared the marker"
+
+    # Restore state.json content and unset the recovery sentinels.
+    if [ "$state_json_existed" -eq 1 ]; then
+        mv /tmp/dbx-4s-state-backup.json "$state_json"
+    else
+        rm -f "$state_json"
+    fi
+    unset _4S_STATE_JSON _4S_STATE_JSON_EXISTED
+
+    # 4t — path-taking verbs refuse `..` after a symlinked component (PR #205, item #105)
+    # Lexical normalization of `link/..` differs from filesystem-true resolution;
+    # `_normalize_under_root` rejects the path up-front. Test one verb (explain)
+    # — the guard is in the shared validator and unit tests cover all 5 verbs.
+    note "4t — explain refuses '..-after-symlink' path"
+    rm -rf "$T"; mkdir -p "$T"
+    local link_target="$T/target-dir"
+    mkdir -p "$link_target"
+    : > "$link_target/file.txt"
+    ln -s "$link_target" "$T/link"
+
+    local link_dotdot_arg="$T/link/../file.txt"
+    if dbxignore explain "$link_dotdot_arg" >/tmp/dbx-4t-explain.out 2>/tmp/dbx-4t-explain.err; then
+        fail "4t — explain should refuse '..-after-symlink' path"
+    else
+        local exit_code=$?
+        if [ $exit_code -eq 2 ]; then
+            pass "4t — explain exits 2 on '..-after-symlink' path"
+        else
+            fail "4t — explain exited $exit_code instead of 2"
+        fi
+    fi
+    assert_grep /tmp/dbx-4t-explain.err 'symlinked component' \
+        "4t — explain stderr names 'symlinked component'"
 }

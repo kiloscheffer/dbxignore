@@ -485,18 +485,25 @@ function Test-ExtendedCli {
         Write-Fail "4l - did not emit 'Nothing to apply'"
     }
 
-    # 4m — detector regression: build/* + !build/keep/ no conflict (PR #108)
-    Write-Note "4m - detector fix: build/* + !build/keep/ no conflict"
+    # 4m — detector regression: case4m_target/* + !case4m_target/keep/ no conflict (PR #108)
+    # Uses `case4m_target` instead of the generic `build` because testers who
+    # have run `dbxignore init` at their Dropbox root carry a `build/` rule
+    # at the ancestor `.dropboxignore`. Dropbox's directory-inheritance
+    # semantic would then mark the test's `build/` via the ancestor rule and
+    # mask the local `!build/keep/` negation — a real but unrelated effect
+    # that the case 4m assertion would mis-attribute as "detector fix didn't
+    # apply" (backlog item #111).
+    Write-Note "4m - detector fix: case4m_target/* + !case4m_target/keep/ no conflict"
     Remove-Item -Path $T -Recurse -Force
-    New-Item -ItemType Directory -Path "$T\build\keep" -Force | Out-Null
-    Set-Content -Path "$T\.dropboxignore" -Value "build/*`n!build/keep/" -Encoding utf8
-    New-Item -ItemType File -Path "$T\build\keep\inside.txt" -Force | Out-Null
-    New-Item -ItemType File -Path "$T\build\foo.tmp" -Force | Out-Null
+    New-Item -ItemType Directory -Path "$T\case4m_target\keep" -Force | Out-Null
+    Set-Content -Path "$T\.dropboxignore" -Value "case4m_target/*`n!case4m_target/keep/" -Encoding utf8
+    New-Item -ItemType File -Path "$T\case4m_target\keep\inside.txt" -Force | Out-Null
+    New-Item -ItemType File -Path "$T\case4m_target\foo.tmp" -Force | Out-Null
     dbxignore apply "$T" --yes 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) { Write-Pass "4m - apply (rc=0)" } else { Write-Fail "4m - apply" }
-    Assert-AdsSet   -Path "$T\build\foo.tmp" -Name "4m - build/foo.tmp marked (build/* matches)"
-    Assert-AdsUnset -Path "$T\build\keep"    -Name "4m - build/keep NOT marked (negation now effective post-fix)"
-    Assert-AdsUnset -Path "$T\build"         -Name "4m - build/ NOT marked (children-only rule)"
+    Assert-AdsSet   -Path "$T\case4m_target\foo.tmp" -Name "4m - case4m_target/foo.tmp marked (case4m_target/* matches)"
+    Assert-AdsUnset -Path "$T\case4m_target\keep"    -Name "4m - case4m_target/keep NOT marked (negation now effective post-fix)"
+    Assert-AdsUnset -Path "$T\case4m_target"         -Name "4m - case4m_target/ NOT marked (children-only rule)"
     $statusOut = (dbxignore status 2>&1) -join "`n"
     if ($statusOut -match 'rule conflicts \([1-9]') {
         Write-Note ($statusOut -split "`n" | Select-String -SimpleMatch 'rule conflicts' -Context 0,5 | Out-String)

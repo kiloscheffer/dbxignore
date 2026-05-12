@@ -164,7 +164,7 @@ phase_extended_cli() {
         fail "4n — clear"
         sed 's/^/    /' /tmp/dbx-clear.out
     fi
-    assert_xattr_unset "$T/build/foo.tmp" "4n — clear removed build/foo.tmp marker"
+    assert_xattr_unset "$T/case4m_target/foo.tmp" "4n — clear removed case4m_target/foo.tmp marker"
 
     # 4o — dbxignore ignore <path> happy path (PR #191)
     note "4o — dbxignore ignore (basic)"

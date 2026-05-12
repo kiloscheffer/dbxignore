@@ -541,7 +541,7 @@ function Test-ExtendedCli {
     $clearOut = "$env:TEMP\dbxignore-clear.out"
     dbxignore clear "$T" --yes *> $clearOut
     if ($LASTEXITCODE -eq 0) { Write-Pass "4n - clear (rc=0)" } else { Write-Fail "4n - clear"; Get-Content $clearOut | ForEach-Object { Write-Note "    $_" } }
-    Assert-AdsUnset -Path "$T\build\foo.tmp" -Name "4n - clear removed build/foo.tmp marker"
+    Assert-AdsUnset -Path "$T\case4m_target\foo.tmp" -Name "4n - clear removed case4m_target/foo.tmp marker"
 
     # 4o — dbxignore ignore <path> happy path (PR #191)
     Write-Note "4o - dbxignore ignore (basic)"

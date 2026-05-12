@@ -1058,6 +1058,77 @@ function Test-Daemon {
         Write-Fail "5g - verb keys missing after default install (skipping registry-property assertions)"
     }
 
+    # 5g - Explorer-verb fidelity probes (BACKLOG #115)
+    # The registry-string assertions above check what we wrote but not
+    # whether Windows Explorer's AQS evaluator agrees. PR #224 fixed a
+    # backslash-doubling regression that passed every existing 5g check
+    # because the stored AppliesTo parsed fine but matched no real path —
+    # the verbs registered, then were invisible in Explorer. These two
+    # sub-cases drive Shell.Application (the same COM surface Explorer
+    # uses) against real files: one inside the Dropbox root (verb must
+    # surface) and one in a sibling folder whose name starts with the
+    # Dropbox basename (verb must NOT surface — exercises the trailing-`\`
+    # invariant in the `:~<` prefix clause).
+    Write-Note "5g - Shell.Application surfaces 'Ignore from Dropbox' inside Dropbox root"
+    $probeFile = Join-Path $T "_5g_probe.tmp"
+    Set-Content -Path $probeFile -Value "probe" -Encoding ascii -NoNewline
+    try {
+        $shell = New-Object -ComObject Shell.Application
+        $folder = $shell.NameSpace($T)
+        if ($null -eq $folder) {
+            Write-Fail "5g - Shell.Application.NameSpace returned null for $T"
+        } else {
+            $item = $folder.ParseName((Split-Path -Leaf $probeFile))
+            if ($null -eq $item) {
+                Write-Fail "5g - Shell.Application.ParseName returned null for probe file"
+            } else {
+                # Verbs().Name surfaces the MUIVerb display string; Shell may
+                # inject an `&` accelerator marker, so strip before comparing.
+                $verbNames = @($item.Verbs() | ForEach-Object { ($_.Name -replace '&', '') })
+                if ($verbNames -contains "Ignore from Dropbox") {
+                    Write-Pass "5g - 'Ignore from Dropbox' visible on Dropbox-root file"
+                } else {
+                    Write-Note "    verbs surfaced: $($verbNames -join '; ')"
+                    Write-Fail "5g - 'Ignore from Dropbox' NOT visible inside Dropbox (AppliesTo may not evaluate)"
+                }
+            }
+        }
+    } finally {
+        Remove-Item -Force -ErrorAction SilentlyContinue -Path $probeFile
+    }
+
+    # Negative probe — sibling folder name STARTS WITH the Dropbox basename
+    # so a regression that drops the trailing `\` in `:~<"<root>\"` would
+    # make the prefix `C:\Dropbox` match `C:\Dropbox-dbxignore-5g-sibling`
+    # too, surfacing the verb here.
+    Write-Note "5g - Shell.Application does NOT surface 'Ignore from Dropbox' outside Dropbox root"
+    $siblingDir = "$($script:DropboxDir)-dbxignore-5g-sibling"
+    $siblingProbe = Join-Path $siblingDir "probe.tmp"
+    New-Item -ItemType Directory -Path $siblingDir -Force | Out-Null
+    Set-Content -Path $siblingProbe -Value "probe" -Encoding ascii -NoNewline
+    try {
+        $shell = New-Object -ComObject Shell.Application
+        $folder = $shell.NameSpace($siblingDir)
+        if ($null -eq $folder) {
+            Write-Fail "5g - Shell.Application.NameSpace returned null for sibling $siblingDir"
+        } else {
+            $item = $folder.ParseName((Split-Path -Leaf $siblingProbe))
+            if ($null -eq $item) {
+                Write-Fail "5g - Shell.Application.ParseName returned null for sibling probe file"
+            } else {
+                $verbNames = @($item.Verbs() | ForEach-Object { ($_.Name -replace '&', '') })
+                if ($verbNames -notcontains "Ignore from Dropbox") {
+                    Write-Pass "5g - 'Ignore from Dropbox' correctly absent on sibling folder"
+                } else {
+                    Write-Note "    verbs surfaced on sibling: $($verbNames -join '; ')"
+                    Write-Fail "5g - 'Ignore from Dropbox' visible outside Dropbox (AppliesTo too broad)"
+                }
+            }
+        }
+    } finally {
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -Path $siblingDir
+    }
+
     # Remove slow-sweep marker so phase 6's re-install + uninstall cycles
     # run with normal sweep timing (item #89). Phase 7 also removes it as
     # a defensive backstop if this point is never reached.
@@ -1327,6 +1398,16 @@ function Test-Cleanup {
     $slowSweepMarker = Join-Path $env:LOCALAPPDATA "dbxignore\_test_slow_sweep"
     if (Test-Path $slowSweepMarker) {
         Remove-Item $slowSweepMarker -Force -ErrorAction SilentlyContinue
+    }
+
+    # Defensive backstop for the 5g sibling probe dir (BACKLOG #115). The
+    # `try/finally` in phase 5g removes it on the happy path; a mid-phase-5
+    # abort could leave it behind, and it lives outside `$T` so the
+    # recursive cleanup above doesn't reach it.
+    $sibling5g = "$($script:DropboxDir)-dbxignore-5g-sibling"
+    if (Test-Path $sibling5g) {
+        Remove-Item -Path $sibling5g -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Note "5g sibling probe dir removed (defensive)"
     }
 
     uv tool uninstall dbxignore 2>$null | Out-Null

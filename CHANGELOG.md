@@ -7,6 +7,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-05-12
+
+Patch release. Pins LF line endings on `dbxignore generate` and `dbxignore init` writes on Windows (v0.5.0's PR #207 text-write consolidation missed two call sites); plus a README symmetry fix so the install-verification step works on every platform.
+
+### Fixed
+
+- **`dbxignore generate` and `dbxignore init` now pin LF line endings on Windows.** v0.5.0's PR #207 consolidated the project's `Path.write_text(...)` callsites, but the new shape inherited Python's `newline=None` default — translating `\n` → `\r\n` on Windows for two call sites. `generate`'s byte-for-byte invariant broke when the source `.gitignore` was LF-canonical; `init`'s LF-canonical output contract broke on every Windows install. Both call sites now pass `newline=""` explicitly so the bytes written match the bytes intended. Resolves BACKLOG #110.
+
+### Changed
+
+- **README install sections now symmetrically end with `dbxignore status` as the verification step.** Previously only the Linux section had a verification command (`systemctl --user status dbxignore.service`); Windows and macOS had none. A reader scrolling for "did the install work" could land on the wrong section's command and run a Linux-only `systemctl` invocation on PowerShell. The Linux section's `systemctl --user status` and `journalctl --user -u dbxignore.service` references move into the following prose paragraph as "for systemd-level unit state or recent log output."
+
+### Internal
+
+- Five manual-test-script fixes (Phase 4 `--yes` flag for Linux/macOS bash scripts; Phase 5f `set -o pipefail` + `grep -q` false-failure on a multi-line click producer; Windows Phase 5 case 5e narrowed to a single file; case 4m target renamed to avoid an ancestor-rule mask; Windows Reset-TestDir retry loop for transient file-lock contention).
+- Three new gotcha entries in `docs/internals/active-gotchas.md`: SIGPIPE+pipefail with `grep -q` on Python producers; `pre-commit install` needs explicit `--hook-type` flags for commit-msg + pre-push; uv tool cache can serve a stale wheel after `uv tool uninstall`.
+
 ## [0.5.0] — 2026-05-12
 
 Reliability sweep across destructive verbs, rule cache, and path validators. Adds two new CLI verbs (`ignore`/`unignore`) for per-path rule management; changes the symlink-handling contract on path-taking verbs so they operate on the link object rather than the target. Multiple Breaking callouts — see entries below.

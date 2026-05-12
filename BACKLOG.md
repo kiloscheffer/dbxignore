@@ -2382,6 +2382,8 @@ Touches: `src/dbxignore/cli.py`, `src/dbxignore/state.py`, `src/dbxignore/reconc
 
 ## 110. `cli.generate` doesn't pin LF line endings on Windows
 
+**Status: RESOLVED 2026-05-12 (PR #214).** Pinned `newline=""` on both the `cli.generate` write site (the originally-filed surface) and the `cli.init` write site (the audit candidate flagged in this entry's "Fix candidates"). Test-side LF-pin for case 4h source-writing in `manual-test-windows.ps1` landed in PR #211. Shipped in v0.5.1.
+
 `cli.generate` writes the translated `.dropboxignore` via `target.write_text(text, encoding="utf-8")` at `cli.py:1836` without specifying `newline=""`. Python's default text-mode write translates `\n` → `\r\n` on Windows, so generate outputs CRLF on Windows and LF elsewhere for byte-identical inputs. The documented byte-for-byte invariant of `generate` is therefore broken on Windows: any source `.gitignore` with non-CRLF endings (a file created with a POSIX tool, a git checkout with `core.autocrlf=input`, or content added by a Linux dev branch) produces a `.dropboxignore` that differs byte-for-byte from the source.
 
 This inconsistency was introduced in PR #207 / v0.5.0: `_atomic_write_rule_file` (used by `ignore`/`unignore`) was pinned to LF via `newline=""`, but the parallel `generate` write site was missed. On the same Windows host, `dbxignore ignore` writes LF and `dbxignore generate` writes CRLF — visible in `git diff` if both files end up in the same repo.
@@ -2399,6 +2401,8 @@ Surfaced 2026-05-12 by `scripts/manual-test-windows.ps1` Phase 4.5 cases 4h and 
 Touches: `src/dbxignore/cli.py` (generate write_text + likely init); `tests/test_cli_generate.py`; `tests/test_cli_init.py` (add byte-equality cross-platform test if not present); `scripts/manual-test-windows.ps1` (source-writing in cases 4h/4i may need parallel updates once the LF pin lands).
 
 ## 111. Detector regression on `build/*` + `!build/keep/` on Windows (manual-test case 4m)
+
+**Status: RESOLVED 2026-05-12 (PR #213).** No detector regression — the title's framing was wrong. Root cause was test-environmental: the host's `C:\Dropbox\.dropboxignore` (written by `dbxignore init`'s template) contained a `build/` rule, which is an ancestor rule that masks the test's local `!build/keep/` negation through directory-inheritance semantics. Renaming the test target from `build/` to `case4m_target/` makes the case hermetic against arbitrary ancestor rules. PR #216 followed up with the matching `4n` clear-assertion path. Shipped in v0.5.1.
 
 Manual-test case 4m on Windows (Phase 4.5 coverage landed in PR #209) failed three assertions on a real Windows host running v0.5.0:
 
@@ -2429,6 +2433,8 @@ Surfaced 2026-05-12 by `scripts/manual-test-windows.ps1` Phase 4.5 case 4m on th
 Touches: `src/dbxignore/rules_conflicts.py`; `tests/test_rules_conflicts.py`; possibly `src/dbxignore/rules.py`.
 
 ## 112. `uninstall` (no `--purge`) appears to clear the marker on `watch-me.tmp` during Phase 5 → 6 transition
+
+**Status: RESOLVED 2026-05-12 (PR #216).** No `uninstall`-path regression. Root cause was test-script: Phase 5 case 5e ran `dbxignore clear --force` on the entire `$T` tree, removing the marker that Phase 6's `watch-me.tmp` assertion was about to check. Narrowed 5e's clear to a single file (`$T/freshrule.dat`) so Phase 6's marker survives. Shipped in v0.5.1.
 
 Manual-test Phase 6 assertion: after `dbxignore install` (Phase 5 daemon setup) marked `$T\watch-me.tmp`, Phase 6's `dbxignore uninstall` (WITHOUT `--purge`) is expected to leave the marker intact — the documented contract is that plain `uninstall` removes the daemon service but does NOT clear markers. The assertion `uninstall — markers retained on watch-me.tmp` failed with `ADS=missing` on the v0.5.0 release validation pass on Windows.
 
@@ -2480,7 +2486,7 @@ Touches: `scripts/manual-test-ubuntu-vps.sh`, `scripts/manual-test-macos.sh`.
 
 ### Open
 
-Twenty-six items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Items #110, #111, #112, and #113 are v0.5.0 release-validation findings (surfaced by the Windows and Linux manual-test runs on 2026-05-12) and should be prioritized ahead of purely polish work.
+Twenty-three items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12).
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2504,12 +2510,15 @@ Twenty-six items. Most are passive (no concrete trigger requires action) — bun
 - **#107** — Promote `symlink_capable` runtime-probe fixture from `test_cli_symlink_path_args.py` to `conftest.py`. The ~10 existing tests using `@pytest.mark.skipif(sys.platform == "win32", ...)` could then drop the static decorator and exercise on Windows hosts that support symlink creation (CI's Windows runner has Dev Mode).
 - **#108** — `dropbox_root` fixture from `test_cli_symlink_path_args.py` packages the ~27-site inline `monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])` pattern across `test_cli_apply.py` / `test_cli_clear.py` / `test_cli_status_list_explain.py`. Filed for design-tension record (precedent: #40, #51); current dual shape is defensible.
 - **#109** — `FileNotFoundError`-before-`OSError` 'vanished path' idiom now repeats across `reconcile._reconcile_path` (2 sites), `state._read_at` (1 site), and `cli.uninstall --purge` (4 sites after PR #204). Filed for design-tension record (precedent: #40, #51, #108); current per-site shape is defensible because the local response action varies (return None / set flag / continue / pass) and no generic helper fits all seven sites.
-- **#110** — `cli.generate` doesn't pin LF line endings on Windows; the byte-for-byte invariant breaks for any source `.gitignore` with non-CRLF endings. Concrete fix in hand: pin `newline=""` at `cli.py:1836`. Incomplete-LF-pin bug introduced in PR #207 / v0.5.0 — surfaced by manual-test cases 4h/4i.
-- **#111** — Detector reports a conflict on `build/*` + `!build/keep/` on Windows (manual-test case 4m); the CHANGELOG claims this case produces zero conflicts and an effective negation. Either a CRLF-parsing path in the detector, a pathspec-on-Windows behavior, or a genuine regression. Needs local Windows reproduction to narrow.
-- **#112** — Manual-test Phase 6 assertion `uninstall — markers retained on watch-me.tmp` fails on Windows; either a sweep-timing flake, a shutdown-reconcile regression, or a Phase 5 setup bug. Needs daemon-log inspection.
 - **#113** — Other `cmd | grep -q` sites in `scripts/manual-test-{ubuntu-vps,macos}.sh` (`--help`, `explain`, `uv tool list`) share the SIGPIPE+pipefail false-failure risk that bit 5f. Capture-then-grep is the preemptive fix; defer until one of them actually flakes.
 
 ### Resolved (reverse chronological)
+
+#### 2026-05-12 (v0.5.1)
+
+- **#110** (2026-05-12, PR #214) — `cli.generate` and `cli.init` now pin LF line endings on Windows via `newline=""` on the `write_text` calls. PR #207's text-write consolidation in v0.5.0 missed these two sites, which inherited Python's `newline=None` default and translated `\n` → `\r\n` on Windows — breaking `generate`'s documented byte-for-byte invariant and `init`'s LF-canonical output contract. Test-side LF-pin for case 4h source-writing in `manual-test-windows.ps1` landed in PR #211.
+- **#111** (2026-05-12, PR #213) — Not a detector regression. The host's `C:\Dropbox\.dropboxignore` (written by `dbxignore init`'s template) contained a `build/` rule that masked the test's local `!build/keep/` negation through directory-inheritance. Renaming the test target from `build/` to `case4m_target/` makes the case hermetic against arbitrary ancestor rules. PR #216 followed up with the matching `4n` clear-assertion path. The originally-feared regression in `rules_conflicts.py` was not present.
+- **#112** (2026-05-12, PR #216) — Not an `uninstall`-path regression. Test-script setup: Phase 5 case 5e ran `dbxignore clear --force` on the entire `$T` tree, removing the marker that Phase 6 was about to assert had been retained. Narrowed 5e to clear only a single file (`$T/freshrule.dat`) so Phase 6's `watch-me.tmp` marker survives the transition. The `uninstall` (no `--purge`) contract is intact.
 
 #### 2026-05-11
 

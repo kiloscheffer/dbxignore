@@ -1005,6 +1005,53 @@ function Test-Daemon {
         Write-Fail "5f - human status did not report 'daemon: running'"
     }
 
+    # 5g — registry keys after default install (PR #NNN)
+    # Read-only: doesn't mutate state. Phase 5 ends in installed-daemon
+    # state, exactly as today, so Phase 6's `dbxignore uninstall` precondition
+    # is preserved.
+    Write-Note "5g - HKCU verb keys present after default install"
+    $regBase = "HKCU:\Software\Classes\AllFilesystemObjects\shell"
+    $ignoreKey = "$regBase\DbxignoreIgnore"
+    $restoreKey = "$regBase\DbxignoreRestore"
+
+    if ((Test-Path $ignoreKey) -and (Test-Path $restoreKey)) {
+        Write-Pass "5g - both verb keys present"
+    } else {
+        Write-Fail "5g - verb keys missing after default install"
+    }
+
+    # MUIVerb labels.
+    $ignoreLabel = (Get-ItemProperty -Path $ignoreKey -Name "MUIVerb").MUIVerb
+    $restoreLabel = (Get-ItemProperty -Path $restoreKey -Name "MUIVerb").MUIVerb
+    if ($ignoreLabel -eq "Ignore from Dropbox" -and $restoreLabel -eq "Restore to Dropbox") {
+        Write-Pass "5g - MUIVerb labels correct"
+    } else {
+        Write-Fail "5g - MUIVerb labels wrong: ignore='$ignoreLabel' restore='$restoreLabel'"
+    }
+
+    # AppliesTo includes the Dropbox root.
+    $appliesTo = (Get-ItemProperty -Path $ignoreKey -Name "AppliesTo").AppliesTo
+    $dropboxEscaped = $script:DropboxDir -replace "\\", "\\"
+    if ($appliesTo -like "*$dropboxEscaped*") {
+        Write-Pass "5g - AppliesTo contains Dropbox root"
+    } else {
+        Write-Fail "5g - AppliesTo missing Dropbox root: $appliesTo"
+    }
+
+    # Command strings — asymmetric --yes policy.
+    $ignoreCmd = (Get-ItemProperty -Path "$ignoreKey\command" -Name "(default)").'(default)'
+    $restoreCmd = (Get-ItemProperty -Path "$restoreKey\command" -Name "(default)").'(default)'
+    if ($ignoreCmd -match '\bignore "%1"$' -and $ignoreCmd -notmatch "--yes") {
+        Write-Pass "5g - ignore command lacks --yes (confirms in console)"
+    } else {
+        Write-Fail "5g - ignore command shape unexpected: $ignoreCmd"
+    }
+    if ($restoreCmd -match '\bunignore --yes "%1"$') {
+        Write-Pass "5g - restore command has --yes (one-click safe)"
+    } else {
+        Write-Fail "5g - restore command shape unexpected: $restoreCmd"
+    }
+
     # Remove slow-sweep marker so phase 6's re-install + uninstall cycles
     # run with normal sweep timing (item #89). Phase 7 also removes it as
     # a defensive backstop if this point is never reached.
@@ -1080,6 +1127,15 @@ function Test-Uninstall {
         Write-Pass "6a - --summary post-uninstall: $sumUninst"
     } else {
         Write-Fail "6a - --summary post-uninstall did not match expected pattern: $sumUninst"
+    }
+
+    # 6c — registry keys gone after plain uninstall (PR #NNN)
+    Write-Note "6c - HKCU verb keys removed by default uninstall"
+    $regBase = "HKCU:\Software\Classes\AllFilesystemObjects\shell"
+    if (-not (Test-Path "$regBase\DbxignoreIgnore") -and -not (Test-Path "$regBase\DbxignoreRestore")) {
+        Write-Pass "6c - both verb keys removed"
+    } else {
+        Write-Fail "6c - verb keys persisted after plain uninstall"
     }
 
     # re-install briefly, then --purge
@@ -1159,6 +1215,58 @@ function Test-Uninstall {
         Write-Pass "6b - --summary post-purge: $sumPurge"
     } else {
         Write-Fail "6b - --summary post-purge did not match expected pattern: $sumPurge"
+    }
+
+    # 6d / 6e — --no-shell-integration preservation + --purge override (PR #NNN)
+    # Phase 6's existing flow ended with `dbxignore uninstall --purge` →
+    # daemon gone, state gone, registry gone. We now exercise the
+    # --no-shell-integration contrast cycle: re-install, plain uninstall
+    # with the flag (keys preserved), re-install, --purge with the flag
+    # (keys gone — purge override).
+
+    Write-Note "6d setup - re-install for --no-shell-integration test"
+    dbxignore install 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) { Stop-Abort "6d setup re-install failed" }
+    # Wait briefly for the new daemon to write state.json.
+    for ($i = 0; $i -lt 10; $i++) {
+        if (Test-Path $stateFile) { break }
+        Start-Sleep -Seconds 1
+    }
+
+    # 6d - plain uninstall --no-shell-integration: daemon gone, keys preserved.
+    Write-Note "6d - uninstall --no-shell-integration preserves verb keys"
+    dbxignore uninstall --no-shell-integration 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "6d - uninstall --no-shell-integration failed"
+    } else {
+        $regBase = "HKCU:\Software\Classes\AllFilesystemObjects\shell"
+        if ((Test-Path "$regBase\DbxignoreIgnore") -and (Test-Path "$regBase\DbxignoreRestore")) {
+            Write-Pass "6d - verb keys preserved after --no-shell-integration uninstall"
+        } else {
+            Write-Fail "6d - verb keys removed despite --no-shell-integration"
+        }
+    }
+
+    Write-Note "6e setup - re-install for --purge --no-shell-integration test"
+    dbxignore install 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) { Stop-Abort "6e setup re-install failed" }
+    for ($i = 0; $i -lt 10; $i++) {
+        if (Test-Path $stateFile) { break }
+        Start-Sleep -Seconds 1
+    }
+
+    # 6e - --purge --no-shell-integration: --purge overrides the preserve flag.
+    Write-Note "6e - uninstall --purge --no-shell-integration removes verb keys"
+    dbxignore uninstall --purge --no-shell-integration 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "6e - uninstall --purge --no-shell-integration failed"
+    } else {
+        $regBase = "HKCU:\Software\Classes\AllFilesystemObjects\shell"
+        if (-not (Test-Path "$regBase\DbxignoreIgnore") -and -not (Test-Path "$regBase\DbxignoreRestore")) {
+            Write-Pass "6e - verb keys removed by --purge override"
+        } else {
+            Write-Fail "6e - verb keys persisted despite --purge"
+        }
     }
 }
 

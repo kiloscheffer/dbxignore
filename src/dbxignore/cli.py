@@ -1542,6 +1542,13 @@ def install(no_shell_integration: bool) -> None:
                 "discovered. Re-run `dbxignore install` after Dropbox is set up.",
                 err=True,
             )
+        elif outcome == "skipped-bad-roots":
+            click.echo(
+                "Skipped Explorer right-click integration: a Dropbox root path "
+                "contains a quote character. Rename the folder and re-run "
+                "`dbxignore install`.",
+                err=True,
+            )
 
 
 @main.command()

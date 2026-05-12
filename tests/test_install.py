@@ -1019,6 +1019,16 @@ def test_install_echoes_skipped_no_roots(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert "Re-run `dbxignore install`" in result.output
 
 
+def test_install_echoes_skipped_bad_roots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """skipped-bad-roots outcome surfaces a recovery hint on stderr."""
+    runner, install_shell, _ = _make_cli_test_env(monkeypatch, tmp_path)
+    install_shell.return_value = "skipped-bad-roots"
+    result = runner.invoke(cli_module.main, ["install"])
+    assert result.exit_code == 0, result.output
+    assert "quote character" in result.output
+    assert "Rename the folder" in result.output
+
+
 def test_install_no_shell_integration_skips_helper(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

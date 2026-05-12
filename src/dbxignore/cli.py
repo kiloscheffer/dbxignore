@@ -473,14 +473,35 @@ def _read_and_validate_rule_source(source: Path) -> str:
     return text
 
 
+def _verbosity_to_level(verbose: int) -> int:
+    """Map ``-v`` count to a logging level. Default 0 → WARNING; ``-v`` → INFO;
+    ``-vv`` (or more) → DEBUG. Default WARNING keeps `logger.info` calls in
+    install backends and other CLI-reachable modules off the user's terminal
+    by default — they surface with ``-v`` for operators and ``-vv`` for full
+    debug traces.
+    """
+    if verbose >= 2:
+        return logging.DEBUG
+    if verbose == 1:
+        return logging.INFO
+    return logging.WARNING
+
+
 @click.group()
-@click.option("--verbose", "-v", is_flag=True, help="Enable DEBUG-level logging.")
+@click.option(
+    "--verbose",
+    "-v",
+    count=True,
+    help="Increase verbosity. Default WARNING; `-v` INFO; `-vv` DEBUG.",
+)
 @click.version_option(package_name="dbxignore")
 @click.pass_context
-def main(ctx: click.Context, verbose: bool) -> None:
+def main(ctx: click.Context, verbose: int) -> None:
     """Manage hierarchical .dropboxignore rules for Dropbox."""
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(level=level, format="%(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=_verbosity_to_level(verbose),
+        format="%(levelname)s %(name)s: %(message)s",
+    )
     ctx.ensure_object(dict)
 
 
@@ -1950,10 +1971,17 @@ def generate(path: Path, output: Path | None, stdout: bool, force: bool) -> None
 
 
 @click.command()
-@click.option("--verbose", "-v", is_flag=True, help="Enable DEBUG-level logging.")
+@click.option(
+    "--verbose",
+    "-v",
+    count=True,
+    help="Increase verbosity. Default WARNING; `-v` INFO; `-vv` DEBUG.",
+)
 @click.version_option(package_name="dbxignore")
-def daemon_main(verbose: bool) -> None:
+def daemon_main(verbose: int) -> None:
     """Run the dbxignore watcher + hourly sweep daemon (foreground)."""
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(level=level, format="%(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=_verbosity_to_level(verbose),
+        format="%(levelname)s %(name)s: %(message)s",
+    )
     _run_daemon()

@@ -497,6 +497,17 @@ phase_daemon() {
         && pass "dbxignore install (rc=0)" \
         || { fail "dbxignore install"; sed 's/^/    /' /tmp/dbxignore-install.out; return; }
 
+    # install verbosity defaults (PR #234) — default WARNING quiets install-backend
+    # INFO chatter; the click.echo summary line still surfaces.
+    grep -q "Installed dbxignore daemon service" /tmp/dbxignore-install.out \
+        && pass "install — click.echo summary present" \
+        || fail "install — click.echo summary missing"
+    if ! grep -q "^INFO " /tmp/dbxignore-install.out; then
+        pass "install — no INFO chatter at default level"
+    else
+        fail "install — INFO chatter leaked at default level"
+    fi
+
     [ -f "$HOME/.config/systemd/user/dbxignore.service" ] \
         && pass "service unit file written" \
         || fail "service unit file missing"
@@ -707,11 +718,17 @@ phase_uninstall() {
     local T="$DROPBOX_DIR/$TEST_SUBDIR"
 
     # plain uninstall: unit removed, markers retained
-    if dbxignore uninstall >/tmp/dbxignore-uninst.out 2>&1; then
-        pass "dbxignore uninstall (rc=0)"
+    # -v added to verify the verbosity flag surfaces install-backend INFO
+    # chatter end-to-end (PR #234). Default-quiet side is verified in Phase 5.
+    if dbxignore -v uninstall >/tmp/dbxignore-uninst.out 2>&1; then
+        pass "dbxignore -v uninstall (rc=0)"
     else
-        fail "dbxignore uninstall"; sed 's/^/    /' /tmp/dbxignore-uninst.out
+        fail "dbxignore -v uninstall"; sed 's/^/    /' /tmp/dbxignore-uninst.out
     fi
+
+    grep -q "^INFO " /tmp/dbxignore-uninst.out \
+        && pass "uninstall -v — INFO surfaces under verbose" \
+        || fail "uninstall -v — verbose did not surface INFO"
     if systemctl --user is-active dbxignore >/dev/null 2>&1; then
         fail "unit still active after uninstall"
     else

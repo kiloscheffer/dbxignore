@@ -109,9 +109,10 @@ def is_daemon_alive(pid: int | None, create_time: float | None = None) -> bool:
     the process at that PID is plausibly a dbxignore daemon by name: a
     recycled PID claimed by an unrelated process registers as alive under
     a bare existence check, which is the PID-reuse false positive we want
-    to avoid. Frozen PyInstaller installs and the unified binary run as
-    ``dbxignore.exe``; source runs are typically ``python -m dbxignore daemon``
-    (or pytest under the test suite).
+    to avoid. Frozen PyInstaller installs run as ``dbxignore.exe`` (terminal
+    CLI) or ``dbxignorew.exe`` (Task Scheduler / shell-verb GUI helper);
+    source runs are typically ``python -m dbxignore daemon`` or
+    ``pythonw -m dbxignore daemon`` (or pytest under the test suite).
 
     The second stage, gated on a non-None ``create_time``, additionally
     requires the live process's ``psutil.Process.create_time()`` to match
@@ -169,7 +170,12 @@ def is_daemon_alive(pid: int | None, create_time: float | None = None) -> bool:
         name = proc.name().lower()
     except psutil.Error:
         return False
-    if "python" not in name and name not in ("dbxignore", "dbxignore.exe"):
+    if "python" not in name and name not in (
+        "dbxignore",
+        "dbxignore.exe",
+        "dbxignorew",
+        "dbxignorew.exe",
+    ):
         return False
     if create_time is None:
         return True

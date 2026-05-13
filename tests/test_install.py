@@ -984,9 +984,21 @@ def test_purge_refuses_when_daemon_alive(
     state_dir.mkdir()
     state.write(state.State(daemon_pid=12345), state_dir / "state.json")
 
+    # Track whether shell-integration removal got called. The gate sits
+    # ABOVE the shell-removal dispatcher (see commit log on cli.py); if
+    # someone reverts that ordering, this assertion fires.
+    shell_dispatcher_calls: list[object] = []
+
+    def fake_shell_dispatcher(*args: object, **kwargs: object) -> None:
+        shell_dispatcher_calls.append((args, kwargs))
+
     monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
     monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
     monkeypatch.setattr("dbxignore.install.uninstall_service", lambda: None)
+    monkeypatch.setattr(
+        "dbxignore.install.uninstall_shell_integration_if_supported",
+        fake_shell_dispatcher,
+    )
     monkeypatch.setattr(state, "is_daemon_alive", lambda pid, create_time=None: True)
 
     result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
@@ -995,6 +1007,11 @@ def test_purge_refuses_when_daemon_alive(
     assert "daemon is running" in (result.output + result.stderr).lower()
     assert fake_markers.is_ignored(marked), "marker must survive purge refusal"
     assert (state_dir / "state.json").exists(), "state.json must survive purge refusal"
+    assert shell_dispatcher_calls == [], (
+        "shell-integration removal must not run when daemon-alive gate fires "
+        "(any errors it would accumulate would be silently lost by the gate's "
+        "sys.exit(2) before the surfacing block at the end of uninstall())"
+    )
 
 
 def test_purge_refuses_when_state_json_unreadable(

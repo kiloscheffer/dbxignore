@@ -1718,13 +1718,12 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
     click.echo("Uninstalled dbxignore daemon service.")
 
     # Mutually exclusive: --purge ALWAYS runs the dispatcher and accumulates
-    # errors for exit-2 escalation; plain uninstall runs it only if the user
-    # didn't pass --no-shell-integration, and uses WARN-and-continue.
+    # errors for exit-2 escalation (inside the `if purge:` block below, after
+    # the daemon-alive gate); plain uninstall runs it only if the user didn't
+    # pass --no-shell-integration, and uses WARN-and-continue.
     shell_errors: list[tuple[str, str]] = []
     state_errors: list[tuple[Path, str]] = []
-    if purge:
-        uninstall_shell_integration_if_supported(errors=shell_errors)
-    elif not no_shell_integration:
+    if not purge and not no_shell_integration:
         uninstall_shell_integration_if_supported()
 
     if purge:
@@ -1744,6 +1743,12 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
         # a guaranteed-dead daemon (`systemctl --user disable --now`
         # and `launchctl bootout` are synchronous), so the guard
         # returns False there and the purge body proceeds normally.
+        #
+        # Placed BEFORE shell-integration removal (not just before the
+        # marker-clear loop) so a gate fire doesn't lose any `shell_errors`
+        # the dispatcher would have accumulated — the gate's `sys.exit(2)`
+        # would happen before the per-error stderr-surfacing block below
+        # at the end of `uninstall`, silently dropping the report.
         s_for_guard = state.read()
         if s_for_guard is None and state.default_path().exists():
             click.echo(
@@ -1776,6 +1781,11 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
                 err=True,
             )
             sys.exit(2)
+        # Gate passed: daemon is confirmed dead (or never existed). Now safe
+        # to run the destructive purge body. Shell-integration removal runs
+        # FIRST so its errors land in the same exit-2-gated `shell_errors`
+        # bucket the marker/state errors flow through below.
+        uninstall_shell_integration_if_supported(errors=shell_errors)
         # (1) Clear xattr markers. Read and clear arms are split so each
         # failure can be attributed to the specific operation that failed;
         # the prior shape collapsed both into one `except OSError: pass`

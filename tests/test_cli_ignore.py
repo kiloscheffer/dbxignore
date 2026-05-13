@@ -1508,9 +1508,15 @@ def test_error_or_messagebox_routes_to_click_echo_when_console_attached(
     """On win32 with a console window attached (GetConsoleWindow non-zero),
     _error_or_messagebox uses click.echo — not the GUI dialog."""
     monkeypatch.setattr(sys, "platform", "win32")
-    # The autouse _stub_get_console_window fixture makes GetConsoleWindow return
-    # non-zero, so should_use_gui_dialogs() already returns False here.
+
     from dbxignore import _windows_dialogs
+
+    # Stub should_use_gui_dialogs directly so the test is platform-agnostic.
+    # On non-Windows, ctypes.windll doesn't exist and the function's
+    # AttributeError-branch returns True (conservative fallback), which would
+    # contradict the predicate this test asserts. The three adjacent
+    # GUI-routing tests use the same monkeypatch pattern.
+    monkeypatch.setattr(_windows_dialogs, "should_use_gui_dialogs", lambda: False)
 
     dialog_calls: list[str] = []
 

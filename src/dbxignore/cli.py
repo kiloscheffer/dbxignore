@@ -153,11 +153,11 @@ def _normalize_under_root(path: Path, *, require_exists: bool) -> tuple[Path, Pa
     abs_path = path.absolute()
     target_unresolved = Path(os.path.normpath(abs_path))
     if require_exists and not os.path.lexists(target_unresolved):
-        click.echo(f"Path {path} does not exist.", err=True)
+        _error_or_messagebox(f"Path {path} does not exist.")
         sys.exit(2)
     discovered = _discover_roots()
     if not discovered:
-        click.echo("No Dropbox roots found. Is Dropbox installed?", err=True)
+        _error_or_messagebox("No Dropbox roots found. Is Dropbox installed?")
         sys.exit(2)
     root = find_containing(target_unresolved, discovered)
     if root is not None:
@@ -171,7 +171,7 @@ def _normalize_under_root(path: Path, *, require_exists: bool) -> tuple[Path, Pa
         target_resolved = path.resolve()
         root = find_containing(target_resolved, discovered)
         if root is None:
-            click.echo(f"Path {path} is not under any Dropbox root.", err=True)
+            _error_or_messagebox(f"Path {path} is not under any Dropbox root.")
             sys.exit(2)
         target = target_resolved
     return target, root, discovered
@@ -197,11 +197,10 @@ def _reject_dotdot_after_symlink(orig_path: Path, abs_path: Path) -> None:
     for seg in parts[1:]:
         if seg == "..":
             if seen_symlink:
-                click.echo(
+                _error_or_messagebox(
                     f"error: {orig_path} contains '..' after a symlinked component; "
                     f"lexical and filesystem interpretations diverge here. "
-                    f"Operate on the resolved path or the symlink object itself.",
-                    err=True,
+                    f"Operate on the resolved path or the symlink object itself."
                 )
                 sys.exit(2)
             prefix = prefix.parent
@@ -237,11 +236,10 @@ def _validate_target_under_root(path: Path) -> tuple[Path, Path, list[Path]]:
         if ancestor == root:
             break
         if ancestor.is_symlink():
-            click.echo(
+            _error_or_messagebox(
                 f"error: {path} has a symlinked ancestor {ancestor}; "
                 f"the daemon walks with followlinks=False and would never "
-                f"reconcile this path. Operate on the symlink itself instead.",
-                err=True,
+                f"reconcile this path. Operate on the symlink itself instead."
             )
             sys.exit(2)
     return target, root, discovered

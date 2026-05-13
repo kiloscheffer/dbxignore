@@ -1520,3 +1520,94 @@ def test_error_or_messagebox_routes_to_click_echo_when_stdout_valid(
     assert not _windows_dialogs.should_use_gui_dialogs()
     cli._error_or_messagebox("oops")
     assert dialog_calls == []  # click.echo path taken, not GUI
+
+
+# ---------------------------------------------------------------------------
+# Validator GUI-dialog routing (PR #238 fix)
+# ---------------------------------------------------------------------------
+
+
+def test_ignore_validator_error_routes_to_gui_in_no_stdio_context(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 fix (PR #238): validator errors from _normalize_under_root /
+    _validate_target_under_root surface as MessageBox dialogs in the no-stdio
+    Explorer shell-verb context.
+
+    Uses the "path not under any Dropbox root" error path as the representative
+    case — all other validator error paths in _normalize_under_root,
+    _reject_dotdot_after_symlink, and _validate_target_under_root share the
+    same _error_or_messagebox router after this fix.
+
+    CliRunner replaces sys.stdout during invocation, so monkeypatching
+    sys.stdout=None would be undone. Instead we monkeypatch
+    should_use_gui_dialogs directly (the predicate _error_or_messagebox uses)
+    to simulate the no-stdio context.
+    """
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    from dbxignore import _windows_dialogs
+
+    monkeypatch.setattr(_windows_dialogs, "should_use_gui_dialogs", lambda: True)
+
+    dialog_calls: list[str] = []
+
+    def fake_show_error(msg: str, **kw: object) -> None:
+        dialog_calls.append(msg)
+
+    monkeypatch.setattr(_windows_dialogs, "show_error", fake_show_error)
+
+    # Point _discover_roots at a root so the "No Dropbox roots" branch doesn't
+    # fire — we want to reach the "not under any Dropbox root" branch.
+    root = tmp_path / "Dropbox"
+    root.mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+
+    # Path outside the discovered root.
+    elsewhere = tmp_path / "not_dropbox"
+    elsewhere.mkdir()
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(elsewhere), "--yes"])
+
+    assert result.exit_code == 2
+    assert len(dialog_calls) == 1
+    assert "not under any Dropbox root" in dialog_calls[0]
+
+
+def test_unignore_validator_error_routes_to_gui_in_no_stdio_context(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same routing check for `unignore` — verifies the fix covers both
+    shell-verb subcommands (PR #238).
+
+    Uses the "does not exist" error path to exercise _normalize_under_root's
+    require_exists branch through CliRunner with a simulated no-stdio context
+    (should_use_gui_dialogs monkeypatched to True).
+    """
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    from dbxignore import _windows_dialogs
+
+    monkeypatch.setattr(_windows_dialogs, "should_use_gui_dialogs", lambda: True)
+
+    dialog_calls: list[str] = []
+
+    def fake_show_error(msg: str, **kw: object) -> None:
+        dialog_calls.append(msg)
+
+    monkeypatch.setattr(_windows_dialogs, "show_error", fake_show_error)
+
+    root = tmp_path / "Dropbox"
+    root.mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+
+    # Non-existent path under root — hits the "does not exist" branch.
+    ghost = root / "ghost"
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(ghost), "--yes"])
+
+    assert result.exit_code == 2
+    assert len(dialog_calls) == 1
+    assert "does not exist" in dialog_calls[0]

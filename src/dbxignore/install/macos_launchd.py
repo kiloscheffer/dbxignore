@@ -148,10 +148,14 @@ def install_agent() -> None:
 
 
 def uninstall_agent() -> None:
-    # Bootout — missing service is fine, swallow. OSError catch tolerates
-    # `launchctl` being unavailable too: there's nothing else uninstall
-    # can do, but at least the plist removal below still proceeds and
-    # the user doesn't see a raw FileNotFoundError traceback.
+    # Bootout — missing service is fine (check=False, returns non-zero
+    # without raising), but an OSError invocation failure (FNFE if
+    # `launchctl` itself isn't on PATH; PermissionError) MUST surface
+    # as RuntimeError. Unlike install_agent's bootout, this one is the
+    # actual daemon-shutdown step. Silently proceeding to plist removal
+    # below would leave an orphaned live daemon mutating state.json
+    # and markers while `dbxignore uninstall` reports success — and a
+    # subsequent `--purge` would clear state under the running daemon.
     try:
         subprocess.run(  # noqa: S603 — hardcoded args, no user data
             ["launchctl", "bootout", _service_target()],
@@ -159,7 +163,7 @@ def uninstall_agent() -> None:
             capture_output=True,
         )
     except OSError as exc:
-        logger.warning("launchctl bootout could not be invoked: %s", exc)
+        raise RuntimeError(f"launchctl bootout could not be invoked: {exc}") from exc
     path = _plist_path()
     if path.exists():
         path.unlink()

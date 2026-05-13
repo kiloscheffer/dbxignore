@@ -33,8 +33,7 @@ dev = [
 ]
 
 [project.scripts]
-dbxignore = "dbxignore.cli:main"
-dbxignored = "dbxignore.cli:daemon_main"
+dbxignore = "dbxignore.__main__:main_entry"
 
 [tool.hatch.version]
 source = "vcs"

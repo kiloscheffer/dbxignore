@@ -1,8 +1,8 @@
-# -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec building two Windows binaries from the same codebase.
+"""PyInstaller spec building a single Windows binary.
 
-- dbxignore.exe   : console mode, used for interactive CLI.
-- dbxignored.exe  : no console, launched by Task Scheduler.
+- dbxignore.exe   : GUI subsystem; AttachConsole in _windows_console handles
+                    the three launch contexts (interactive console, Task
+                    Scheduler, Windows shell verbs).
 """
 
 from pathlib import Path
@@ -29,7 +29,7 @@ def _analysis(name: str):
     )
 
 
-# ---- Console variant ------------------------------------------------------
+# ---- Single binary --------------------------------------------------------
 a_console = _analysis("dbxignore")
 pyz_console = PYZ(a_console.pure, a_console.zipped_data, cipher=None)
 exe_console = EXE(
@@ -46,31 +46,6 @@ exe_console = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-)
-
-# ---- Windowless daemon variant -------------------------------------------
-a_daemon = _analysis("dbxignored")
-pyz_daemon = PYZ(a_daemon.pure, a_daemon.zipped_data, cipher=None)
-exe_daemon = EXE(
-    pyz_daemon,
-    a_daemon.scripts,
-    a_daemon.binaries,
-    a_daemon.zipfiles,
-    a_daemon.datas,
-    [],
-    name="dbxignored",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -78,3 +53,4 @@ exe_daemon = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
+

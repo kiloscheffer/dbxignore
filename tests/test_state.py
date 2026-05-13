@@ -438,3 +438,66 @@ def test_default_path_linux_falls_back_to_local_state(
     monkeypatch.delenv("XDG_STATE_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     assert state.default_path() == tmp_path / ".local" / "state" / "dbxignore" / "state.json"
+
+
+def test_is_any_daemon_running_no_lock_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No daemon has ever run on this system (or `--purge` cleaned up the
+    state dir) — lock file doesn't exist, helper returns False."""
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+
+    assert state.is_any_daemon_running() is False
+
+
+def test_is_any_daemon_running_empty_lock_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lock file exists but is empty — the daemon writes a placeholder byte
+    BEFORE locking, so an empty file means the daemon never reached its
+    lock-acquire step. Helper returns False (no daemon)."""
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    (state_dir / "daemon.lock").touch()
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+
+    assert state.is_any_daemon_running() is False
+
+
+def test_is_any_daemon_running_acquirable_lock_returns_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lock file exists with a placeholder byte but no one holds the lock
+    (e.g. daemon died ungracefully — OS released the lock, file lingers).
+    Helper acquires and releases the lock, returns False (no daemon)."""
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    lock_path = state_dir / "daemon.lock"
+    lock_path.write_bytes(b" ")
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+
+    assert state.is_any_daemon_running() is False
+
+
+def test_is_any_daemon_running_held_lock_returns_true(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lock file is held by another process (or in this test, another
+    file descriptor in the same process — fcntl.flock and msvcrt.locking
+    are both per-open-file-description, so a second acquire fails with
+    EWOULDBLOCK/EACCES). Helper returns True (daemon-equivalent contention
+    detected)."""
+    from dbxignore import daemon
+
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+
+    holder = daemon._acquire_singleton_lock()
+    assert holder is not None, "test setup: could not acquire holder lock"
+    try:
+        assert state.is_any_daemon_running() is True
+    finally:
+        holder.close()

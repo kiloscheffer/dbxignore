@@ -1750,18 +1750,29 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
         # would happen before the per-error stderr-surfacing block below
         # at the end of `uninstall`, silently dropping the report.
         s_for_guard = state.read()
-        if s_for_guard is None and state.default_path().exists():
+        # Arm A: state.json present but unreadable (locked, malformed,
+        # permission-denied). No PID to anchor the standard liveness check.
+        # Codex's P2 follow-up on PR #243 surfaced that the prior shape
+        # (refuse unconditionally on this branch) blocked the documented
+        # `--purge` recovery path for an orphaned corrupt state.json on a
+        # system with no live daemon. Re-probe via the daemon-singleton
+        # lock at `daemon.lock` — if no contender holds it, no daemon is
+        # alive and `--purge` can safely clean up the bad state.json. If
+        # the lock IS held, fall through to refusal (real tug-of-war).
+        if s_for_guard is None and state.default_path().exists() and state.is_any_daemon_running():
             click.echo(
-                f"error: state.json at {state.default_path()} is present but "
-                "unreadable; daemon liveness is unknown. The service has been "
-                "removed, but the purge body (marker clearing + state-dir wipe) "
-                "is being skipped to avoid racing a potentially-live daemon.",
+                f"error: state.json at {state.default_path()} is unreadable AND a "
+                "dbxignore daemon process is holding daemon.lock. Refusing to purge "
+                "— without a readable state.json there's no PID to surface, but the "
+                "lock-held signal confirms a live daemon whose reconcile loop would "
+                "re-apply cleared markers.",
                 err=True,
             )
             click.echo(
-                "Stop the daemon manually if running (e.g. `taskkill /F /PID <pid>` "
-                "on Windows), then run `dbxignore clear --force` for markers and "
-                f"remove `{state.user_state_dir()}` by hand.",
+                "Stop the daemon manually (e.g. `taskkill /F /PID <pid>` on Windows "
+                "after running `tasklist | findstr dbxignore`), then run "
+                "`dbxignore clear --force` for markers and remove "
+                f"`{state.user_state_dir()}` by hand.",
                 err=True,
             )
             sys.exit(2)

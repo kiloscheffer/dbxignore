@@ -512,6 +512,12 @@ phase_daemon() {
         && pass "service unit file written" \
         || fail "service unit file missing"
 
+    # install verb-form (PR #30) — unit invokes `dbxignore daemon`, not `dbxignored`
+    grep -q "^ExecStart=.*dbxignore daemon" \
+        "$HOME/.config/systemd/user/dbxignore.service" \
+        && pass "ExecStart uses unified 'dbxignore daemon'" \
+        || fail "ExecStart still references old 'dbxignored'"
+
     sleep 2
     if systemctl --user is-active dbxignore >/dev/null 2>&1; then
         pass "systemd unit active"

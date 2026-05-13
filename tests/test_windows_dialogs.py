@@ -60,6 +60,29 @@ def test_should_use_gui_dialogs_returns_false_on_non_windows(
     assert _windows_dialogs.should_use_gui_dialogs() is False
 
 
+def test_should_use_gui_dialogs_returns_true_on_getconsolewindow_oserror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OSError from GetConsoleWindow() falls through to True (conservative: treat as GUI).
+
+    This is the safety-sensitive branch: a probe failure on an unusual
+    Windows session state must NOT cause destructive operations to silently
+    auto-confirm. Returning True ensures the MessageBox confirmation fires.
+    """
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    class FakeKernel32:
+        @staticmethod
+        def GetConsoleWindow() -> int:  # noqa: N802
+            raise OSError("no window station")
+
+    class FakeWindll:
+        kernel32 = FakeKernel32()
+
+    monkeypatch.setattr(ctypes, "windll", FakeWindll(), raising=False)
+    assert _windows_dialogs.should_use_gui_dialogs() is True
+
+
 # ---------------------------------------------------------------------------
 # confirm_destructive — helpers for fake user32
 # ---------------------------------------------------------------------------

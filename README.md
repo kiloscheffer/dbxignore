@@ -9,14 +9,12 @@ Hierarchical `.dropboxignore` files for Dropbox. Drop a `.dropboxignore` into an
 - [Install (Linux)](#install-linux)
 - [Install (macOS)](#install-macos)
 - [Install (.exe)](#install-exe)
-- [Upgrading from v0.5.x](#upgrading-from-v05x)
 - [Platform support](#platform-support)
 - [`.dropboxignore` syntax](#dropboxignore-syntax)
 - [Commands](#commands)
 - [Behaviour](#behaviour)
 - [Using `.gitignore` rules](#using-gitignore-rules)
 - [Configuration](#configuration)
-- [Known limitations](#known-limitations)
 - [Backlog](#backlog)
 - [License](#license)
 
@@ -175,33 +173,9 @@ Notes:
 
 ## Install (.exe)
 
-1. Download `dbxignore.exe` from the latest [Release](https://github.com/kiloscheffer/dbxignore/releases).
-2. Place it in a stable directory (e.g. `%LOCALAPPDATA%\dbxignore\bin\`) and add that directory to your `PATH`.
+1. Download both `dbxignore.exe` and `dbxignorew.exe` from the latest [Release](https://github.com/kiloscheffer/dbxignore/releases). They ship together — `dbxignore.exe` is the CLI you run from a terminal, `dbxignorew.exe` is the GUI helper that Task Scheduler invokes for the daemon and that the Explorer right-click verbs target. All commands you type are `dbxignore`; you do not invoke `dbxignorew.exe` directly.
+2. Place both files in a stable directory (e.g. `%LOCALAPPDATA%\dbxignore\bin\`) and add that directory to your `PATH`.
 3. Run `dbxignore install`.
-
-## Upgrading from v0.5.x
-
-v0.6 collapses `dbxignored` into the main `dbxignore` command. After upgrading, the daemon is invoked as `dbxignore daemon` instead of `dbxignored`, and the old `dbxignored` / `dbxignored.exe` binary no longer exists.
-
-The platform service entry (Task Scheduler, systemd unit, launchd plist) written by `dbxignore install` on v0.5.x references `dbxignored`. The cleanest migration sequence runs `dbxignore uninstall` **before** upgrading — the v0.5.x uninstall knows how to remove its own service entry. Then upgrade and re-install:
-
-```bash
-# Linux / macOS — recommended order
-dbxignore uninstall                # while still on v0.5.x
-uv tool upgrade dbxignore          # or: pip install --upgrade dbxignore
-dbxignore install                  # registers the new service entry
-```
-
-```powershell
-# Windows — recommended order
-dbxignore uninstall                # while still on v0.5.x
-uv tool upgrade dbxignore          # or download new dbxignore.exe (no more dbxignored.exe)
-dbxignore install
-```
-
-**If you've already upgraded without uninstalling first**, you can still refresh the service entry: `dbxignore uninstall && dbxignore install` from the new binary identifies the service by the same name as v0.5.x and tolerates the old entry's `ExecStart` / `ProgramArguments` shape during the uninstall step.
-
-If you have shell aliases or scripts that call `dbxignored` directly, replace them with `dbxignore daemon`. The two have identical behavior.
 
 ## Windows Explorer integration
 
@@ -534,41 +508,6 @@ State:
 - macOS — `~/Library/Application Support/dbxignore/state.json` (split from the log dir to match Apple's app-data conventions).
 
 </details>
-
-## Known limitations
-
-### Windows: shells may not wait for the GUI-subsystem binary
-
-`dbxignore.exe` is built as a GUI-subsystem executable to suppress the console flash at Task Scheduler logon. As a consequence — and consistent with how Windows treats every GUI-subsystem process — Windows shells generally do *not* wait for the binary to exit before returning the prompt when invoked as a foreground command. Output still reaches the terminal via `AttachConsole(ATTACH_PARENT_PROCESS)`, but the timing is asynchronous and subsequent commands' exit-code checks (`%ERRORLEVEL%` / `$LASTEXITCODE`) may run before the binary actually exits.
-
-The limitation applies to direct foreground invocation in every shell on Windows (cmd.exe, PowerShell, the underlying shell hosted by Windows Terminal, the VS Code integrated terminal — Windows Terminal and VS Code are *hosts*, not shells; the shell waiting behavior is what matters). It does **not** apply when the binary's output is piped or redirected: in those cases the shell waits for the pipe consumer / redirect target to close, which forces synchronous exit.
-
-Shell-specific workarounds for synchronous scripted invocations:
-
-```cmd
-:: cmd.exe — use start /wait
-C:\> start /wait dbxignore --version
-```
-
-```powershell
-# PowerShell — use Start-Process -Wait, or capture/redirect (any of which forces sync)
-Start-Process -Wait -NoNewWindow dbxignore -ArgumentList "--version"
-$version = dbxignore --version 2>&1          # variable capture forces sync
-dbxignore --version > out.txt                # file redirect forces sync
-dbxignore --version | Out-String             # pipe forces sync
-```
-
-Pipe (`|`) and redirect (`>`) operators work correctly in both cmd.exe and PowerShell because the binary preserves the inherited stdio handles when they're valid (only reopens against `CONOUT$` per-stream when an individual stream has no inherited handle, such as Task Scheduler launches with no stdio at all).
-
-### Git Bash / MinTTY
-
-On Windows, running `dbxignore.exe` directly inside Git Bash or any MinTTY-hosted shell (`mintty`, `Cygwin Terminal`) may produce no visible output. MinTTY is a pseudo-terminal that uses pipes for stdio rather than a real Windows console; `AttachConsole` finds no console handle to attach to, so the binary runs silently. Workaround: wrap the call in `winpty`:
-
-```bash
-winpty dbxignore.exe --help
-```
-
-This is a general Windows-binary-in-MinTTY issue, not specific to dbxignore. PowerShell, `cmd.exe`, Windows Terminal, and the VS Code integrated terminal are not affected.
 
 ## Backlog
 

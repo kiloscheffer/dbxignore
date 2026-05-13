@@ -351,6 +351,47 @@ def test_discover_falls_back_when_first_candidate_malformed(
     ), [rec.message for rec in caplog.records]
 
 
+def test_discover_falls_back_when_first_candidate_parses_to_empty_accounts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Codex P2 followup on PR #240: an info.json that parses cleanly but
+    contains no usable account paths (e.g. ``{}`` or ``{"personal": {}}``
+    from a Dropbox-uninstall residue) used to short-circuit ``discover()``
+    with the same empty result as if the per-machine candidate didn't
+    exist. Now an empty ``account_paths`` falls through to the next
+    candidate, log includes a WARNING naming the empty-but-existing file."""
+    if sys.platform != "win32":
+        import pytest
+
+        pytest.skip("LOCALAPPDATA is Windows-only")
+
+    import logging
+
+    # APPDATA: parses cleanly but the personal account has no `path`.
+    appdata = tmp_path / "AppData"
+    (appdata / "Dropbox").mkdir(parents=True)
+    (appdata / "Dropbox" / "info.json").write_text('{"personal": {}}', encoding="utf-8")
+    monkeypatch.setenv("APPDATA", str(appdata))
+
+    # LOCALAPPDATA: valid personal info.json.
+    localappdata = tmp_path / "LocalAppData"
+    (localappdata / "Dropbox").mkdir(parents=True)
+    (localappdata / "Dropbox" / "info.json").write_text(
+        (FIXTURES / "info_personal.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LOCALAPPDATA", str(localappdata))
+
+    with caplog.at_level(logging.WARNING, logger="dbxignore.roots"):
+        result = roots.discover()
+
+    assert result == [Path(r"C:\Dropbox")]
+    assert any(
+        "no usable account paths" in rec.message and "AppData" in rec.message
+        for rec in caplog.records
+    ), [rec.message for rec in caplog.records]
+
+
 def test_discover_returns_empty_when_all_candidates_malformed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

@@ -117,14 +117,17 @@ def discover() -> list[Path]:
     if not candidates:
         return []
 
-    # Iterate candidates and accept the first one that BOTH exists AND parses
-    # cleanly. Previously this short-circuited on the first existing candidate
-    # and returned [] if it was malformed — a stale APPDATA\Dropbox\info.json
-    # from an uninstalled per-user install masked a valid per-machine
-    # LOCALAPPDATA\Dropbox\info.json (or vice versa) on Windows. Per-candidate
-    # parse failures log a WARNING and fall through to the next candidate; the
-    # full-failure path emits a summary WARNING listing every attempted
-    # location so the user can self-diagnose.
+    # Iterate candidates and accept the first one that exists, parses
+    # cleanly, AND contains at least one usable account path. A
+    # stale APPDATA\Dropbox\info.json (from an uninstalled per-user
+    # install) used to mask a valid per-machine LOCALAPPDATA\Dropbox\info.json
+    # (or vice versa) on Windows in two distinct ways: (a) parse failure
+    # on a corrupt first candidate; (b) parse-success-but-empty
+    # ``account_paths`` from a Dropbox-uninstall residue (``{}``, or
+    # ``{"personal": {}}``, etc. — the file remains on disk but its
+    # accounts dict has no usable ``path`` entries). Both arms fall through
+    # to the next candidate; the full-failure path emits a summary WARNING
+    # listing every attempted location so the user can self-diagnose.
     tried: list[Path] = []
     for candidate in candidates:
         if not candidate.exists():
@@ -137,6 +140,12 @@ def discover() -> list[Path]:
                 "Cannot read Dropbox info.json at %s: %s; trying next candidate",
                 candidate,
                 exc,
+            )
+            continue
+        if not account_paths:
+            logger.warning(
+                "Dropbox info.json at %s has no usable account paths; trying next candidate",
+                candidate,
             )
             continue
         return [Path(p) for p in account_paths]

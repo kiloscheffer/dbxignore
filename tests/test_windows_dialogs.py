@@ -20,8 +20,11 @@ from dbxignore import _windows_dialogs
 # ---------------------------------------------------------------------------
 
 
-def test_should_use_gui_dialogs_when_no_console(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No console window attached (GetConsoleWindow returns 0) → True on Windows."""
+def test_should_use_gui_dialogs_when_no_console_and_no_stdio_backing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No console window AND stdio has no real fileno → True (dbxignorew.exe
+    GUI helper invoked by Task Scheduler / Explorer / double-click)."""
     monkeypatch.setattr(sys, "platform", "win32")
 
     class FakeKernel32:
@@ -33,6 +36,61 @@ def test_should_use_gui_dialogs_when_no_console(monkeypatch: pytest.MonkeyPatch)
         kernel32 = FakeKernel32()
 
     monkeypatch.setattr(ctypes, "windll", FakeWindll(), raising=False)
+
+    # PyInstaller noconsole bootloader stub: writable but no fileno.
+    class NoFilenoStream:
+        def fileno(self) -> int:
+            raise OSError("no fileno on noconsole stub")
+
+    monkeypatch.setattr(sys, "stdout", NoFilenoStream())
+    assert _windows_dialogs.should_use_gui_dialogs() is True
+
+
+def test_should_use_gui_dialogs_false_when_no_console_but_stdio_has_fileno(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No console window BUT stdio has a real fileno (CREATE_NO_WINDOW
+    invocation from automation) → False. Output should flow through the
+    inherited pipe, not a MessageBox the parent script can't see.
+    """
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    class FakeKernel32:
+        @staticmethod
+        def GetConsoleWindow() -> int:  # noqa: N802
+            return 0
+
+    class FakeWindll:
+        kernel32 = FakeKernel32()
+
+    monkeypatch.setattr(ctypes, "windll", FakeWindll(), raising=False)
+
+    # Default sys.stdout (pytest's capture) has a fileno; if for some
+    # reason the surrounding test context doesn't, we set one explicitly:
+    class RealFilenoStream:
+        def fileno(self) -> int:
+            return 1
+
+    monkeypatch.setattr(sys, "stdout", RealFilenoStream())
+    assert _windows_dialogs.should_use_gui_dialogs() is False
+
+
+def test_should_use_gui_dialogs_true_when_no_console_and_stdout_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No console window AND sys.stdout is None (legacy noconsole shape) → True."""
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    class FakeKernel32:
+        @staticmethod
+        def GetConsoleWindow() -> int:  # noqa: N802
+            return 0
+
+    class FakeWindll:
+        kernel32 = FakeKernel32()
+
+    monkeypatch.setattr(ctypes, "windll", FakeWindll(), raising=False)
+    monkeypatch.setattr(sys, "stdout", None)
     assert _windows_dialogs.should_use_gui_dialogs() is True
 
 

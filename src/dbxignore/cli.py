@@ -54,8 +54,18 @@ def _purge_dir(dir_path: Path, patterns: list[str]) -> None:
         return
     for pattern in patterns:
         for f in dir_path.glob(pattern):
-            with contextlib.suppress(FileNotFoundError):
+            try:
                 f.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                # The common Windows cascade: when `schtasks /End` times out
+                # and the daemon process is still alive, it holds an open
+                # handle on `daemon.lock` and `Path.unlink` raises
+                # `PermissionError`. Pre-fix this propagated as a traceback
+                # out of `uninstall --purge`; the wider catch logs the
+                # surviving file and lets the rest of the purge proceed.
+                logger.warning("could not remove %s: %s", f, exc)
     with contextlib.suppress(OSError):
         # Non-empty (user dropped something else in there) — preserve it.
         dir_path.rmdir()

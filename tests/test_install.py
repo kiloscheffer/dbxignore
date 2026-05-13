@@ -838,6 +838,45 @@ def test_purge_preserves_files_not_matching_daemon_log_rotation(
     assert state_dir.exists()
 
 
+def test_purge_dir_continues_after_permission_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A ``PermissionError`` on one file in ``_purge_dir`` must not abort the
+    purge — other files still get cleaned, and a WARNING surfaces the
+    surviving file. Cascade of the Windows uninstall-timeout path: when
+    ``schtasks /End`` times out (``windows_task.py:208``), the daemon's
+    ``daemon.lock`` handle is still open, and ``Path.unlink`` raises
+    ``PermissionError`` (subclass of ``OSError``). Pre-fix, the only
+    suppress was ``FileNotFoundError``, so the user got a traceback instead
+    of a partial-cleanup report."""
+    from dbxignore import cli
+
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    locked = state_dir / "daemon.lock"
+    other = state_dir / "state.json"
+    locked.write_text("locked\n", encoding="utf-8")
+    other.write_text("{}", encoding="utf-8")
+
+    real_unlink = Path.unlink
+
+    def _selective_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        if self.name == "daemon.lock":
+            raise PermissionError(13, "lock held by daemon")
+        real_unlink(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "unlink", _selective_unlink)
+
+    caplog.set_level("WARNING", logger="dbxignore.cli")
+    cli._purge_dir(state_dir, patterns=["daemon.lock", "state.json"])
+
+    assert locked.exists(), "locked file should survive the purge"
+    assert not other.exists(), "non-locked file should still be cleaned"
+    assert any("daemon.lock" in rec.message for rec in caplog.records), (
+        "expected WARNING naming the surviving file"
+    )
+
+
 def test_purge_cleans_separate_log_dir_on_darwin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

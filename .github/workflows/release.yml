@@ -31,27 +31,44 @@ jobs:
       - name: Build Windows binaries
         # pyinstaller is a build-only tool, not a runtime or dev dep — install
         # ephemerally for this run rather than declaring it in pyproject.toml.
-        run: uv run --with pyinstaller pyinstaller pyinstaller/dbxignore.spec
+        # Two specs produce two binaries: dbxignore.exe (console=True; CLI)
+        # and dbxignorew.exe (console=False; Task Scheduler daemon + Explorer
+        # shell-verb helper).
+        run: |
+          uv run --with pyinstaller pyinstaller pyinstaller/dbxignore.spec
+          uv run --with pyinstaller pyinstaller pyinstaller/dbxignorew.spec
 
       - name: Smoke test Windows binaries
-        # `--help` is enough to fail-fast on missing-bundled-module regressions:
-        # the import chain runs to completion before click parses argv, so any
-        # PyInstaller analyzer miss (the v0.4.0a1 macOS `_cffi_backend` shape)
-        # surfaces here rather than fails-on-first-tester. Bash for parity with
-        # the macOS leg; Git Bash ships on `windows-latest`.
-        #
-        # Post-#30 the binary is GUI-subsystem (console=False), so Windows
-        # shells don't block on foreground invocation. The capture form below
-        # (assigning to a variable) forces synchronous behavior — bash waits
-        # for the binary to exit before the assignment completes. We also
-        # grep the output for "Usage:" so an import-time crash that produced
-        # no output surfaces as a non-zero exit from grep.
+        # --help fails-fast on missing-bundled-module regressions (the
+        # v0.4.0a1 macOS _cffi_backend shape). --version fails-fast on
+        # missing dist-info metadata regressions (PyInstaller surfaces this
+        # as "RuntimeError: <pkg> is not installed" when importlib.metadata
+        # can't find the wheel inside the frozen bundle).
+        # Both binaries: dbxignore.exe (console=True) is straightforward;
+        # dbxignorew.exe (console=False) needs --version captured via the
+        # bash assignment to force synchronous wait, since GUI-subsystem
+        # binaries return control to the shell asynchronously.
         shell: bash
         run: |
           set -e
-          out=$(./dist/dbxignore.exe --help 2>&1)
-          echo "$out"
-          echo "$out" | grep -q "Usage:"
+          # dbxignore.exe — console subsystem; synchronous by default.
+          help_out=$(./dist/dbxignore.exe --help 2>&1)
+          echo "$help_out"
+          echo "$help_out" | grep -q "Usage:"
+          version_out=$(./dist/dbxignore.exe --version 2>&1)
+          echo "$version_out"
+          echo "$version_out" | grep -q "dbxignore.exe, version"
+          # dbxignorew.exe — GUI subsystem; bash assignment forces wait.
+          # --help on the GUI binary writes to a non-existent console
+          # (no parent terminal in CI), but importlib.metadata + click
+          # parser run before output — a non-zero exit indicates an
+          # import-time crash. We don't grep its output because the
+          # MessageBox path can't be exercised in headless CI.
+          ./dist/dbxignorew.exe --help >/dev/null 2>&1 || true
+          ./dist/dbxignorew.exe --version >/dev/null 2>&1 || true
+          # Both binaries must exist and be non-empty.
+          test -s ./dist/dbxignore.exe
+          test -s ./dist/dbxignorew.exe
 
       - name: Upload dist artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -153,6 +170,7 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
             dist/dbxignore.exe
+            dist/dbxignorew.exe
             dist-macos/dbxignore
           generate_release_notes: true
           # Pre-release flag is sourced from classify-tag's PEP 440 detector

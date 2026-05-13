@@ -58,7 +58,7 @@ def _has_console() -> bool:
     launched from Explorer, Task Scheduler, or a terminal-less context.
     """
     try:
-        return bool(ctypes.windll.kernel32.GetConsoleWindow())
+        return bool(ctypes.windll.kernel32.GetConsoleWindow())  # type: ignore[attr-defined, unused-ignore]
     except OSError:
         return False
 
@@ -85,7 +85,7 @@ def _attach_parent_console() -> bool:
     (Task Scheduler, Explorer double-click) or attach otherwise failed.
     """
     try:
-        return bool(ctypes.windll.kernel32.AttachConsole(_ATTACH_PARENT_PROCESS))
+        return bool(ctypes.windll.kernel32.AttachConsole(_ATTACH_PARENT_PROCESS))  # type: ignore[attr-defined, unused-ignore]
     except OSError:
         return False
 
@@ -97,7 +97,7 @@ def _show_help_message_box() -> None:
     locked-down desktop) falls through to silent exit rather than crashing.
     """
     with contextlib.suppress(OSError):
-        ctypes.windll.user32.MessageBoxW(
+        ctypes.windll.user32.MessageBoxW(  # type: ignore[attr-defined, unused-ignore]
             None,
             _MESSAGE_BODY,
             _MESSAGE_TITLE,

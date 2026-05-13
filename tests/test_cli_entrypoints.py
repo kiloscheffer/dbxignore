@@ -1,4 +1,4 @@
-"""CLI surface tests for the ``dbxignore`` and ``dbxignored`` entry points."""
+"""CLI surface tests for the ``dbxignore`` entry point."""
 
 from __future__ import annotations
 

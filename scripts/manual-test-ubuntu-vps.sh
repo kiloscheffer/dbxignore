@@ -297,7 +297,6 @@ phase_dbxignore_install() {
     export PATH="$HOME/.local/bin:$PATH"
 
     command -v dbxignore  >/dev/null && pass "dbxignore on PATH"  || fail "dbxignore on PATH"
-    command -v dbxignored >/dev/null && pass "dbxignored on PATH" || fail "dbxignored on PATH"
 }
 
 # ---------------------------------------------------------------------------
@@ -309,23 +308,24 @@ phase_cli_surface() {
 
     # PR #92 fixes
     dbxignore  --version 2>&1 | grep -qE '^dbxignore, version '  && pass "dbxignore --version"  || fail "dbxignore --version"
-    dbxignored --version 2>&1 | grep -qE '^dbxignored, version ' && pass "dbxignored --version" || fail "dbxignored --version"
 
     # Strip ANSI: rich-click colorizes the Usage line on POSIX TTYs (TERM
     # is set), but not on Windows. Mirror the Python test's substring shape
-    # in tests/test_cli_entrypoints.py — assert "dbxignored" + "[OPTIONS]"
+    # in tests/test_cli_entrypoints.py — assert "daemon" + "[OPTIONS]"
     # are present and "COMMAND" / "[ARGS]" are absent (so a regression that
-    # accidentally adds subcommands to the daemon entry surfaces here).
+    # accidentally adds subcommands to the daemon subcommand surfaces here).
+    # Before BACKLOG #30 this tested `dbxignored --help`; post-#30 the daemon
+    # is reached via `dbxignore daemon`.
     local plain usage_line
-    plain="$(dbxignored --help 2>&1 | sed $'s/\e\\[[0-9;]*m//g')"
+    plain="$(dbxignore daemon --help 2>&1 | sed $'s/\e\\[[0-9;]*m//g')"
     usage_line="$(printf '%s\n' "$plain" | grep -m1 'Usage:' || true)"
-    if [[ "$usage_line" == *"dbxignored"* ]] \
+    if [[ "$usage_line" == *"daemon"* ]] \
        && [[ "$usage_line" == *"[OPTIONS]"* ]] \
        && [[ "$usage_line" != *"COMMAND"* ]] \
        && [[ "$usage_line" != *"[ARGS]"* ]]; then
-        pass "dbxignored --help has clean Usage line"
+        pass "dbxignore daemon --help has clean Usage line"
     else
-        fail "dbxignored --help Usage line: $usage_line"
+        fail "dbxignore daemon --help Usage line: $usage_line"
     fi
 
     dbxignore --help 2>&1 | grep -q 'apply' && pass "dbxignore --help lists subcommands" || fail "dbxignore --help missing subcommands"

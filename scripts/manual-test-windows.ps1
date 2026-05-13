@@ -295,7 +295,6 @@ function Test-InstallDbxignore {
     if ($LASTEXITCODE -ne 0) { Stop-Abort "uv tool install failed" }
 
     if (Get-Command dbxignore  -ErrorAction SilentlyContinue) { Write-Pass "dbxignore on PATH" }  else { Write-Fail "dbxignore on PATH" }
-    if (Get-Command dbxignored -ErrorAction SilentlyContinue) { Write-Pass "dbxignored on PATH" } else { Write-Fail "dbxignored on PATH" }
 }
 
 # ---------------------------------------------------------------------------
@@ -308,24 +307,23 @@ function Test-CliSurface {
     $verOut = (dbxignore --version 2>&1) -join "`n"
     if ($verOut -match '^dbxignore, version ') { Write-Pass "dbxignore --version" } else { Write-Fail "dbxignore --version (got: $verOut)" }
 
-    $verdOut = (dbxignored --version 2>&1) -join "`n"
-    if ($verdOut -match '^dbxignored, version ') { Write-Pass "dbxignored --version" } else { Write-Fail "dbxignored --version (got: $verdOut)" }
-
     # Strip ANSI escapes — rich-click decorates the Usage line; PS 7+'s
     # `e regex literal handles it. Mirror the substring shape from
-    # tests/test_cli_entrypoints.py: "dbxignored" + "[OPTIONS]" present,
+    # tests/test_cli_entrypoints.py: "daemon" + "[OPTIONS]" present,
     # "COMMAND" / "[ARGS]" absent (a regression that accidentally adds
-    # subcommands to the daemon entry surfaces here).
-    $rawHelp   = (dbxignored --help 2>&1) -join "`n"
+    # subcommands to the daemon subcommand surfaces here).
+    # Before BACKLOG #30 this tested `dbxignored --help`; post-#30 the daemon
+    # is reached via `dbxignore daemon`.
+    $rawHelp   = (dbxignore daemon --help 2>&1) -join "`n"
     $plainHelp = $rawHelp -replace "`e\[[0-9;]*m", ""
     $usageLine = ($plainHelp -split "`r?`n" | Where-Object { $_ -match 'Usage:' } | Select-Object -First 1)
-    if (($usageLine -match 'dbxignored') -and
+    if (($usageLine -match 'daemon') -and
         ($usageLine -match '\[OPTIONS\]') -and
         ($usageLine -notmatch 'COMMAND') -and
         ($usageLine -notmatch '\[ARGS\]')) {
-        Write-Pass "dbxignored --help has clean Usage line"
+        Write-Pass "dbxignore daemon --help has clean Usage line"
     } else {
-        Write-Fail "dbxignored --help Usage line: $usageLine"
+        Write-Fail "dbxignore daemon --help Usage line: $usageLine"
     }
 
     $helpOut = (dbxignore --help 2>&1) -join "`n"

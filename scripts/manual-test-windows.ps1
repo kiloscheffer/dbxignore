@@ -1468,7 +1468,7 @@ function Test-Uninstall {
         Write-Fail "purge - emitted 'Could not fully purge state files' on happy path"
         Get-Content $purgeOut | ForEach-Object { Write-Note "    $_" }
     }
-    # PR #<THIS_PR> daemon-alive purge-refusal guard (BACKLOG #122). On a
+    # PR #243 daemon-alive purge-refusal guard (BACKLOG #122). On a
     # clean uninstall the guard returns False - the two stderr phrases
     # below must not appear. Failure-path coverage deferred per BACKLOG
     # #129 - forcing a daemon to survive uninstall_service requires
@@ -1476,7 +1476,7 @@ function Test-Uninstall {
     # specifically the schtasks /End 30s-timeout case can't be reproduced
     # without a stuck filesystem operation.
     if ($purgeText -notmatch 'daemon is running' -and $purgeText -notmatch 'liveness is unknown') {
-        Write-Pass "purge - no spurious daemon-alive guard fire on happy path (PR #<THIS_PR>)"
+        Write-Pass "purge - no spurious daemon-alive guard fire on happy path (PR #243)"
     } else {
         Write-Fail "purge - daemon-alive guard fired on happy path"
         Get-Content $purgeOut | ForEach-Object { Write-Note "    $_" }

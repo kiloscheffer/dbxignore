@@ -802,14 +802,14 @@ phase_uninstall() {
         fail "purge — emitted 'Could not fully purge state files' on happy path"
         sed 's/^/    /' /tmp/dbxignore-purge.out
     fi
-    # PR #<THIS_PR> daemon-alive purge-refusal guard (BACKLOG #122). On a
+    # PR #243 daemon-alive purge-refusal guard (BACKLOG #122). On a
     # clean uninstall the guard returns False — the two stderr phrases below
     # must not appear. Failure-path coverage deferred per BACKLOG #129 —
     # forcing a daemon to survive uninstall_service requires platform-
     # specific stuck-process simulation.
     if ! grep -q 'daemon is running' /tmp/dbxignore-purge.out \
        && ! grep -q 'liveness is unknown' /tmp/dbxignore-purge.out; then
-        pass "purge — no spurious daemon-alive guard fire on happy path (PR #<THIS_PR>)"
+        pass "purge — no spurious daemon-alive guard fire on happy path (PR #243)"
     else
         fail "purge — daemon-alive guard fired on happy path"
         sed 's/^/    /' /tmp/dbxignore-purge.out

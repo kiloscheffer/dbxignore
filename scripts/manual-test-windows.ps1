@@ -35,6 +35,23 @@
     Run from a non-elevated PowerShell prompt. Dropbox + dbxignore both
     refuse to operate as Administrator (the per-user Task Scheduler entry
     targets the interactive user, not SYSTEM).
+
+    Manual visual verification (post-#30): after all phases pass, manually
+    double-click `dbxignore.exe` from File Explorer; expect a MessageBox
+    dialog with title "dbxignore" and body containing "dbxignore is a
+    command-line tool". Click OK to dismiss. This verifies the GUI-subsystem
+    + no-argv -> MessageBox path that no scripted UI test can reliably reach.
+
+    Known shell-wait limitation (post-#30): when invoked as a foreground
+    command, Windows shells (cmd.exe AND PowerShell) generally do not wait
+    for the GUI-subsystem `dbxignore.exe` before returning the prompt. Pipe
+    / redirect / variable-capture forms (the patterns used by the Phase 4.5
+    AttachConsole cases) force synchronous behavior. For interactive
+    foreground use, cmd.exe users wrap with `start /wait dbxignore.exe ...`;
+    PowerShell users wrap with `Start-Process -Wait dbxignore -ArgumentList
+    ...`. Not a regression introduced by this script — an artifact of
+    Windows GUI-subsystem dispatch semantics. See README's Known
+    limitations for details.
 #>
 
 [CmdletBinding()]
@@ -774,6 +791,37 @@ function Test-ExtendedCli {
             Write-Fail "4t - explain stderr missing 'symlinked component'"
         }
     }
+
+    # 4X — AttachConsole flow + stdio preservation (PR #30)
+    # Case 1: --version output reaches the PowerShell terminal.
+    $output = dbxignore --version 2>&1
+    if ($output -match "^dbxignore, version") {
+        Write-Pass "AttachConsole: --version output reaches PowerShell terminal"
+    } else {
+        Write-Fail "AttachConsole: --version output did not surface ($output)"
+    }
+
+    # Case 2: --version output is pipe-capturable. Proves the per-stream
+    # preservation logic doesn't overwrite the inherited pipe handle.
+    $captured = (dbxignore --version 2>&1 | Out-String)
+    if ($captured -match "dbxignore, version") {
+        Write-Pass "AttachConsole: --version output capturable via pipe"
+    } else {
+        Write-Fail "AttachConsole: pipe capture failed (got: $captured)"
+    }
+
+    # Case 3: --version output is redirectable to a file. Proves the
+    # per-stream preservation logic doesn't overwrite the inherited file
+    # handle.
+    $redirFile = "$env:TEMP\dbxignore-redir-test.txt"
+    dbxignore --version > $redirFile 2>&1
+    $fileContent = Get-Content $redirFile -Raw
+    if ($fileContent -match "dbxignore, version") {
+        Write-Pass "AttachConsole: --version output redirectable to file"
+    } else {
+        Write-Fail "AttachConsole: file redirect failed (got: $fileContent)"
+    }
+    Remove-Item $redirFile -ErrorAction SilentlyContinue
 }
 
 # ---------------------------------------------------------------------------
@@ -945,6 +993,14 @@ function Test-Daemon {
     } else {
         Write-Fail "Task Scheduler entry missing"
         return
+    }
+
+    # install verb-form (PR #30) — task uses `dbxignore.exe daemon`
+    $xml = schtasks /Query /TN dbxignore /XML 2>$null
+    if ($xml -match "<Arguments>.*daemon.*</Arguments>") {
+        Write-Pass "Task scheduled with 'dbxignore.exe daemon' invocation"
+    } else {
+        Write-Fail "Task scheduled command does not include 'daemon' argument"
     }
 
     # Wait for the daemon to bring its watchdog observer online. Same

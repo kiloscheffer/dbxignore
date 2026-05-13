@@ -2723,11 +2723,35 @@ Touches: `src/dbxignore/daemon.py` `_DeferredEvents` class (~10 LOC for cap if f
 
 ---
 
+## 127. Manual-test Phase 6 doesn't exercise the new `state_errors` exit-2 path for `uninstall --purge`
+
+PR #241's Codex P2 follow-up introduced a new behavioral contract: `uninstall --purge` surfaces state-cleanup failures via a stderr report (`Could not fully purge state files (N errors):` + per-file `could not remove <path>: <message>`) and exits 2 when any occur. PR #241 added a happy-path negative guard in all three manual-test scripts (mirroring the PR #204 marker-report guard), but the failure path itself is only covered by unit tests (`test_purge_dir_records_errors_when_list_supplied`, `test_purge_exits_two_when_state_cleanup_fails`).
+
+Forcing a real OSError on a state-dir file is platform-specific and largely impractical inside a smoke-test script:
+
+- The cited Windows cascade (`daemon.lock` still held after `schtasks /End` times out — BACKLOG #122) requires manufacturing a hung daemon, which is not reproducible in a smoke-test.
+- Windows alternative: holding an exclusive read-handle on `state.json` via `[System.IO.File]::Open` during the `dbxignore uninstall --purge` invocation. Doable in PowerShell (handle open → run → assert → close), but adds non-trivial handle-lifecycle complexity to Phase 6.
+- Linux/macOS: most direct paths require root (`chattr +i`, root-owned files) or chmod gymnastics that are fragile to test-abort cleanup (`chmod 555` on the state dir blocks `unlink` but also blocks the subsequent `rmdir`, so the failure shape diverges from the cited cascade).
+
+Codex flagged this as P1 on PR #241 against AGENTS.md's "manual-test scripts are kept current" hard requirement; same shape as #121 (PR #240's `scan_errors` exit-2 path). Deferred under the AGENTS.md "limitation called out" clause for the same reason: forcing the underlying OSError needs platform-specific filesystem setup that doesn't reproduce the production cascade. The happy-path guard PR #241 added is the same belt-and-braces shape the marker report carries.
+
+**Possible fix candidates:**
+
+1. **Windows-only Phase 6 extension** holding an exclusive read-handle on `state.json` during `dbxignore uninstall --purge`. Doable in PowerShell; verifies the new stderr report + exit-2 surface on the platform where the underlying cascade is most likely to fire (#122's `schtasks` case). Linux/macOS stay deferred.
+2. **All-platform chmod-based extension** with paired cleanup. Higher complexity and risk of leaving permissions corrupted on abort.
+3. **Accept the gap** with this backlog item, mirroring #121's deferral. Cheapest; matches the established pattern.
+
+**Urgency:** low. Unit tests pin the contract end-to-end across both the function boundary and the full `CliRunner` exit-code path. Bundle with #121 if it ever escalates — both share the "new exit-2 path, hard to force the underlying OSError" shape and would naturally land together. Surfaced 2026-05-13 by Codex on PR #241.
+
+Touches: `scripts/manual-test-windows.ps1:Test-Uninstall` (Windows-only extension if fix candidate 1 is taken); `scripts/manual-test-{ubuntu-vps,macos}.sh` Phase 6 (if extending cross-platform).
+
+---
+
 ## Status
 
 ### Open
 
-Nineteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12). Item #117 surfaced 2026-05-12 during the chore/115 work session (uv venv hygiene); the other two items from that session shipped 2026-05-12: #116 (uv build-cache hygiene) in PR #227, #118 (is_daemon_alive SystemError escalation) in PR #230. Item #119 surfaced 2026-05-12 from a macOS beta-tester run of `scripts/manual-test-macos.sh` Phase 6 on v0.5.1 — `launchctl bootout` failed silently and the launchd job survived `dbxignore uninstall`. Item #121 surfaced 2026-05-13 during PR #240's external-review pass — manual-test coverage for the new `list`/`clear` scan-error exit-2 path; deferred per the AGENTS.md "limitation called out" clause because forcing OSError needs platform-specific filesystem setup. Items #122, #125, #126 surfaced 2026-05-13 in a second external-review pass (alongside the same-PR-resolved #123 / #124) — daemon recovery + uninstall-race + macOS dual-attr surface findings.
+Twenty items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12). Item #117 surfaced 2026-05-12 during the chore/115 work session (uv venv hygiene); the other two items from that session shipped 2026-05-12: #116 (uv build-cache hygiene) in PR #227, #118 (is_daemon_alive SystemError escalation) in PR #230. Item #119 surfaced 2026-05-12 from a macOS beta-tester run of `scripts/manual-test-macos.sh` Phase 6 on v0.5.1 — `launchctl bootout` failed silently and the launchd job survived `dbxignore uninstall`. Item #121 surfaced 2026-05-13 during PR #240's external-review pass — manual-test coverage for the new `list`/`clear` scan-error exit-2 path; deferred per the AGENTS.md "limitation called out" clause because forcing OSError needs platform-specific filesystem setup. Items #122, #125, #126 surfaced 2026-05-13 in a second external-review pass (alongside the same-PR-resolved #123 / #124) — daemon recovery + uninstall-race + macOS dual-attr surface findings. Item #127 surfaced 2026-05-13 from Codex's P1 follow-up on PR #241 — parallel deferral of manual-test error-injection coverage for the new `state_errors` exit-2 path, same "limitation called out" pattern as #121.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2748,6 +2772,7 @@ Nineteen items. Most are passive (no concrete trigger requires action) — bundl
 - **#122** — `uninstall --purge` proceeds when the Windows daemon-exit timeout fires after `schtasks /End`. The 30s wait is bounded; on timeout the still-live daemon's reconcile loop re-applies markers and its next state-write recreates `state.json` after `_purge_local_state` removes it. Silent tug-of-war; root cause of the now-resolved #124. Bundle with the next `cli.uninstall` or `install/windows_task.py` edit.
 - **#125** — macOS dual-attr `set_ignored` partial-failure leaves one xattr set; `is_ignored`'s first-hit-wins short-circuit then hides the partial state from the next sweep's retry. Low-frequency (requires dual-attr mode + a filesystem failing specifically on the second attr).
 - **#126** — `_DeferredEvents.drain` redispatches serially on the worker thread before Phase 2 starts; a large startup-window burst could delay Phase 2's wall-clock unnecessarily. Mostly redundant with Phase 2 anyway. No observed problem.
+- **#127** — Manual-test Phase 6 doesn't exercise the new `state_errors` exit-2 path for `uninstall --purge` (PR #241 Codex P2 follow-up). Unit tests pin the contract end-to-end; happy-path guard added to all three scripts mirroring the PR #204 marker-report guard; failure-path deferred per the AGENTS.md "limitation called out" clause because forcing the underlying OSError needs platform-specific filesystem setup that doesn't reproduce the production cascade. Same shape as #121.
 ### Resolved (reverse chronological)
 
 #### 2026-05-13

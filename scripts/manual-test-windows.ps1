@@ -1455,6 +1455,19 @@ function Test-Uninstall {
         Write-Fail "purge - emitted 'Could not fully clear' on happy path"
         Get-Content $purgeOut | ForEach-Object { Write-Note "    $_" }
     }
+    # PR #241 parallel guard for the new state-files partial-failure report.
+    # Same trade-off as the marker guard above: forcing a state-dir OSError
+    # end-to-end needs platform-specific FS contortions (BACKLOG #127 — the
+    # Windows daemon.lock cascade requires manufacturing a hung daemon),
+    # and the unit tests pin the partial-failure assertion tightly. This
+    # guard pins the happy path against an accidental regression that would
+    # emit the report on every clean uninstall.
+    if ($purgeText -notmatch 'Could not fully purge state files') {
+        Write-Pass "purge - no spurious 'Could not fully purge state files' on happy path (PR #241)"
+    } else {
+        Write-Fail "purge - emitted 'Could not fully purge state files' on happy path"
+        Get-Content $purgeOut | ForEach-Object { Write-Note "    $_" }
+    }
 
     if (Test-Path "$T\watch-me.tmp") { Assert-AdsUnset -Path "$T\watch-me.tmp" -Name "purge - watch-me.tmp marker cleared" }
     if (Test-Path "$T\cache")        { Assert-AdsUnset -Path "$T\cache"        -Name "purge - cache/ marker cleared" }

@@ -1057,6 +1057,50 @@ def test_purge_refuses_when_state_json_unreadable(
     assert state_json.exists(), "state.json must survive purge refusal"
 
 
+def test_purge_refuses_when_state_json_missing_and_daemon_alive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
+) -> None:
+    """Codex P2 #2 follow-up on PR #243: when ``state.json`` is absent
+    entirely (e.g. a prior partial ``--purge`` deleted state.json but
+    couldn't delete the held daemon.lock, or the user manually removed
+    state.json), ``state.read()`` returns None AND
+    ``state.default_path().exists()`` is False, so the prior two-arm gate
+    skipped the lock probe and fell through to the destructive purge body.
+    A live daemon then re-applied markers and rewrote state.json — the
+    exact tug-of-war the gate was supposed to prevent.
+
+    Unified gate now always probes ``is_any_daemon_running()``. With no
+    state.json on disk but the lock held, refuse with the "PID unknown;
+    daemon.lock is held" message variant."""
+    import click.testing
+
+    from dbxignore import cli, state
+
+    root = tmp_path / "Dropbox"
+    root.mkdir()
+    marked = root / "marked.tmp"
+    marked.touch()
+    fake_markers.set_ignored(marked)
+
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    # No state.json written at all — the scenario Codex named.
+
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+    monkeypatch.setattr("dbxignore.install.uninstall_service", lambda: None)
+    # Daemon detected via lock probe, not via state.json (which doesn't exist).
+    monkeypatch.setattr(state, "is_any_daemon_running", lambda: True)
+
+    result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
+
+    assert result.exit_code == 2, result.output
+    combined = (result.output + result.stderr).lower()
+    assert "daemon is running" in combined
+    assert "daemon.lock is held" in combined or "pid unknown" in combined
+    assert fake_markers.is_ignored(marked), "marker must survive purge refusal"
+
+
 def test_purge_proceeds_when_state_unreadable_and_no_daemon(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
 ) -> None:

@@ -1749,46 +1749,48 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
         # the dispatcher would have accumulated — the gate's `sys.exit(2)`
         # would happen before the per-error stderr-surfacing block below
         # at the end of `uninstall`, silently dropping the report.
+        # Unified daemon-alive probe: always check the daemon-singleton lock
+        # (the authoritative "any daemon alive?" signal) plus the standard
+        # PID-anchored check when state.json is readable. Codex's second P2
+        # follow-up on PR #243 surfaced that the prior two-arm shape skipped
+        # the lock probe entirely when state.json was MISSING (e.g. user
+        # manually removed it, or a prior partial purge deleted state.json
+        # but couldn't delete the held daemon.lock), so a live daemon could
+        # race the purge body unprotected. The lock is held for the daemon's
+        # entire lifetime (see `daemon._acquire_singleton_lock`), so probing
+        # it covers all three scenarios uniformly: state.json readable,
+        # unreadable, or absent.
         s_for_guard = state.read()
-        # Arm A: state.json present but unreadable (locked, malformed,
-        # permission-denied). No PID to anchor the standard liveness check.
-        # Codex's P2 follow-up on PR #243 surfaced that the prior shape
-        # (refuse unconditionally on this branch) blocked the documented
-        # `--purge` recovery path for an orphaned corrupt state.json on a
-        # system with no live daemon. Re-probe via the daemon-singleton
-        # lock at `daemon.lock` — if no contender holds it, no daemon is
-        # alive and `--purge` can safely clean up the bad state.json. If
-        # the lock IS held, fall through to refusal (real tug-of-war).
-        if s_for_guard is None and state.default_path().exists() and state.is_any_daemon_running():
+        lock_held = state.is_any_daemon_running()
+        pid_alive = s_for_guard is not None and state.daemon_is_running(s_for_guard)
+        if lock_held or pid_alive:
+            if pid_alive:
+                # state.json gave us a PID that the live-process check
+                # confirmed. Surface it for the user's taskkill command.
+                assert s_for_guard is not None  # narrowing for type-checker
+                pid_clause = f" (pid={s_for_guard.daemon_pid})"
+                kill_hint = f"taskkill /F /PID {s_for_guard.daemon_pid}"
+            else:
+                # Lock is held but we have no verified PID (either state.json
+                # is absent / unreadable, or it points at a stale PID whose
+                # process is dead — meaning a different live daemon holds
+                # the lock, an anomaly worth flagging). Tell the user how to
+                # find the PID themselves.
+                pid_clause = " (daemon.lock is held; PID unknown — state.json absent or unreadable)"
+                kill_hint = (
+                    "tasklist | findstr dbxignore  # to find pid, then taskkill /F /PID <pid>"
+                )
             click.echo(
-                f"error: state.json at {state.default_path()} is unreadable AND a "
-                "dbxignore daemon process is holding daemon.lock. Refusing to purge "
-                "— without a readable state.json there's no PID to surface, but the "
-                "lock-held signal confirms a live daemon whose reconcile loop would "
-                "re-apply cleared markers.",
-                err=True,
-            )
-            click.echo(
-                "Stop the daemon manually (e.g. `taskkill /F /PID <pid>` on Windows "
-                "after running `tasklist | findstr dbxignore`), then run "
-                "`dbxignore clear --force` for markers and remove "
-                f"`{state.user_state_dir()}` by hand.",
-                err=True,
-            )
-            sys.exit(2)
-        if s_for_guard is not None and state.daemon_is_running(s_for_guard):
-            click.echo(
-                f"error: daemon is running (pid={s_for_guard.daemon_pid}) after "
-                "service removal. Refusing to purge — the next reconcile sweep "
-                "would re-apply cleared markers and the next state-write would "
+                f"error: dbxignore daemon is running{pid_clause} after service "
+                "removal. Refusing to purge — the next reconcile sweep would "
+                "re-apply cleared markers and the next state-write would "
                 "recreate state.json.",
                 err=True,
             )
             click.echo(
-                "Stop the daemon manually (e.g. `taskkill /F /PID "
-                f"{s_for_guard.daemon_pid}` on Windows), then run `dbxignore "
-                f"clear --force` for markers and remove `{state.user_state_dir()}` "
-                "by hand.",
+                f"Stop the daemon manually (e.g. on Windows: `{kill_hint}`), then "
+                "run `dbxignore clear --force` for markers and remove "
+                f"`{state.user_state_dir()}` by hand.",
                 err=True,
             )
             sys.exit(2)

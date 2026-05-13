@@ -1,8 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec building two macOS Mach-O binaries from the same codebase.
+"""PyInstaller spec building a single macOS Mach-O binary.
 
-- dbxignore   : the CLI entry point.
-- dbxignored  : the daemon shim, launched by launchd.
+- dbxignore : entry point for all subcommands (CLI + daemon dispatch).
 
 Sibling to dbxignore.spec (Windows). The platform-specific bits (hiddenimports,
 upx, binary names) differ enough to warrant a sibling rather than a single
@@ -47,15 +46,15 @@ def _analysis():
     )
 
 
-# ---- CLI variant ---------------------------------------------------------
-a_cli = _analysis()
-pyz_cli = PYZ(a_cli.pure, a_cli.zipped_data, cipher=None)
-exe_cli = EXE(
-    pyz_cli,
-    a_cli.scripts,
-    a_cli.binaries,
-    a_cli.zipfiles,
-    a_cli.datas,
+# ---- Single binary -------------------------------------------------------
+a = _analysis()
+pyz = PYZ(a.pure, a.zipped_data, cipher=None)
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
     [],
     name="dbxignore",
     debug=False,
@@ -78,26 +77,3 @@ exe_cli = EXE(
     entitlements_file=None,
 )
 
-# ---- Daemon variant ------------------------------------------------------
-a_daemon = _analysis()
-pyz_daemon = PYZ(a_daemon.pure, a_daemon.zipped_data, cipher=None)
-exe_daemon = EXE(
-    pyz_daemon,
-    a_daemon.scripts,
-    a_daemon.binaries,
-    a_daemon.zipfiles,
-    a_daemon.datas,
-    [],
-    name="dbxignored",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-)

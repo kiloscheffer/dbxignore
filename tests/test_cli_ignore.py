@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import rich_click as click
 from click.testing import CliRunner
 
 from dbxignore import cli, reconcile, state
@@ -1401,3 +1402,212 @@ def test_unignore_refuses_when_match_file_invalid(
     # No mutation: file unchanged, marker still set.
     assert rule_file.read_text(encoding="utf-8") == "/build/\n"
     assert fake_markers.is_ignored(target)
+
+
+# ---------------------------------------------------------------------------
+# _confirm_or_messagebox / _error_or_messagebox router unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_confirm_or_messagebox_skips_gui_on_non_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On non-Windows with stdout=None, _confirm_or_messagebox must NOT call
+    confirm_destructive — the platform guard must short-circuit first.
+    The CliRunner-based tests above (test_ignore_default_prompts_then_aborts_on_no
+    etc.) validate the click.confirm path end-to-end."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "stdout", None)
+
+    from dbxignore import _windows_dialogs
+
+    dialog_calls: list[str] = []
+
+    def fake_confirm_destructive(msg: str, **kw: object) -> bool:
+        dialog_calls.append(msg)
+        return True
+
+    monkeypatch.setattr(_windows_dialogs, "confirm_destructive", fake_confirm_destructive)
+    # On non-Windows, the platform branch prevents reaching the dialog helper.
+    # should_use_gui_dialogs checks sys.platform first, so it returns False.
+    assert not _windows_dialogs.should_use_gui_dialogs()
+    # Nothing to assert about _confirm_or_messagebox's return value here (it
+    # would call click.confirm which has no TTY in this context), but we can
+    # assert that confirm_destructive was NOT reached.
+    # Wrap in CliRunner to provide a TTY for click.confirm.
+    runner = CliRunner()
+
+    @click.command()
+    def _dummy() -> None:
+        result = cli._confirm_or_messagebox("test?")
+        click.echo("yes" if result else "no")
+
+    runner.invoke(_dummy, input="y\n")
+    assert dialog_calls == []  # GUI branch never reached on non-Windows
+
+
+def test_confirm_or_messagebox_routes_to_gui_when_no_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On win32 with sys.stdout=None, _confirm_or_messagebox delegates to
+    _windows_dialogs.confirm_destructive."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "stdout", None)
+    dialog_calls: list[str] = []
+
+    from dbxignore import _windows_dialogs
+
+    def fake_confirm_destructive(msg: str, **kw: object) -> bool:
+        dialog_calls.append(msg)
+        return True
+
+    monkeypatch.setattr(_windows_dialogs, "confirm_destructive", fake_confirm_destructive)
+    result = cli._confirm_or_messagebox("Mark path?")
+    assert result is True
+    assert dialog_calls == ["Mark path?"]
+
+
+def test_confirm_or_messagebox_routes_to_gui_and_returns_false_when_no_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """confirm_destructive returning False is propagated (user clicked No)."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "stdout", None)
+
+    from dbxignore import _windows_dialogs
+
+    monkeypatch.setattr(_windows_dialogs, "confirm_destructive", lambda msg, **kw: False)
+    result = cli._confirm_or_messagebox("Mark path?")
+    assert result is False
+
+
+def test_error_or_messagebox_routes_to_gui_when_no_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On win32 with sys.stdout=None, _error_or_messagebox delegates to
+    _windows_dialogs.show_error."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "stdout", None)
+    dialog_calls: list[str] = []
+
+    from dbxignore import _windows_dialogs
+
+    def fake_show_error(msg: str, **kw: object) -> None:
+        dialog_calls.append(msg)
+
+    monkeypatch.setattr(_windows_dialogs, "show_error", fake_show_error)
+    cli._error_or_messagebox("something failed")
+    assert dialog_calls == ["something failed"]
+
+
+def test_error_or_messagebox_routes_to_click_echo_when_stdout_valid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On win32 with a non-None sys.stdout, _error_or_messagebox uses
+    click.echo — not the GUI dialog. Validated via the should_use_gui_dialogs
+    predicate (stdout non-None → predicate False → GUI branch skipped)."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    # sys.stdout is already non-None under pytest.
+    from dbxignore import _windows_dialogs
+
+    dialog_calls: list[str] = []
+
+    def fake_show_error(msg: str, **kw: object) -> None:
+        dialog_calls.append(msg)
+
+    monkeypatch.setattr(_windows_dialogs, "show_error", fake_show_error)
+    # should_use_gui_dialogs → False (stdout is not None) → show_error NOT called.
+    assert not _windows_dialogs.should_use_gui_dialogs()
+    cli._error_or_messagebox("oops")
+    assert dialog_calls == []  # click.echo path taken, not GUI
+
+
+# ---------------------------------------------------------------------------
+# Validator GUI-dialog routing (PR #238 fix)
+# ---------------------------------------------------------------------------
+
+
+def test_ignore_validator_error_routes_to_gui_in_no_stdio_context(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 fix (PR #238): validator errors from _normalize_under_root /
+    _validate_target_under_root surface as MessageBox dialogs in the no-stdio
+    Explorer shell-verb context.
+
+    Uses the "path not under any Dropbox root" error path as the representative
+    case — all other validator error paths in _normalize_under_root,
+    _reject_dotdot_after_symlink, and _validate_target_under_root share the
+    same _error_or_messagebox router after this fix.
+
+    CliRunner replaces sys.stdout during invocation, so monkeypatching
+    sys.stdout=None would be undone. Instead we monkeypatch
+    should_use_gui_dialogs directly (the predicate _error_or_messagebox uses)
+    to simulate the no-stdio context.
+    """
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    from dbxignore import _windows_dialogs
+
+    monkeypatch.setattr(_windows_dialogs, "should_use_gui_dialogs", lambda: True)
+
+    dialog_calls: list[str] = []
+
+    def fake_show_error(msg: str, **kw: object) -> None:
+        dialog_calls.append(msg)
+
+    monkeypatch.setattr(_windows_dialogs, "show_error", fake_show_error)
+
+    # Point _discover_roots at a root so the "No Dropbox roots" branch doesn't
+    # fire — we want to reach the "not under any Dropbox root" branch.
+    root = tmp_path / "Dropbox"
+    root.mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+
+    # Path outside the discovered root.
+    elsewhere = tmp_path / "not_dropbox"
+    elsewhere.mkdir()
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["ignore", str(elsewhere), "--yes"])
+
+    assert result.exit_code == 2
+    assert len(dialog_calls) == 1
+    assert "not under any Dropbox root" in dialog_calls[0]
+
+
+def test_unignore_validator_error_routes_to_gui_in_no_stdio_context(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same routing check for `unignore` — verifies the fix covers both
+    shell-verb subcommands (PR #238).
+
+    Uses the "does not exist" error path to exercise _normalize_under_root's
+    require_exists branch through CliRunner with a simulated no-stdio context
+    (should_use_gui_dialogs monkeypatched to True).
+    """
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    from dbxignore import _windows_dialogs
+
+    monkeypatch.setattr(_windows_dialogs, "should_use_gui_dialogs", lambda: True)
+
+    dialog_calls: list[str] = []
+
+    def fake_show_error(msg: str, **kw: object) -> None:
+        dialog_calls.append(msg)
+
+    monkeypatch.setattr(_windows_dialogs, "show_error", fake_show_error)
+
+    root = tmp_path / "Dropbox"
+    root.mkdir()
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+
+    # Non-existent path under root — hits the "does not exist" branch.
+    ghost = root / "ghost"
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["unignore", str(ghost), "--yes"])
+
+    assert result.exit_code == 2
+    assert len(dialog_calls) == 1
+    assert "does not exist" in dialog_calls[0]

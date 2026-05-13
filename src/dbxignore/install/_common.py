@@ -1,10 +1,12 @@
 """Shared helpers for platform-specific install backends.
 
-Currently exposes detect_invocation() — the logic for finding the
-right `dbxignored` invocation in the running install (PyInstaller frozen
-binary → PATH shim → `python3 -m dbxignore daemon` fallback). Originally
-inline in linux_systemd.py; extracted here when macos_launchd.py needed
-the same logic.
+Exposes detect_invocation() and detect_cli_invocation() — unified binary
+lookup logic for the daemon and CLI entry points after PR #30. Frozen
+(PyInstaller) paths use the single dbxignore binary directly. Non-frozen
+paths prefer shutil.which("dbxignore") on Linux/macOS and pythonw.exe on
+Windows (with python.exe fallback), else `python -m dbxignore`.
+Originally inline in linux_systemd.py; extracted here when macos_launchd.py
+needed the same logic.
 """
 
 from __future__ import annotations
@@ -18,99 +20,56 @@ logger = logging.getLogger(__name__)
 
 
 def detect_invocation() -> tuple[Path, str]:
-    """Return (executable, arguments) to run the daemon in the current install.
+    """Return (executable_path, args_string) for the installed service entry.
 
-    Frozen PyInstaller bundle: prefers the `dbxignored` sibling binary that
-    ships alongside `dbxignore` (both emitted from the same PyInstaller
-    Analysis), falling back to `(sys.executable, "daemon")` only if the
-    sibling is somehow absent. Resolution rules:
+    Frozen (PyInstaller binary): the binary is dbxignore[.exe]; invoke it
+    with "daemon" as the single argument. The pre-#30 three-step "find
+    dbxignored shim" logic is gone — there is no separate dbxignored
+    binary after #30 unification.
 
-    1. If `sys.executable` itself is the `dbxignored` shim (user invoked
-       `dbxignored install` directly), return it with empty args.
-    2. Else look for a `dbxignored` sibling next to `sys.executable` (the
-       common case — user invoked `dbxignore install` from the long-form
-       binary). Return the sibling with empty args.
-    3. Else fall through to `(sys.executable, "daemon")` so the service
-       manager invokes the long-form binary with the `daemon` subcommand.
-       Defensive only; PyInstaller specs always emit both binaries.
-
-    Why "daemon" with empty args matters: launchd / systemd / Task Scheduler
-    each invoke `ProgramArguments` / `ExecStart` / `<Arguments>` literally.
-    The previous frozen-branch behavior returned `(sys.executable, "")`,
-    which translated to running the long-form `dbxignore` binary with no
-    subcommand — Click prints help and exits with status 2, the service
-    manager's KeepAlive policy retries on the same loop. The launchctl
-    print symptom is `last exit code = 2 / runs = N` with no daemon ever
-    actually starting (v0.4 beta-tester report 2026-05-01).
-
-    Non-frozen branch is platform-conditional:
-
-    - **Windows** (Task Scheduler logon launch): prefer ``pythonw.exe`` —
-      the windowless interpreter sibling next to ``sys.executable`` — to
-      avoid the console flash + orphan ``conhost.exe`` that ``python.exe``
-      would produce. If ``pythonw.exe`` doesn't exist at that path (Store
-      Python, embedded interpreter, or a pruned CPython install), fall
-      back to ``sys.executable`` (``python.exe``) with a ``WARNING`` log.
-      The daemon then runs correctly but Task Scheduler flashes a brief
-      console window at every logon. The ``shutil.which("dbxignored")``
-      PATH-shim lookup is intentionally skipped on Windows: the typical
-      Windows dev path is ``.venv/Scripts/python.exe``, and any PATH shim
-      would still launch ``python.exe`` with a console.
-    - **Linux/macOS** (systemd / launchd): try ``shutil.which("dbxignored")``
-      first (the ``uv tool install`` PATH-shim case); fall back to
-      ``python3 -m dbxignore daemon`` otherwise.
-
-    Raises ``RuntimeError`` if no ``dbxignored`` shim is on PATH AND
-    ``python3`` isn't on PATH AND ``sys.executable`` is empty/None. This
-    last-ditch case is rare in practice (``sys.executable`` is normally
-    set), but Python's docs allow it for embedded interpreters or
-    misconfigured frozen deployments. CLI callers (``cli.install`` /
-    ``cli.uninstall``) translate the RuntimeError to a clean error rather
-    than a raw traceback.
+    Non-frozen (uv tool install / pip install): use the Python interpreter
+    with `-m dbxignore daemon`. On Windows, prefer `pythonw.exe` for the
+    windowless launch (per BACKLOG #100); fall back to `sys.executable` if
+    `pythonw.exe` doesn't exist (Microsoft Store Python, embedded
+    interpreters).
     """
     if getattr(sys, "frozen", False):
-        exe = Path(sys.executable)
-        daemon_name = "dbxignored.exe" if sys.platform == "win32" else "dbxignored"
-        if exe.name == daemon_name:
-            return exe, ""
-        sibling = exe.parent / daemon_name
-        if sibling.exists():
-            return sibling, ""
-        return exe, "daemon"
+        # PyInstaller frozen path. After #30 there's only one binary —
+        # use sys.executable's path directly.
+        return Path(sys.executable), "daemon"
+
+    # Non-frozen path.
     if sys.platform == "win32":
-        pythonw = Path(sys.executable).with_name("pythonw.exe")
-        if pythonw.exists():
-            return pythonw, "-m dbxignore daemon"
-        # Item #100: fall back to python.exe when pythonw.exe is missing.
-        # Common on Microsoft Store Python, embedded interpreters, or
-        # pruned CPython installs that ship only `python.exe`. The daemon
-        # functions correctly under python.exe but Task Scheduler flashes
-        # a console window at every logon.
+        pythonw_path = Path(sys.executable).with_name("pythonw.exe")
+        if pythonw_path.exists():
+            return pythonw_path, "-m dbxignore daemon"
+        # Pythonw.exe absent (Store Python etc.) — fall back to python.exe
+        # with a logged warning. The warning + fallback shape was added in
+        # PR #229 (item #100).
         logger.warning(
-            "pythonw.exe not found at %s; falling back to %s for the daemon "
-            "Task Scheduler entry. The daemon will start at logon, but a "
-            "brief console window will appear each time. To suppress, "
-            "install a standard CPython distribution (which includes "
-            "pythonw.exe alongside python.exe).",
-            pythonw,
+            "pythonw.exe not found next to %s; falling back to python.exe. "
+            "The daemon launched at logon may briefly flash a console window.",
             sys.executable,
         )
         return Path(sys.executable), "-m dbxignore daemon"
-    exe_str = shutil.which("dbxignored")
-    if exe_str:
-        return Path(exe_str), ""
-    python = shutil.which("python3") or sys.executable
-    if not python:
-        # ``sys.executable`` can be ``""`` or ``None`` on embedded
-        # interpreters or misconfigured frozen deployments per Python's
-        # docs. Without this guard, ``Path("")`` would silently produce
-        # ``PosixPath('.')`` (broken install) and ``Path(None)`` would
-        # raise a raw ``TypeError`` mid-install.
-        raise RuntimeError(
-            "dbxignored not on PATH and no python3 found; "
-            "run `uv tool install .` from the dbxignore checkout first"
-        )
-    return Path(python), "-m dbxignore daemon"
+
+    # Linux / macOS non-frozen: shutil.which("dbxignore") if it exists,
+    # else sys.executable with -m dbxignore daemon. If sys.executable is
+    # empty (some embedded interpreters) or unset, fall back to python3 on
+    # PATH; if neither, raise RuntimeError so the service entry is never
+    # written with a broken executable.
+    dbxignore_in_path = shutil.which("dbxignore")
+    if dbxignore_in_path:
+        return Path(dbxignore_in_path), "daemon"
+    if not sys.executable:
+        python3 = shutil.which("python3")
+        if not python3:
+            raise RuntimeError(
+                "Cannot determine Python interpreter for service entry: "
+                "sys.executable is empty and python3 not on PATH.",
+            )
+        return Path(python3), "-m dbxignore daemon"
+    return Path(sys.executable), "-m dbxignore daemon"
 
 
 def detect_cli_invocation() -> str:

@@ -35,6 +35,40 @@
     Run from a non-elevated PowerShell prompt. Dropbox + dbxignore both
     refuse to operate as Administrator (the per-user Task Scheduler entry
     targets the interactive user, not SYSTEM).
+
+    Manual visual verification (post-#30): after all phases pass, manually
+    double-click `dbxignore.exe` from File Explorer; expect a MessageBox
+    dialog with title "dbxignore" and body containing "dbxignore is a
+    command-line tool". Click OK to dismiss. This verifies the GUI-subsystem
+    + no-argv -> MessageBox path that no scripted UI test can reliably reach.
+
+    Manual visual verification for shell-verb GUI dialogs (post-#238):
+    After Phase 7 cleanup, manually:
+    1. Re-install dbxignore (`dbxignore install`) so the shell verbs register.
+    2. In Explorer, right-click any test file in your Dropbox folder.
+    3. Select "Ignore from Dropbox" — expect a MessageBox with a yellow warning
+       triangle, body asking to confirm marking the path ignored with a note that
+       Dropbox will remove the cloud copy from all linked devices, Yes/No buttons.
+    4. Click Yes -> operation runs silently. Verify the file's ADS marker via
+       `dir /R` or `dbxignore list`.
+    5. Click No on a fresh right-click -> operation cancels silently, no marker.
+    6. Right-click a file OUTSIDE the Dropbox folder -> "Ignore from Dropbox"
+       should not appear in the menu (verb's AppliesTo filter excludes non-Dropbox
+       paths).
+    7. Right-click an already-ignored file and select "Restore to Dropbox" ->
+       one-click, no confirmation dialog; marker cleared and Dropbox starts
+       re-syncing.
+
+    Known shell-wait limitation (post-#30): when invoked as a foreground
+    command, Windows shells (cmd.exe AND PowerShell) generally do not wait
+    for the GUI-subsystem `dbxignore.exe` before returning the prompt. Pipe
+    / redirect / variable-capture forms (the patterns used by the Phase 4.5
+    AttachConsole cases) force synchronous behavior. For interactive
+    foreground use, cmd.exe users wrap with `start /wait dbxignore.exe ...`;
+    PowerShell users wrap with `Start-Process -Wait dbxignore -ArgumentList
+    ...`. Not a regression introduced by this script — an artifact of
+    Windows GUI-subsystem dispatch semantics. See README's Known
+    limitations for details.
 #>
 
 [CmdletBinding()]
@@ -278,7 +312,6 @@ function Test-InstallDbxignore {
     if ($LASTEXITCODE -ne 0) { Stop-Abort "uv tool install failed" }
 
     if (Get-Command dbxignore  -ErrorAction SilentlyContinue) { Write-Pass "dbxignore on PATH" }  else { Write-Fail "dbxignore on PATH" }
-    if (Get-Command dbxignored -ErrorAction SilentlyContinue) { Write-Pass "dbxignored on PATH" } else { Write-Fail "dbxignored on PATH" }
 }
 
 # ---------------------------------------------------------------------------
@@ -291,24 +324,23 @@ function Test-CliSurface {
     $verOut = (dbxignore --version 2>&1) -join "`n"
     if ($verOut -match '^dbxignore, version ') { Write-Pass "dbxignore --version" } else { Write-Fail "dbxignore --version (got: $verOut)" }
 
-    $verdOut = (dbxignored --version 2>&1) -join "`n"
-    if ($verdOut -match '^dbxignored, version ') { Write-Pass "dbxignored --version" } else { Write-Fail "dbxignored --version (got: $verdOut)" }
-
     # Strip ANSI escapes — rich-click decorates the Usage line; PS 7+'s
     # `e regex literal handles it. Mirror the substring shape from
-    # tests/test_cli_entrypoints.py: "dbxignored" + "[OPTIONS]" present,
+    # tests/test_cli_entrypoints.py: "daemon" + "[OPTIONS]" present,
     # "COMMAND" / "[ARGS]" absent (a regression that accidentally adds
-    # subcommands to the daemon entry surfaces here).
-    $rawHelp   = (dbxignored --help 2>&1) -join "`n"
+    # subcommands to the daemon subcommand surfaces here).
+    # Before BACKLOG #30 this tested `dbxignored --help`; post-#30 the daemon
+    # is reached via `dbxignore daemon`.
+    $rawHelp   = (dbxignore daemon --help 2>&1) -join "`n"
     $plainHelp = $rawHelp -replace "`e\[[0-9;]*m", ""
     $usageLine = ($plainHelp -split "`r?`n" | Where-Object { $_ -match 'Usage:' } | Select-Object -First 1)
-    if (($usageLine -match 'dbxignored') -and
+    if (($usageLine -match 'daemon') -and
         ($usageLine -match '\[OPTIONS\]') -and
         ($usageLine -notmatch 'COMMAND') -and
         ($usageLine -notmatch '\[ARGS\]')) {
-        Write-Pass "dbxignored --help has clean Usage line"
+        Write-Pass "dbxignore daemon --help has clean Usage line"
     } else {
-        Write-Fail "dbxignored --help Usage line: $usageLine"
+        Write-Fail "dbxignore daemon --help Usage line: $usageLine"
     }
 
     $helpOut = (dbxignore --help 2>&1) -join "`n"
@@ -774,6 +806,37 @@ function Test-ExtendedCli {
             Write-Fail "4t - explain stderr missing 'symlinked component'"
         }
     }
+
+    # 4X — AttachConsole flow + stdio preservation (PR #30)
+    # Case 1: --version output reaches the PowerShell terminal.
+    $output = dbxignore --version 2>&1
+    if ($output -match "^dbxignore, version") {
+        Write-Pass "AttachConsole: --version output reaches PowerShell terminal"
+    } else {
+        Write-Fail "AttachConsole: --version output did not surface ($output)"
+    }
+
+    # Case 2: --version output is pipe-capturable. Proves the per-stream
+    # preservation logic doesn't overwrite the inherited pipe handle.
+    $captured = (dbxignore --version 2>&1 | Out-String)
+    if ($captured -match "dbxignore, version") {
+        Write-Pass "AttachConsole: --version output capturable via pipe"
+    } else {
+        Write-Fail "AttachConsole: pipe capture failed (got: $captured)"
+    }
+
+    # Case 3: --version output is redirectable to a file. Proves the
+    # per-stream preservation logic doesn't overwrite the inherited file
+    # handle.
+    $redirFile = "$env:TEMP\dbxignore-redir-test.txt"
+    dbxignore --version > $redirFile 2>&1
+    $fileContent = Get-Content $redirFile -Raw
+    if ($fileContent -match "dbxignore, version") {
+        Write-Pass "AttachConsole: --version output redirectable to file"
+    } else {
+        Write-Fail "AttachConsole: file redirect failed (got: $fileContent)"
+    }
+    Remove-Item $redirFile -ErrorAction SilentlyContinue
 }
 
 # ---------------------------------------------------------------------------
@@ -945,6 +1008,14 @@ function Test-Daemon {
     } else {
         Write-Fail "Task Scheduler entry missing"
         return
+    }
+
+    # install verb-form (PR #30) — task uses `dbxignore.exe daemon`
+    $xml = schtasks /Query /TN dbxignore /XML 2>$null
+    if ($xml -match "<Arguments>.*daemon.*</Arguments>") {
+        Write-Pass "Task scheduled with 'dbxignore.exe daemon' invocation"
+    } else {
+        Write-Fail "Task scheduled command does not include 'daemon' argument"
     }
 
     # Wait for the daemon to bring its watchdog observer online. Same

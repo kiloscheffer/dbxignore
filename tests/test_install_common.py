@@ -8,59 +8,14 @@ from pathlib import Path
 import pytest
 
 
-def _daemon_name() -> str:
-    """Platform-appropriate daemon binary name (drives the Windows .exe suffix)."""
-    return "dbxignored.exe" if sys.platform == "win32" else "dbxignored"
-
-
-def test_detect_invocation_returns_frozen_executable_when_already_dbxignored(
+def test_detect_invocation_frozen_returns_executable_with_daemon(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """User invoked `dbxignored install` directly: sys.executable IS the daemon shim."""
-    daemon_exe = tmp_path / _daemon_name()
-    daemon_exe.write_text("")
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", str(daemon_exe))
-    from dbxignore.install import _common
+    """Frozen (PyInstaller): always return (sys.executable, "daemon") unconditionally.
 
-    exe, args = _common.detect_invocation()
-    assert exe == daemon_exe
-    assert args == ""
-
-
-def test_detect_invocation_finds_dbxignored_sibling_from_dbxignore(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """User invoked `dbxignore install` (frozen): resolve to the `dbxignored` sibling.
-
-    Common case for v0.4 macOS / Windows installs — both binaries ship together
-    from a paired PyInstaller Analysis, the user runs the long-form CLI for
-    install, and the service manager needs the daemon-shim binary as its
-    invocation target.
-    """
-    cli_name = "dbxignore.exe" if sys.platform == "win32" else "dbxignore"
-    cli_exe = tmp_path / cli_name
-    cli_exe.write_text("")
-    daemon_exe = tmp_path / _daemon_name()
-    daemon_exe.write_text("")
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", str(cli_exe))
-    from dbxignore.install import _common
-
-    exe, args = _common.detect_invocation()
-    assert exe == daemon_exe
-    assert args == ""
-
-
-def test_detect_invocation_falls_back_to_daemon_subcommand_when_sibling_missing(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """No `dbxignored` sibling: invoke ourselves with the `daemon` subcommand.
-
-    Defensive case — the PyInstaller specs always emit both binaries, so this
-    code path should not be reached in shipped releases. But if it is reached,
-    `(dbxignore, "daemon")` is the correct fallback because Click can dispatch
-    to the daemon subcommand from the long-form binary.
+    After #30 unification there is no separate dbxignored binary — the single
+    dbxignore[.exe] binary handles all subcommands. The pre-#30 three-step
+    "find dbxignored shim" logic is gone.
     """
     cli_name = "dbxignore.exe" if sys.platform == "win32" else "dbxignore"
     cli_exe = tmp_path / cli_name
@@ -79,9 +34,8 @@ def test_detect_invocation_falls_back_to_python_module(monkeypatch: pytest.Monke
     # Force the Linux/macOS branch — the Windows branch short-circuits to
     # pythonw.exe before reaching the shutil.which lookup.
     monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(
-        "shutil.which", lambda name: "/usr/bin/python3" if name == "python3" else None
-    )
+    monkeypatch.setattr(sys, "executable", "/usr/bin/python3")
+    monkeypatch.setattr("shutil.which", lambda _name: None)
     from dbxignore.install import _common
 
     exe, args = _common.detect_invocation()
@@ -94,40 +48,16 @@ def test_detect_invocation_uses_path_shim_when_present(monkeypatch: pytest.Monke
     monkeypatch.setattr(sys, "platform", "linux")
 
     def fake_which(name: str) -> str | None:
-        if name == "dbxignored":
-            return "/home/u/.local/bin/dbxignored"
+        if name == "dbxignore":
+            return "/home/u/.local/bin/dbxignore"
         return None
 
     monkeypatch.setattr("shutil.which", fake_which)
     from dbxignore.install import _common
 
     exe, args = _common.detect_invocation()
-    assert exe == Path("/home/u/.local/bin/dbxignored")
-    assert args == ""
-
-
-def test_detect_invocation_raises_when_no_python3_and_no_sys_executable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Defensive guard: ``sys.executable`` can be ``""`` or ``None`` on
-    embedded interpreters / misconfigured frozen deployments per Python's
-    docs. When ``shutil.which("dbxignored")`` and ``shutil.which("python3")``
-    both return None AND ``sys.executable`` is falsy, the function must
-    raise ``RuntimeError`` rather than silently producing ``Path('.')``
-    (broken install) or a raw ``TypeError`` from ``Path(None)``.
-
-    Surfaced by Codex review on PR #144 — the original ``if not python``
-    guard was dropped under the (incorrect) belief that ``sys.executable``
-    was always truthy.
-    """
-    monkeypatch.delattr(sys, "frozen", raising=False)
-    monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(sys, "executable", "")
-    monkeypatch.setattr("shutil.which", lambda _name: None)
-    from dbxignore.install import _common
-
-    with pytest.raises(RuntimeError, match="dbxignored not on PATH"):
-        _common.detect_invocation()
+    assert exe == Path("/home/u/.local/bin/dbxignore")
+    assert args == "daemon"
 
 
 def test_detect_invocation_returns_pythonw_on_windows(
@@ -208,7 +138,8 @@ def test_detect_cli_invocation_frozen_uses_sibling_exe(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Frozen PyInstaller install: dbxignore.exe sibling is the registered target."""
-    daemon_exe = tmp_path / _daemon_name()
+    daemon_name = "dbxignored.exe" if sys.platform == "win32" else "dbxignored"
+    daemon_exe = tmp_path / daemon_name
     daemon_exe.write_text("")
     cli_name = "dbxignore.exe" if sys.platform == "win32" else "dbxignore"
     cli_exe = tmp_path / cli_name
@@ -270,3 +201,43 @@ def test_detect_cli_invocation_raises_when_no_python_and_no_sys_executable(
 
     with pytest.raises(RuntimeError, match="dbxignore not on PATH"):
         _common.detect_cli_invocation()
+
+
+def test_detect_invocation_raises_when_sys_executable_empty_and_no_python3(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In misconfigured embedded interpreters, sys.executable may be '' or None.
+
+    If neither it nor python3 on PATH is discoverable, detect_invocation raises
+    RuntimeError rather than writing a broken executable like Path('.') into the
+    systemd unit / launchd plist.
+    """
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "executable", "")
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    from dbxignore.install import _common
+
+    with pytest.raises(RuntimeError, match="Cannot determine Python interpreter"):
+        _common.detect_invocation()
+
+
+def test_detect_invocation_falls_back_to_python3_when_sys_executable_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When sys.executable is empty but python3 is on PATH, use python3 with -m dbxignore daemon."""
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "executable", "")
+
+    def fake_which(name: str) -> str | None:
+        if name == "python3":
+            return "/usr/bin/python3"
+        return None
+
+    monkeypatch.setattr("shutil.which", fake_which)
+    from dbxignore.install import _common
+
+    exe, args = _common.detect_invocation()
+    assert exe == Path("/usr/bin/python3")
+    assert args == "-m dbxignore daemon"

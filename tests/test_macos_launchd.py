@@ -20,12 +20,12 @@ def test_build_plist_content_has_required_keys() -> None:
 
     content = macos_launchd.build_plist_content(
         label="com.kiloscheffer.dbxignore",
-        program_arguments=["/usr/local/bin/dbxignored"],
+        program_arguments=["/usr/local/bin/dbxignore", "daemon"],
         log_dir=Path("/tmp/log"),
     )
     parsed = plistlib.loads(content)
     assert parsed["Label"] == "com.kiloscheffer.dbxignore"
-    assert parsed["ProgramArguments"] == ["/usr/local/bin/dbxignored"]
+    assert parsed["ProgramArguments"] == ["/usr/local/bin/dbxignore", "daemon"]
     assert parsed["RunAtLoad"] is True
     assert parsed["KeepAlive"] == {"SuccessfulExit": False, "Crashed": True}
     assert parsed["StandardOutPath"] == "/tmp/log/launchd.log"
@@ -38,7 +38,7 @@ def test_build_plist_content_emits_environment_variables_when_provided() -> None
 
     content = macos_launchd.build_plist_content(
         label="com.kiloscheffer.dbxignore",
-        program_arguments=["/usr/local/bin/dbxignored"],
+        program_arguments=["/usr/local/bin/dbxignore", "daemon"],
         log_dir=Path("/tmp/log"),
         environment={"DBXIGNORE_ROOT": "/Users/kilo/Dropbox"},
     )
@@ -78,7 +78,7 @@ def test_install_agent_writes_plist_and_calls_bootstrap(
     monkeypatch.setattr("os.getuid", lambda: 501, raising=False)
     monkeypatch.setattr(
         "dbxignore.install.macos_launchd.detect_invocation",
-        lambda: (Path("/usr/local/bin/dbxignored"), ""),
+        lambda: (Path("/usr/local/bin/dbxignore"), "daemon"),
     )
     monkeypatch.setattr(
         "dbxignore.state.user_log_dir",
@@ -106,6 +106,7 @@ def test_install_agent_writes_plist_and_calls_bootstrap(
     assert plist_path.exists()
     parsed = plistlib.loads(plist_path.read_bytes())
     assert parsed["Label"] == "com.kiloscheffer.dbxignore"
+    assert parsed["ProgramArguments"] == [str(Path("/usr/local/bin/dbxignore")), "daemon"]
 
     # Should have called bootout (idempotent precaution) then bootstrap.
     assert any(c[:2] == ["launchctl", "bootout"] for c in calls)

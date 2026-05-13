@@ -14,10 +14,11 @@ from tests.conftest import FakeMarkers
 
 
 def test_build_xml_contains_logon_trigger_and_action() -> None:
-    xml = install.build_task_xml(exe_path=Path(r"C:\bin\dbxignored.exe"))
+    xml = install.build_task_xml(exe_path=Path(r"C:\bin\dbxignore.exe"), arguments="daemon")
     assert "<LogonTrigger>" in xml
     assert f"<UserId>{getpass.getuser()}</UserId>" in xml
-    assert r"C:\bin\dbxignored.exe" in xml
+    assert r"C:\bin\dbxignore.exe" in xml
+    assert "<Arguments>daemon</Arguments>" in xml
     assert "<RestartOnFailure>" in xml
 
 
@@ -35,7 +36,9 @@ def test_build_xml_escapes_ampersand_in_exe_path(monkeypatch: pytest.MonkeyPatch
     import xml.etree.ElementTree as ET
 
     monkeypatch.setattr("getpass.getuser", lambda: "kilo")
-    xml = install.build_task_xml(exe_path=Path(r"C:\Users\Tom & Jerry\dbxignored.exe"))
+    xml = install.build_task_xml(
+        exe_path=Path(r"C:\Users\Tom & Jerry\dbxignore.exe"), arguments="daemon"
+    )
     ET.fromstring(xml)  # would raise ParseError on unescaped ``&``
 
 
@@ -45,7 +48,7 @@ def test_build_xml_escapes_special_chars_in_user(monkeypatch: pytest.MonkeyPatch
     import xml.etree.ElementTree as ET
 
     monkeypatch.setattr("getpass.getuser", lambda: "A&B<C>")
-    xml = install.build_task_xml(exe_path=Path(r"C:\bin\dbxignored.exe"))
+    xml = install.build_task_xml(exe_path=Path(r"C:\bin\dbxignore.exe"), arguments="daemon")
     root = ET.fromstring(xml)
     ns = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
     user_ids = root.findall(f".//{ns}UserId")
@@ -61,7 +64,7 @@ def test_build_xml_escapes_ampersand_in_arguments(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr("getpass.getuser", lambda: "kilo")
     xml = install.build_task_xml(
-        exe_path=Path(r"C:\bin\dbxignored.exe"),
+        exe_path=Path(r"C:\bin\dbxignore.exe"),
         arguments="--flag a&b",
     )
     root = ET.fromstring(xml)
@@ -253,7 +256,7 @@ def test_uninstall_task_skips_wait_when_end_fails_and_daemon_pid_is_set(
     """schtasks /End "Stops only the instances of a program started by a
     scheduled task" (Microsoft docs), so a non-zero /End cannot make
     a non-task-instance daemon exit — e.g. a manually-launched
-    `dbxignored` or a stale state.json from a different install. The
+    `dbxignore daemon` or a stale state.json from a different install. The
     wait must be gated on /End succeeding; otherwise uninstall hangs
     for the full _END_WAIT_TIMEOUT_S window with no benefit.
 
@@ -337,7 +340,9 @@ def test_install_task_runs_schtasks_create_then_run(
     so the daemon comes up without waiting for next logon. Mirrors what
     `systemctl --user enable --now` does on Linux and what
     `launchctl bootstrap` + RunAtLoad does on macOS."""
-    monkeypatch.setattr(install, "detect_invocation", lambda: (Path(r"C:\bin\dbxignored.exe"), ""))
+    monkeypatch.setattr(
+        install, "detect_invocation", lambda: (Path(r"C:\bin\dbxignore.exe"), "daemon")
+    )
     calls = []
 
     def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -364,7 +369,9 @@ def test_install_task_warns_but_does_not_raise_when_run_fails(
     fact installed."""
     import logging
 
-    monkeypatch.setattr(install, "detect_invocation", lambda: (Path(r"C:\bin\dbxignored.exe"), ""))
+    monkeypatch.setattr(
+        install, "detect_invocation", lambda: (Path(r"C:\bin\dbxignore.exe"), "daemon")
+    )
 
     def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         if cmd[0:2] == ["schtasks", "/Create"]:

@@ -959,6 +959,115 @@ def test_purge_exits_two_when_state_cleanup_fails(
     assert not (state_dir / "state.json").exists()
 
 
+def test_purge_refuses_when_daemon_alive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
+) -> None:
+    """BACKLOG #122: when the daemon survives ``uninstall_service`` (the
+    Windows 30s ``schtasks /End`` timeout case), ``--purge`` must refuse
+    its destructive cleanup body rather than racing the live daemon. The
+    daemon's reconcile loop re-applies cleared markers within a sweep tick
+    and its next state-write recreates ``state.json`` after
+    ``_purge_local_state`` removed it — silent tug-of-war pre-fix.
+    Service-removal has already succeeded by this point; only the
+    destructive purge body is blocked."""
+    import click.testing
+
+    from dbxignore import cli, state
+
+    root = tmp_path / "Dropbox"
+    root.mkdir()
+    marked = root / "marked.tmp"
+    marked.touch()
+    fake_markers.set_ignored(marked)
+
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    state.write(state.State(daemon_pid=12345), state_dir / "state.json")
+
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+    monkeypatch.setattr("dbxignore.install.uninstall_service", lambda: None)
+    monkeypatch.setattr(state, "is_daemon_alive", lambda pid, create_time=None: True)
+
+    result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
+
+    assert result.exit_code == 2, result.output
+    assert "daemon is running" in (result.output + result.stderr).lower()
+    assert fake_markers.is_ignored(marked), "marker must survive purge refusal"
+    assert (state_dir / "state.json").exists(), "state.json must survive purge refusal"
+
+
+def test_purge_refuses_when_state_json_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
+) -> None:
+    """BACKLOG #122 (Arm A): when ``state.json`` exists on disk but
+    ``state.read()`` returns None (locked file, permission-denied, cloud
+    placeholder, malformed JSON), daemon liveness is unknown. The conservative
+    response is the same as a known-alive daemon: refuse the destructive
+    purge body, preserve markers + state. Mirrors the parallel arm in
+    ``cli.clear`` (see ``cli.py:993-1003``)."""
+    import click.testing
+
+    from dbxignore import cli, state
+
+    root = tmp_path / "Dropbox"
+    root.mkdir()
+    marked = root / "marked.tmp"
+    marked.touch()
+    fake_markers.set_ignored(marked)
+
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    state_json = state_dir / "state.json"
+    state_json.write_text("not valid json {{{", encoding="utf-8")
+
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+    monkeypatch.setattr("dbxignore.install.uninstall_service", lambda: None)
+
+    result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
+
+    assert result.exit_code == 2, result.output
+    combined = (result.output + result.stderr).lower()
+    assert "unreadable" in combined or "liveness is unknown" in combined
+    assert fake_markers.is_ignored(marked), "marker must survive purge refusal"
+    assert state_json.exists(), "state.json must survive purge refusal"
+
+
+def test_purge_proceeds_when_daemon_dead(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
+) -> None:
+    """BACKLOG #122 regression guard: the new daemon-alive guard must
+    NOT block the purge body when ``state.json`` exists but the daemon
+    is no longer running (the common case — daemon was cleanly stopped
+    by ``uninstall_service``). Pins the guard fires only on the genuine
+    tug-of-war condition."""
+    import click.testing
+
+    from dbxignore import cli, state
+
+    root = tmp_path / "Dropbox"
+    root.mkdir()
+    marked = root / "marked.tmp"
+    marked.touch()
+    fake_markers.set_ignored(marked)
+
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    state.write(state.State(daemon_pid=99999), state_dir / "state.json")
+
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+    monkeypatch.setattr("dbxignore.install.uninstall_service", lambda: None)
+    monkeypatch.setattr(state, "is_daemon_alive", lambda pid, create_time=None: False)
+
+    result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
+
+    assert result.exit_code == 0, result.output
+    assert not fake_markers.is_ignored(marked), "purge body should have cleared the marker"
+    assert not (state_dir / "state.json").exists(), "purge body should have removed state.json"
+
+
 def test_purge_cleans_separate_log_dir_on_darwin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1728,6 +1728,54 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
         uninstall_shell_integration_if_supported()
 
     if purge:
+        # BACKLOG #122: fail-closed gate against the silent tug-of-war that
+        # happens on Windows when `schtasks /End`'s 30s daemon-exit wait
+        # times out. By this point `uninstall_service` has returned —
+        # service registration is gone — but the daemon process may still
+        # be alive holding `daemon.lock` and running its reconcile loop.
+        # If we proceed: cleared markers get re-applied within a sweep
+        # tick, `_purge_local_state`-removed `state.json` reappears on
+        # the daemon's next state-write, and the user sees "Cleared N
+        # markers" + exit 0 while none of it actually stuck. Mirrors the
+        # two-arm gate `cli.clear` uses for the same race (this file,
+        # `clear()` at the equivalent point). No `--force` here: the
+        # whole reason we're adding the gate is that bypassing it
+        # re-introduces the bug. Linux + macOS reach this point with
+        # a guaranteed-dead daemon (`systemctl --user disable --now`
+        # and `launchctl bootout` are synchronous), so the guard
+        # returns False there and the purge body proceeds normally.
+        s_for_guard = state.read()
+        if s_for_guard is None and state.default_path().exists():
+            click.echo(
+                f"error: state.json at {state.default_path()} is present but "
+                "unreadable; daemon liveness is unknown. The service has been "
+                "removed, but the purge body (marker clearing + state-dir wipe) "
+                "is being skipped to avoid racing a potentially-live daemon.",
+                err=True,
+            )
+            click.echo(
+                "Stop the daemon manually if running (e.g. `taskkill /F /PID <pid>` "
+                "on Windows), then run `dbxignore clear --force` for markers and "
+                f"remove `{state.user_state_dir()}` by hand.",
+                err=True,
+            )
+            sys.exit(2)
+        if s_for_guard is not None and state.daemon_is_running(s_for_guard):
+            click.echo(
+                f"error: daemon is running (pid={s_for_guard.daemon_pid}) after "
+                "service removal. Refusing to purge — the next reconcile sweep "
+                "would re-apply cleared markers and the next state-write would "
+                "recreate state.json.",
+                err=True,
+            )
+            click.echo(
+                "Stop the daemon manually (e.g. `taskkill /F /PID "
+                f"{s_for_guard.daemon_pid}` on Windows), then run `dbxignore "
+                f"clear --force` for markers and remove `{state.user_state_dir()}` "
+                "by hand.",
+                err=True,
+            )
+            sys.exit(2)
         # (1) Clear xattr markers. Read and clear arms are split so each
         # failure can be attributed to the specific operation that failed;
         # the prior shape collapsed both into one `except OSError: pass`

@@ -1468,6 +1468,19 @@ function Test-Uninstall {
         Write-Fail "purge - emitted 'Could not fully purge state files' on happy path"
         Get-Content $purgeOut | ForEach-Object { Write-Note "    $_" }
     }
+    # PR #<THIS_PR> daemon-alive purge-refusal guard (BACKLOG #122). On a
+    # clean uninstall the guard returns False - the two stderr phrases
+    # below must not appear. Failure-path coverage deferred per BACKLOG
+    # #129 - forcing a daemon to survive uninstall_service requires
+    # platform-specific stuck-process simulation, and on Windows
+    # specifically the schtasks /End 30s-timeout case can't be reproduced
+    # without a stuck filesystem operation.
+    if ($purgeText -notmatch 'daemon is running' -and $purgeText -notmatch 'liveness is unknown') {
+        Write-Pass "purge - no spurious daemon-alive guard fire on happy path (PR #<THIS_PR>)"
+    } else {
+        Write-Fail "purge - daemon-alive guard fired on happy path"
+        Get-Content $purgeOut | ForEach-Object { Write-Note "    $_" }
+    }
 
     if (Test-Path "$T\watch-me.tmp") { Assert-AdsUnset -Path "$T\watch-me.tmp" -Name "purge - watch-me.tmp marker cleared" }
     if (Test-Path "$T\cache")        { Assert-AdsUnset -Path "$T\cache"        -Name "purge - cache/ marker cleared" }

@@ -9,10 +9,8 @@ from __future__ import annotations
 
 import plistlib
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import pytest
+import pytest
 
 
 def test_build_plist_content_has_required_keys() -> None:
@@ -146,3 +144,66 @@ def test_uninstall_agent_calls_bootout_and_removes_plist(
 
     assert not plist_path.exists()
     assert any(c[:2] == ["launchctl", "bootout"] for c in calls)
+
+
+def test_install_agent_wraps_filenotfounderror_from_launchctl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 8 from external review: when launchctl isn't available
+    (atypical on macOS but possible in stripped sandboxes), the FNFE
+    must be translated to RuntimeError so cli.install reports a clean
+    error rather than emitting a raw traceback."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("os.getuid", lambda: 501, raising=False)
+    monkeypatch.setattr(
+        "dbxignore.install.macos_launchd.detect_invocation",
+        lambda: (Path("/usr/local/bin/dbxignore"), "daemon"),
+    )
+    monkeypatch.setattr(
+        "dbxignore.state.user_log_dir",
+        lambda: tmp_path / "logs",
+    )
+
+    def fake_run_missing(*_a: object, **_kw: object) -> object:
+        raise FileNotFoundError(2, "No such file or directory", "launchctl")
+
+    monkeypatch.setattr("subprocess.run", fake_run_missing)
+
+    from dbxignore.install import macos_launchd
+
+    with pytest.raises(RuntimeError, match="could not be invoked"):
+        macos_launchd.install_agent()
+
+
+def test_uninstall_agent_raises_on_launchctl_filenotfound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 followup on PR #240: ``uninstall_agent`` MUST raise
+    RuntimeError when ``launchctl`` itself can't be invoked. Logging a
+    warning and proceeding to remove the plist would leave an orphaned
+    daemon running while ``dbxignore uninstall`` reported success — and
+    a subsequent ``--purge`` would clear state.json/markers under the
+    live daemon. The asymmetry with ``install_agent``'s bootout
+    pre-call (which DOES swallow OSError) is intentional: install's
+    bootout is idempotent pre-cleanup, uninstall's bootout IS the
+    daemon-shutdown step."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("os.getuid", lambda: 501, raising=False)
+
+    plist_dir = tmp_path / "Library" / "LaunchAgents"
+    plist_dir.mkdir(parents=True)
+    plist_path = plist_dir / "com.kiloscheffer.dbxignore.plist"
+    plist_path.write_bytes(b"<plist></plist>")
+
+    def fake_run_missing(*_a: object, **_kw: object) -> object:
+        raise FileNotFoundError(2, "No such file or directory", "launchctl")
+
+    monkeypatch.setattr("subprocess.run", fake_run_missing)
+
+    from dbxignore.install import macos_launchd
+
+    with pytest.raises(RuntimeError, match="bootout could not be invoked"):
+        macos_launchd.uninstall_agent()
+
+    # plist MUST still exist — uninstall failed before removal.
+    assert plist_path.exists(), "plist must not be removed when bootout fails to invoke launchctl"

@@ -852,8 +852,24 @@ def status(summary: bool) -> None:
             )
 
 
-def _walk_marked_paths(target: Path) -> list[Path]:
-    """Walk `target` and return every path currently bearing an ignore marker.
+def _report_scan_errors(errors: list[tuple[Path, str]]) -> None:
+    """Emit a bounded summary of `_walk_marked_paths` read errors to stderr.
+
+    Mirrors the bounded-list-plus-truncation shape `apply` and `install` use
+    for write errors (`_MAX_REPORTED_ERRORS`). Caller is responsible for the
+    exit-code decision — this helper only formats.
+    """
+    if not errors:
+        return
+    click.echo(f"scan errors: {len(errors)}", err=True)
+    for p, msg in errors[:_MAX_REPORTED_ERRORS]:
+        click.echo(f"  scan error: {p} - {msg}", err=True)
+    if len(errors) > _MAX_REPORTED_ERRORS:
+        click.echo(f"  ... and {len(errors) - _MAX_REPORTED_ERRORS} more.", err=True)
+
+
+def _walk_marked_paths(target: Path) -> tuple[list[Path], list[tuple[Path, str]]]:
+    """Walk `target` and return (marked paths, marker-read errors).
 
     Mirrors `list_ignored`'s pruning: once a directory is found marked,
     don't descend into it (its descendants are inheritance-ignored by
@@ -867,15 +883,25 @@ def _walk_marked_paths(target: Path) -> list[Path]:
     during traversal, not the walk root; without an explicit guard, a
     symlinked-directory ``target`` would enumerate markers inside the
     link's target tree, potentially outside any Dropbox root.
+
+    Marker-read OSErrors are collected into the returned ``errors`` list
+    rather than swallowed: on filesystems that don't support markers
+    (ENOTSUP from `getxattr`) or transient I/O failures (EIO on a flaky
+    network drive), the previous bare ``pass`` produced "No markers to
+    clear" / empty list output, hiding the fact that the scan itself
+    couldn't determine marker state. Callers surface the count and exit 2
+    when any errors occur.
     """
     found: list[Path] = []
+    errors: list[tuple[Path, str]] = []
     try:
         if markers.is_ignored(target):
-            return [target]
-    except OSError:
-        pass
+            return [target], errors
+    except OSError as exc:
+        errors.append((target, str(exc)))
+        return found, errors
     if target.is_symlink():
-        return []
+        return found, errors
     for current, dirnames, filenames in os.walk(target, followlinks=False):
         current_path = Path(current)
         kept_dirs: list[str] = []
@@ -886,7 +912,8 @@ def _walk_marked_paths(target: Path) -> list[Path]:
                     found.append(p)
                 else:
                     kept_dirs.append(name)
-            except OSError:
+            except OSError as exc:
+                errors.append((p, str(exc)))
                 kept_dirs.append(name)
         dirnames[:] = kept_dirs
         for name in filenames:
@@ -894,9 +921,9 @@ def _walk_marked_paths(target: Path) -> list[Path]:
             try:
                 if markers.is_ignored(p):
                     found.append(p)
-            except OSError:
-                continue
-    return found
+            except OSError as exc:
+                errors.append((p, str(exc)))
+    return found, errors
 
 
 @main.command()
@@ -971,17 +998,35 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
         targets = [target]
 
     to_clear: list[Path] = []
+    scan_errors: list[tuple[Path, str]] = []
     for target in targets:
-        to_clear.extend(_walk_marked_paths(target))
+        found, errs = _walk_marked_paths(target)
+        to_clear.extend(found)
+        scan_errors.extend(errs)
+
+    # Surface scan errors immediately after the walk — before any "No
+    # markers to clear" message, dry-run preview, or confirmation prompt.
+    # Otherwise the zero-markers case AND the user-aborts case both
+    # swallow the partial-scan-failure surface that's the whole point of
+    # item 7's exit-2 contract (Codex P2 followup on PR #240). Exit 2
+    # still fires at every return path below, so abort / no-marker /
+    # dry-run / success all propagate the failure to scripted callers.
+    if scan_errors:
+        _report_scan_errors(scan_errors)
 
     if not to_clear:
-        click.echo("No markers to clear.")
+        if not scan_errors:
+            click.echo("No markers to clear.")
+        if scan_errors:
+            sys.exit(2)
         return
 
     if dry_run:
         for p in to_clear:
             click.echo(f"would clear: {p}")
-        click.echo(f"clear: would_clear={len(to_clear)} (dry-run)")
+        click.echo(f"clear: would_clear={len(to_clear)} scan_errors={len(scan_errors)} (dry-run)")
+        if scan_errors:
+            sys.exit(2)
         return
 
     if not yes:
@@ -989,6 +1034,8 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
         click.echo("Dropbox will then start syncing previously-ignored paths.")
         if not click.confirm("Continue?"):
             click.echo("Aborted.")
+            if scan_errors:
+                sys.exit(2)
             return
 
     cleared = 0
@@ -1000,9 +1047,14 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
         except OSError as exc:
             errors.append((p, str(exc)))
 
-    click.echo(f"clear: cleared={cleared} errors={len(errors)}")
+    click.echo(f"clear: cleared={cleared} errors={len(errors)} scan_errors={len(scan_errors)}")
     for p, msg in errors[:_MAX_REPORTED_ERRORS]:
         click.echo(f"  error: {p} - {msg}", err=True)
+    # Exit 2 only for the scan-error surface (item from external review). Write
+    # errors continue to be reported via `errors=N` with exit 0, preserving the
+    # existing contract for scripted callers that parse stdout.
+    if scan_errors:
+        sys.exit(2)
 
 
 def _confirm_or_messagebox(message: str) -> bool:
@@ -1425,9 +1477,15 @@ def list_ignored(path: Path | None) -> None:
         target, *_ = _validate_target_under_root(path)
         targets = [target]
 
+    scan_errors: list[tuple[Path, str]] = []
     for target in targets:
-        for p in _walk_marked_paths(target):
+        found, errs = _walk_marked_paths(target)
+        scan_errors.extend(errs)
+        for p in found:
             click.echo(str(p))
+    _report_scan_errors(scan_errors)
+    if scan_errors:
+        sys.exit(2)
 
 
 def _explain(path: Path, *, quiet: bool) -> int:

@@ -122,6 +122,51 @@ def test_sweep_clears_markers_when_dropboxignore_was_deleted_offline(
     assert report.cleared == 2
 
 
+def test_symlinked_walk_root_is_treated_as_leaf(
+    tmp_path: Path, fake_markers: FakeMarkers, write_file: WriteFile
+) -> None:
+    """A symlinked directory passed as the walk root must NOT have its
+    target traversed. ``os.walk(top, followlinks=False)`` still follows
+    the walk root itself when ``top`` is a symlink — only subdirectory
+    symlinks are gated. Without the in-reconcile guard, a DIR_CREATE
+    event for a symlink inside a watched root would mutate markers on
+    paths under the link target, potentially outside any Dropbox tree
+    (regression surfaced by Codex on PR #240 against the lexical-first
+    containment change in `_resolve_under_roots`)."""
+    root = tmp_path
+    write_file(root / ".dropboxignore", "build/\n")
+    (root / "build").mkdir()
+    # Target tree OUTSIDE root — files here must NOT be walked or marked.
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    sentinel = outside / "must_not_be_touched.txt"
+    sentinel.write_text("", encoding="utf-8")
+    # Symlink inside root pointing OUTSIDE.
+    link_inside_root = root / "escape_link"
+    try:
+        link_inside_root.symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot create symlink in this environment: {exc}")
+
+    cache = RuleCache()
+    cache.load_root(root)
+
+    # Reconcile the symlink as the walk root, mirroring the daemon's
+    # _dispatch DIR_CREATE call for a watchdog-reported symlinked dir.
+    report = reconcile.reconcile_subtree(root, link_inside_root, cache)
+
+    # No markers should land on paths under the link target.
+    assert sentinel.resolve() not in fake_markers._ignored, (
+        "reconcile traversed the symlink target — leaf invariant violated"
+    )
+    # Report must not list paths under the target either (would_mark/clear
+    # are dry-run-only; the marked/cleared counters cover real walks).
+    for p, _msg in report.errors:
+        assert outside not in p.parents, (
+            f"reconcile attempted I/O on {p}, which is under the link target"
+        )
+
+
 def test_overridden_dropboxignore_logs_warning(
     tmp_path: Path,
     fake_markers: FakeMarkers,

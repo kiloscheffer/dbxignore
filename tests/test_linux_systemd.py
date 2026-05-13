@@ -453,6 +453,32 @@ def test_install_wraps_calledprocesserror_from_systemctl(
         linux_systemd.install_unit()
 
 
+def test_install_wraps_filenotfounderror_from_systemctl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 8 from external review: when systemctl isn't on PATH (minimal
+    container / chroot without systemd), the subprocess.run call raises
+    FileNotFoundError instead of CalledProcessError. Without the OSError
+    arm, the traceback escapes; cli.install only catches RuntimeError."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "dbxignore.install.linux_systemd.detect_invocation",
+        lambda: (Path("/usr/local/bin/dbxignore"), "daemon"),
+    )
+
+    def fake_run_missing(
+        cmd: list[str], check: bool, capture_output: bool = False, text: bool = False
+    ) -> subprocess.CompletedProcess[str]:
+        raise FileNotFoundError(2, "No such file or directory", "systemctl")
+
+    monkeypatch.setattr(subprocess, "run", fake_run_missing)
+
+    from dbxignore.install import linux_systemd
+
+    with pytest.raises(RuntimeError, match="could not be invoked"):
+        linux_systemd.install_unit()
+
+
 def test_remove_dropin_directory_removes_existing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

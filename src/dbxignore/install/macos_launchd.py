@@ -55,14 +55,17 @@ def _service_target(label: str = LABEL) -> str:
 
 
 def _run_launchctl(cmd: list[str]) -> None:
-    """Run a launchctl command; raise RuntimeError on non-zero exit.
+    """Run a launchctl command; raise RuntimeError on non-zero exit or invocation failure.
 
     `subprocess.run(check=True)` raises CalledProcessError; we wrap it in
     RuntimeError because cli.install / cli.uninstall catch RuntimeError to
     produce clean error output rather than a raw traceback. Includes
     launchctl's stderr in the message — typical failure modes
     (`Bootstrap failed: 5: Input/output error` for missing GUI session)
-    are self-explanatory.
+    are self-explanatory. The OSError arm handles the rare case where
+    `launchctl` itself can't be invoked (FileNotFoundError if the binary
+    is missing — atypical on macOS but possible in stripped-down
+    environments — or PermissionError).
     """
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True)  # noqa: S603 — hardcoded
@@ -70,6 +73,8 @@ def _run_launchctl(cmd: list[str]) -> None:
         raise RuntimeError(
             f"{' '.join(cmd)} failed (exit {exc.returncode}): {exc.stderr.strip()}"
         ) from exc
+    except OSError as exc:
+        raise RuntimeError(f"{' '.join(cmd)} could not be invoked: {exc}") from exc
 
 
 def build_plist_content(
@@ -124,23 +129,41 @@ def install_agent() -> None:
 
     # Bootout an existing instance first; bootstrap fails on duplicate
     # label with EEXIST. Missing-service errors on first install are
-    # expected — swallow.
-    subprocess.run(  # noqa: S603 — hardcoded args, no user data
-        ["launchctl", "bootout", _service_target()],
-        check=False,
-        capture_output=True,
-    )
+    # expected — swallow.  The OSError arm also tolerates `launchctl`
+    # itself being missing (FileNotFoundError, subclass of OSError);
+    # without it, the FNFE would escape before the bootstrap call
+    # below has a chance to surface a clean RuntimeError via
+    # `_run_launchctl`. Same shape as the equivalent windows_task.py
+    # pre-call (item 8 from external review).
+    try:
+        subprocess.run(  # noqa: S603 — hardcoded args, no user data
+            ["launchctl", "bootout", _service_target()],
+            check=False,
+            capture_output=True,
+        )
+    except OSError as exc:
+        logger.debug("launchctl bootout pre-call could not be invoked: %s", exc)
     _run_launchctl(["launchctl", "bootstrap", _domain(), str(path)])
     logger.info("Bootstrapped %s into %s", LABEL, _domain())
 
 
 def uninstall_agent() -> None:
-    # Bootout — missing service is fine, swallow.
-    subprocess.run(  # noqa: S603 — hardcoded args, no user data
-        ["launchctl", "bootout", _service_target()],
-        check=False,
-        capture_output=True,
-    )
+    # Bootout — missing service is fine (check=False, returns non-zero
+    # without raising), but an OSError invocation failure (FNFE if
+    # `launchctl` itself isn't on PATH; PermissionError) MUST surface
+    # as RuntimeError. Unlike install_agent's bootout, this one is the
+    # actual daemon-shutdown step. Silently proceeding to plist removal
+    # below would leave an orphaned live daemon mutating state.json
+    # and markers while `dbxignore uninstall` reports success — and a
+    # subsequent `--purge` would clear state under the running daemon.
+    try:
+        subprocess.run(  # noqa: S603 — hardcoded args, no user data
+            ["launchctl", "bootout", _service_target()],
+            check=False,
+            capture_output=True,
+        )
+    except OSError as exc:
+        raise RuntimeError(f"launchctl bootout could not be invoked: {exc}") from exc
     path = _plist_path()
     if path.exists():
         path.unlink()

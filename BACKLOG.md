@@ -2634,13 +2634,30 @@ Touches: `src/dbxignore/install/macos_launchd.py:uninstall_agent` (and `install_
 
 Touches: `pyinstaller/dbxignore.spec`, `pyinstaller/dbxignorew.spec` (new), `pyinstaller/dbxignore-macos.spec` (copy_metadata side-fix), `src/dbxignore/__main__.py`, `src/dbxignore/_windows_console.py` (deleted), `src/dbxignore/_windows_dialogs.py`, `src/dbxignore/install/_common.py`, `src/dbxignore/state.py`, `.github/workflows/release.yml`, `scripts/manual-test-windows.ps1`, `README.md`, `CHANGELOG.md`, tests under `tests/`.
 
+## 121. Manual-test Phase 4.5 doesn't exercise the new `scan_errors` exit-2 path for `list` / `clear`
+
+PR #240 introduced a new behavioral contract: `dbxignore list` and `dbxignore clear` surface marker-read OSErrors via stderr (`scan errors: N`) and exit 2 when any occur. A follow-up commit in the same PR extended this to two additional return paths in `clear`: the zero-markers-found case (previously fell into the success arm with "No markers to clear" → exit 0) and the user-aborts-prompt case (previously returned with "Aborted." → exit 0). Both new variants are part of the same contract — scan errors always surface to stderr and exit 2 fires regardless of which return path the command takes. Unit tests cover all variants (`test_list_survives_enotsup`, `test_clear_surfaces_scan_errors_and_exits_two`, `test_clear_surfaces_scan_errors_when_no_markers_found`, `test_clear_surfaces_scan_errors_when_user_aborts_prompt`), but `scripts/_phase_extended_cli.sh` Phase 4.5 (bash) and `Test-ExtendedCli` in `scripts/manual-test-windows.ps1` do not — neither for the new stderr line, the new `scan_errors=N` stdout field, nor the exit-2 surface across any return path. The PR opted to backfill rather than block per AGENTS.md's "limitation called out" clause for cases where forcing the underlying OSError needs platform-specific setup:
+
+- Linux/macOS: ENOTSUP requires a tmpfs mount where `user.*` xattrs are disabled, or a filesystem like FAT32 mounted under the test tree. Both require root for the mount step and aren't safe to do unattended on the user's real Dropbox.
+- Windows: NTFS supports ADS universally on disks where Dropbox runs; forcing an ENOTSUP-equivalent would require a FAT32-formatted USB stick or similar. Same root-equivalent issue.
+
+**Possible fix candidates:**
+
+1. Mock the binary via a wrapper script: write a thin shim that intercepts the first N `is_ignored` lookups and returns OSError, then PATH-prepend it before the manual-test invocation. Brittle (depends on how `dbxignore` calls into markers) and pollutes the test environment with side-effect-producing fakes; not recommended.
+2. Add a `DBXIGNORE_TEST_SCAN_ERROR_PATH` env var honored by `cli._walk_marked_paths` that raises OSError for a specific path. Crisp boundary, no PATH munging, but adds test-only code to production for a single manual-test case. Reasonable if the case becomes important enough to warrant the seam.
+3. Accept the gap and rely on the unit tests, since the manual-test purpose is "real Dropbox surface, not error-injection coverage." Cheapest; matches the existing pattern for cases like the `pythonw.exe`-fallback in #100 (manual-test intentionally not extended; caplog covers the case).
+
+**Urgency: low.** Unit tests already pin the contract end-to-end (CliRunner exercises the same `_walk_marked_paths` → exit-code chain real callers use). The manual-test extension is for release-prep "did anyone forget to wire this up?" coverage; the unit tests cover the same. Mark with a `# 4X — limitation: requires error-injection setup, unit tests cover (#121)` comment when adjacent Phase 4.5 cases get edited next, so the gap is visible to future contributors.
+
+Touches: `scripts/_phase_extended_cli.sh` (new Phase 4.5 case if fix candidate 1 or 2 is taken); `scripts/manual-test-windows.ps1:Test-ExtendedCli` (parallel addition); `src/dbxignore/cli.py:_walk_marked_paths` (env-var seam if fix candidate 2 is taken).
+
 ---
 
 ## Status
 
 ### Open
 
-Fifteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12). Item #117 surfaced 2026-05-12 during the chore/115 work session (uv venv hygiene); the other two items from that session shipped 2026-05-12: #116 (uv build-cache hygiene) in PR #227, #118 (is_daemon_alive SystemError escalation) in PR #230. Item #119 surfaced 2026-05-12 from a macOS beta-tester run of `scripts/manual-test-macos.sh` Phase 6 on v0.5.1 — `launchctl bootout` failed silently and the launchd job survived `dbxignore uninstall`.
+Sixteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12). Item #117 surfaced 2026-05-12 during the chore/115 work session (uv venv hygiene); the other two items from that session shipped 2026-05-12: #116 (uv build-cache hygiene) in PR #227, #118 (is_daemon_alive SystemError escalation) in PR #230. Item #119 surfaced 2026-05-12 from a macOS beta-tester run of `scripts/manual-test-macos.sh` Phase 6 on v0.5.1 — `launchctl bootout` failed silently and the launchd job survived `dbxignore uninstall`. Item #121 surfaced 2026-05-13 during PR #240's external-review pass — manual-test coverage for the new `list`/`clear` scan-error exit-2 path; deferred per the AGENTS.md "limitation called out" clause because forcing OSError needs platform-specific filesystem setup.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2656,7 +2673,8 @@ Fifteen items. Most are passive (no concrete trigger requires action) — bundle
 - **#109** — `FileNotFoundError`-before-`OSError` 'vanished path' idiom now repeats across `reconcile._reconcile_path` (2 sites), `state._read_at` (1 site), and `cli.uninstall --purge` (4 sites after PR #204). Filed for design-tension record (precedent: #40, #51, #108); current per-site shape is defensible because the local response action varies (return None / set flag / continue / pass) and no generic helper fits all seven sites.
 - **#113** — Other `cmd | grep -q` sites in `scripts/manual-test-{ubuntu-vps,macos}.sh` (`--help`, `explain`, `uv tool list`) share the SIGPIPE+pipefail false-failure risk that bit 5f. Capture-then-grep is the preemptive fix; defer until one of them actually flakes.
 - **#117** — Failed `uv tool uninstall` leaves the venv directory behind; the next `uv tool install` does an incremental update instead of fresh install, producing a hybrid venv (mixed install-event packages). Triggers subtle import / C-extension issues. Recovery is manual `Remove-Item ~\AppData\Roaming\uv\tools\<pkg>`.
-- **#119** — macOS `uninstall_agent` calls `launchctl bootout` with `check=False, capture_output=True` and discards both rc and stderr; plist gets unlinked unconditionally and `dbxignore uninstall` returns rc=0 even when bootout failed. Parallel to Windows #87/PR #171; same silent-swallow class as #98/PR #204. Surfaced by macOS beta tester on v0.5.1 2026-05-12.
+- **#119** — macOS `uninstall_agent` calls `launchctl bootout` with `check=False, capture_output=True` and discards both rc and stderr; plist gets unlinked unconditionally and `dbxignore uninstall` returns rc=0 even when bootout failed. Parallel to Windows #87/PR #171; same silent-swallow class as #98/PR #204. Surfaced by macOS beta tester on v0.5.1 2026-05-12. (Partial fix in PR #240: the OSError invocation-failure case now raises `RuntimeError`; the non-zero-rc swallow remains.)
+- **#121** — Manual-test Phase 4.5 doesn't exercise the new `scan_errors` exit-2 path for `list` / `clear` (PR #240). Unit tests pin the contract end-to-end; manual-test extension deferred because forcing ENOTSUP on a real Dropbox tree needs platform-specific filesystem setup. Surfaced by Codex on PR #240 (2026-05-13).
 ### Resolved (reverse chronological)
 
 #### 2026-05-13

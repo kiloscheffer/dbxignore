@@ -250,6 +250,127 @@ def test_clear_path_arg_clears_marked_directory_target_without_descending(
     assert fake_markers.is_ignored(child)
 
 
+def test_clear_surfaces_scan_errors_and_exits_two(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 7 from external review: when the marker-scan walk hits an
+    OSError on a path (e.g. ENOTSUP on a filesystem that doesn't support
+    extended attributes), the count is surfaced via stderr and the command
+    exits 2 — previously the read errors were swallowed silently and the
+    user saw "No markers to clear" while the scan had actually failed."""
+    import errno
+
+    root = tmp_path
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+    monkeypatch.setattr(state, "default_path", lambda: root / "_state.json")
+    monkeypatch.setattr(state, "is_daemon_alive", lambda pid, create_time=None: False)
+
+    good = root / "good.tmp"
+    good.touch()
+    bad = root / "bad.tmp"
+    bad.touch()
+    fake_markers.set_ignored(good)
+
+    real_is_ignored = fake_markers.is_ignored
+
+    def selective_raise(path: Path) -> bool:
+        if path.resolve() == bad.resolve():
+            raise OSError(errno.ENOTSUP, "Operation not supported")
+        return real_is_ignored(path)
+
+    monkeypatch.setattr(fake_markers, "is_ignored", selective_raise)
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["clear", "--yes"])
+
+    assert result.exit_code == 2, result.output
+    assert "cleared=1" in result.output
+    assert "scan_errors=1" in result.output
+    assert "scan errors: 1" in result.output
+    assert "bad.tmp" in result.output
+
+
+def test_clear_surfaces_scan_errors_when_no_markers_found(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 followup on PR #240: when the scan errored on every
+    walked path AND no markers were found, the previous shape fell
+    through into either the "No markers to clear" message (in the
+    `not to_clear and not scan_errors` arm) or the confirmation prompt,
+    both swallowing the partial-scan-failure surface. The scan-error
+    report and exit 2 must fire regardless of how many markers landed."""
+    import errno
+
+    root = tmp_path
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+    monkeypatch.setattr(state, "default_path", lambda: root / "_state.json")
+    monkeypatch.setattr(state, "is_daemon_alive", lambda pid, create_time=None: False)
+
+    bad = root / "bad.tmp"
+    bad.touch()
+
+    # No markers set. The walk will hit ENOTSUP on `bad`.
+    def always_raise(path: Path) -> bool:
+        raise OSError(errno.ENOTSUP, "Operation not supported")
+
+    monkeypatch.setattr(fake_markers, "is_ignored", always_raise)
+
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["clear", "--yes"])
+
+    assert result.exit_code == 2, result.output
+    # `_report_scan_errors` emits to stderr; CliRunner merges by default.
+    # The walk short-circuits on the first `is_ignored` failure (on the
+    # target directory itself, before descending into children), so we
+    # assert on the count + errno rather than the leaf-file name.
+    assert "scan errors: 1" in result.output
+    assert "Operation not supported" in result.output
+    # No misleading "No markers to clear" success message.
+    assert "No markers to clear" not in result.output
+
+
+def test_clear_surfaces_scan_errors_when_user_aborts_prompt(
+    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 followup on PR #240: even when the user declines the
+    confirmation prompt, scan errors that fired during the walk must
+    still surface and the command must exit 2. The prior shape returned
+    cleanly with "Aborted." and exit 0, hiding the partial-scan failure."""
+    import errno
+
+    root = tmp_path
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [root])
+    monkeypatch.setattr(state, "default_path", lambda: root / "_state.json")
+    monkeypatch.setattr(state, "is_daemon_alive", lambda pid, create_time=None: False)
+
+    good = root / "good.tmp"
+    good.touch()
+    bad = root / "bad.tmp"
+    bad.touch()
+    fake_markers.set_ignored(good)
+
+    real_is_ignored = fake_markers.is_ignored
+
+    def selective_raise(path: Path) -> bool:
+        if path.resolve() == bad.resolve():
+            raise OSError(errno.ENOTSUP, "Operation not supported")
+        return real_is_ignored(path)
+
+    monkeypatch.setattr(fake_markers, "is_ignored", selective_raise)
+
+    runner = CliRunner()
+    # No --yes: prompt fires; "n" declines.
+    result = runner.invoke(cli.main, ["clear"], input="n\n")
+
+    assert result.exit_code == 2, result.output
+    assert "Aborted" in result.output
+    # Scan errors STILL surface even on the abort path.
+    assert "scan errors: 1" in result.output
+    assert "bad.tmp" in result.output
+    # Marker was not cleared — user aborted.
+    assert fake_markers.is_ignored(good)
+
+
 def test_clear_path_outside_roots_errors(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -104,6 +104,12 @@ def install_task() -> None:
                 f"schtasks /Create returned {exc.returncode}: "
                 f"{(exc.stderr or '').strip() or (exc.stdout or '').strip() or '(no output)'}"
             ) from exc
+        except OSError as exc:
+            # `schtasks.exe` is a system binary so its absence is atypical,
+            # but stripped-down sandboxes (Nano Server, some CI containers)
+            # and PATH corruption can produce FileNotFoundError here. Without
+            # this arm the traceback escapes; cli.install catches RuntimeError.
+            raise RuntimeError(f"schtasks /Create could not be invoked: {exc}") from exc
     finally:
         tmp_path.unlink(missing_ok=True)
 
@@ -116,20 +122,31 @@ def install_task() -> None:
     # /Run failures are non-fatal: the task is registered and will start at
     # next logon regardless. WARNING-and-continue rather than raising so the
     # user doesn't see an install error for a partial-success state.
-    run_result = subprocess.run(  # noqa: S603 — hardcoded args, no user data
-        ["schtasks", "/Run", "/TN", TASK_NAME],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if run_result.returncode != 0:
+    try:
+        run_result = subprocess.run(  # noqa: S603 — hardcoded args, no user data
+            ["schtasks", "/Run", "/TN", TASK_NAME],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        # See the matching arm on /Create above. Logging at WARNING preserves
+        # the existing /Run "non-fatal" contract (task is already registered).
         logger.warning(
-            "schtasks /Run returned %s: %s. Task is registered and will start "
+            "schtasks /Run could not be invoked: %s. Task is registered and will start "
             "at next logon; run `schtasks /Run /TN %s` to start now.",
-            run_result.returncode,
-            run_result.stderr.strip() or run_result.stdout.strip() or "(no output)",
+            exc,
             TASK_NAME,
         )
+    else:
+        if run_result.returncode != 0:
+            logger.warning(
+                "schtasks /Run returned %s: %s. Task is registered and will start "
+                "at next logon; run `schtasks /Run /TN %s` to start now.",
+                run_result.returncode,
+                run_result.stderr.strip() or run_result.stdout.strip() or "(no output)",
+                TASK_NAME,
+            )
 
 
 def uninstall_task() -> None:
@@ -155,12 +172,20 @@ def uninstall_task() -> None:
     # /End: best-effort. The task may not be running (already crashed,
     # never started), in which case schtasks returns non-zero — that's
     # fine, we still want /Delete to clean up the definition.
-    end_result = subprocess.run(  # noqa: S603 — hardcoded args, no user data
-        ["schtasks", "/End", "/TN", TASK_NAME],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        end_result: subprocess.CompletedProcess[str] | None = subprocess.run(  # noqa: S603 — hardcoded args, no user data
+            ["schtasks", "/End", "/TN", TASK_NAME],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        # schtasks itself uninvocable (rare on Windows but possible in
+        # sandboxes). Skip the daemon-exit wait below — without a successful
+        # /End there's no signal sent — and proceed to /Delete, which will
+        # surface its own invocation failure as RuntimeError if applicable.
+        logger.warning("schtasks /End could not be invoked: %s; skipping wait", exc)
+        end_result = None
 
     # Wait for the daemon process to actually exit. /End signals the task
     # to stop but doesn't block; the daemon's signal handler runs on its
@@ -173,7 +198,7 @@ def uninstall_task() -> None:
     # daemon exit — e.g. a manually-launched `dbxignored` or a stale
     # state.json pointing at any other live process. Polling such cases
     # for the full 30s would just delay /Delete with no benefit.
-    if daemon_pid is not None and end_result.returncode == 0:
+    if daemon_pid is not None and end_result is not None and end_result.returncode == 0:
         deadline = time.monotonic() + _END_WAIT_TIMEOUT_S
         while time.monotonic() < deadline:
             if not state_module.is_daemon_alive(daemon_pid, create_time=daemon_create_time):
@@ -190,12 +215,15 @@ def uninstall_task() -> None:
                 _END_WAIT_TIMEOUT_S,
             )
 
-    result = subprocess.run(  # noqa: S603 — hardcoded args, no user data
-        ["schtasks", "/Delete", "/TN", TASK_NAME, "/F"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(  # noqa: S603 — hardcoded args, no user data
+            ["schtasks", "/Delete", "/TN", TASK_NAME, "/F"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise RuntimeError(f"schtasks /Delete could not be invoked: {exc}") from exc
     if result.returncode != 0:
         raise RuntimeError(
             f"schtasks /Delete returned {result.returncode}: "

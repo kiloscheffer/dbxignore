@@ -117,23 +117,46 @@ def discover() -> list[Path]:
     if not candidates:
         return []
 
-    info_path: Path | None = None
+    # Iterate candidates and accept the first one that exists, parses
+    # cleanly, AND contains at least one usable account path. A
+    # stale APPDATA\Dropbox\info.json (from an uninstalled per-user
+    # install) used to mask a valid per-machine LOCALAPPDATA\Dropbox\info.json
+    # (or vice versa) on Windows in two distinct ways: (a) parse failure
+    # on a corrupt first candidate; (b) parse-success-but-empty
+    # ``account_paths`` from a Dropbox-uninstall residue (``{}``, or
+    # ``{"personal": {}}``, etc. — the file remains on disk but its
+    # accounts dict has no usable ``path`` entries). Both arms fall through
+    # to the next candidate; the full-failure path emits a summary WARNING
+    # listing every attempted location so the user can self-diagnose.
+    tried: list[Path] = []
     for candidate in candidates:
-        if candidate.exists():
-            info_path = candidate
-            break
+        if not candidate.exists():
+            continue
+        tried.append(candidate)
+        try:
+            account_paths = _read_dropbox_account_paths(candidate)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            logger.warning(
+                "Cannot read Dropbox info.json at %s: %s; trying next candidate",
+                candidate,
+                exc,
+            )
+            continue
+        if not account_paths:
+            logger.warning(
+                "Dropbox info.json at %s has no usable account paths; trying next candidate",
+                candidate,
+            )
+            continue
+        return [Path(p) for p in account_paths]
 
-    if info_path is None:
+    if not tried:
         if len(candidates) == 1:
             logger.warning("Dropbox info.json not found at %s", candidates[0])
         else:
             joined = ", ".join(str(p) for p in candidates)
             logger.warning("Dropbox info.json not found at any of: %s", joined)
-        return []
-
-    try:
-        account_paths = _read_dropbox_account_paths(info_path)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-        logger.warning("Cannot read Dropbox info.json at %s: %s", info_path, exc)
-        return []
-    return [Path(p) for p in account_paths]
+    else:
+        joined = ", ".join(str(p) for p in tried)
+        logger.warning("No usable Dropbox info.json after trying: %s", joined)
+    return []

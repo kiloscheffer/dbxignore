@@ -90,6 +90,19 @@ def reconcile_subtree(
     if subdir != root and not subdir.is_relative_to(root):
         raise ValueError(f"subdir {subdir} is not under root {root}")
 
+    # When subdir is itself a symlink, force descend=False. The
+    # "symlinks are leaves" invariant says markers attach to the link
+    # object, not the target — and `os.walk(top, followlinks=False)`
+    # still follows the walk root when ``top`` IS a symlink (the flag
+    # only gates subdirectory symlinks encountered during traversal).
+    # Without this guard, a descend=True walk on a symlinked directory
+    # would traverse the link target — potentially outside any
+    # Dropbox tree. Mirrors `daemon._sweep_once`'s per-child symlink
+    # guard at the dispatch site (PR #183) and `_walk_marked_paths`'s
+    # explicit short-circuit in cli.py.
+    if descend and subdir.is_symlink():
+        descend = False
+
     # If subdir itself ends up ignored, don't descend. Also short-circuits
     # when descend=False — the caller has split the walk across siblings
     # and only wants the path-only reconcile here.

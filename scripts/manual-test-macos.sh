@@ -428,6 +428,12 @@ phase_daemon() {
         && pass "LaunchAgent plist written" \
         || fail "LaunchAgent plist missing"
 
+    # install verb-form (PR #30) — plist invokes `dbxignore daemon`
+    plutil -p "$HOME/Library/LaunchAgents/com.kiloscheffer.dbxignore.plist" \
+        | grep -E '"[^"]*daemon"' >/dev/null \
+        && pass "ProgramArguments includes 'daemon' subcommand" \
+        || fail "ProgramArguments missing 'daemon'"
+
     local uid; uid="$(id -u)"
     sleep 2
     if launchctl print "gui/${uid}/com.kiloscheffer.dbxignore" >/dev/null 2>&1; then

@@ -1004,15 +1004,27 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
         to_clear.extend(found)
         scan_errors.extend(errs)
 
-    if not to_clear and not scan_errors:
-        click.echo("No markers to clear.")
+    # Surface scan errors immediately after the walk — before any "No
+    # markers to clear" message, dry-run preview, or confirmation prompt.
+    # Otherwise the zero-markers case AND the user-aborts case both
+    # swallow the partial-scan-failure surface that's the whole point of
+    # item 7's exit-2 contract (Codex P2 followup on PR #240). Exit 2
+    # still fires at every return path below, so abort / no-marker /
+    # dry-run / success all propagate the failure to scripted callers.
+    if scan_errors:
+        _report_scan_errors(scan_errors)
+
+    if not to_clear:
+        if not scan_errors:
+            click.echo("No markers to clear.")
+        if scan_errors:
+            sys.exit(2)
         return
 
     if dry_run:
         for p in to_clear:
             click.echo(f"would clear: {p}")
         click.echo(f"clear: would_clear={len(to_clear)} scan_errors={len(scan_errors)} (dry-run)")
-        _report_scan_errors(scan_errors)
         if scan_errors:
             sys.exit(2)
         return
@@ -1022,6 +1034,8 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
         click.echo("Dropbox will then start syncing previously-ignored paths.")
         if not click.confirm("Continue?"):
             click.echo("Aborted.")
+            if scan_errors:
+                sys.exit(2)
             return
 
     cleared = 0
@@ -1036,7 +1050,6 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
     click.echo(f"clear: cleared={cleared} errors={len(errors)} scan_errors={len(scan_errors)}")
     for p, msg in errors[:_MAX_REPORTED_ERRORS]:
         click.echo(f"  error: {p} - {msg}", err=True)
-    _report_scan_errors(scan_errors)
     # Exit 2 only for the scan-error surface (item from external review). Write
     # errors continue to be reported via `errors=N` with exit 0, preserving the
     # existing contract for scripted callers that parse stdout.

@@ -36,11 +36,15 @@
     refuse to operate as Administrator (the per-user Task Scheduler entry
     targets the interactive user, not SYSTEM).
 
-    Manual visual verification (post-#30): after all phases pass, manually
-    double-click `dbxignore.exe` from File Explorer; expect a MessageBox
-    dialog with title "dbxignore" and body containing "dbxignore is a
+    Manual visual verification (post-#238 dual-binary): after all phases
+    pass, manually double-click `dbxignorew.exe` (the GUI helper, NOT the
+    `dbxignore.exe` CLI) from File Explorer; expect a MessageBox dialog
+    with title "dbxignore" and body containing "dbxignore is a
     command-line tool". Click OK to dismiss. This verifies the GUI-subsystem
-    + no-argv -> MessageBox path that no scripted UI test can reliably reach.
+    + no-argv -> MessageBox path that no scripted UI test can reliably
+    reach. (Double-clicking the console-subsystem `dbxignore.exe` instead
+    will briefly flash a console window and exit — that's expected for the
+    CLI binary.)
 
     Manual visual verification for shell-verb GUI dialogs (post-#238):
     After Phase 7 cleanup, manually:
@@ -59,16 +63,6 @@
        one-click, no confirmation dialog; marker cleared and Dropbox starts
        re-syncing.
 
-    Known shell-wait limitation (post-#30): when invoked as a foreground
-    command, Windows shells (cmd.exe AND PowerShell) generally do not wait
-    for the GUI-subsystem `dbxignore.exe` before returning the prompt. Pipe
-    / redirect / variable-capture forms (the patterns used by the Phase 4.5
-    AttachConsole cases) force synchronous behavior. For interactive
-    foreground use, cmd.exe users wrap with `start /wait dbxignore.exe ...`;
-    PowerShell users wrap with `Start-Process -Wait dbxignore -ArgumentList
-    ...`. Not a regression introduced by this script — an artifact of
-    Windows GUI-subsystem dispatch semantics. See README's Known
-    limitations for details.
 #>
 
 [CmdletBinding()]
@@ -807,36 +801,17 @@ function Test-ExtendedCli {
         }
     }
 
-    # 4X — AttachConsole flow + stdio preservation (PR #30)
-    # Case 1: --version output reaches the PowerShell terminal.
-    $output = dbxignore --version 2>&1
-    if ($output -match "^dbxignore, version") {
-        Write-Pass "AttachConsole: --version output reaches PowerShell terminal"
+    # 4u — dbxignore --help prints synchronously to PowerShell (post-#238 dual-binary)
+    # The dual-binary design replaces the GUI-subsystem dbxignore.exe from
+    # #30 with a console-subsystem CLI binary. PowerShell now waits
+    # synchronously on it like any normal console program — no pipe or
+    # capture trick needed to see the output.
+    $helpOut = (dbxignore --help 2>&1) -join "`n"
+    if ($helpOut -match "Usage:") {
+        Write-Pass "4u - dbxignore --help prints synchronously (Usage: line visible)"
     } else {
-        Write-Fail "AttachConsole: --version output did not surface ($output)"
+        Write-Fail "4u - dbxignore --help did not surface Usage: line in plain invocation"
     }
-
-    # Case 2: --version output is pipe-capturable. Proves the per-stream
-    # preservation logic doesn't overwrite the inherited pipe handle.
-    $captured = (dbxignore --version 2>&1 | Out-String)
-    if ($captured -match "dbxignore, version") {
-        Write-Pass "AttachConsole: --version output capturable via pipe"
-    } else {
-        Write-Fail "AttachConsole: pipe capture failed (got: $captured)"
-    }
-
-    # Case 3: --version output is redirectable to a file. Proves the
-    # per-stream preservation logic doesn't overwrite the inherited file
-    # handle.
-    $redirFile = "$env:TEMP\dbxignore-redir-test.txt"
-    dbxignore --version > $redirFile 2>&1
-    $fileContent = Get-Content $redirFile -Raw
-    if ($fileContent -match "dbxignore, version") {
-        Write-Pass "AttachConsole: --version output redirectable to file"
-    } else {
-        Write-Fail "AttachConsole: file redirect failed (got: $fileContent)"
-    }
-    Remove-Item $redirFile -ErrorAction SilentlyContinue
 }
 
 # ---------------------------------------------------------------------------
@@ -1010,12 +985,24 @@ function Test-Daemon {
         return
     }
 
-    # install verb-form (PR #30) — task uses `dbxignore.exe daemon`
+    # Task XML <Command> element targets the dual-binary daemon entry:
+    # - frozen install: dbxignorew.exe (GUI subsystem, silent at logon)
+    # - non-frozen (uv tool install): pythonw.exe -m dbxignore daemon
+    # Both forms include "daemon" as an argument and the Command element
+    # references one of the two expected executables.
     $xml = schtasks /Query /TN dbxignore /XML 2>$null
     if ($xml -match "<Arguments>.*daemon.*</Arguments>") {
-        Write-Pass "Task scheduled with 'dbxignore.exe daemon' invocation"
+        Write-Pass "Task scheduled with 'daemon' argument"
     } else {
         Write-Fail "Task scheduled command does not include 'daemon' argument"
+    }
+    if ($xml -match "<Command>[^<]*\b(dbxignorew\.exe|pythonw\.exe)\b[^<]*</Command>") {
+        Write-Pass "Task <Command> targets dual-binary daemon entry (dbxignorew.exe or pythonw.exe)"
+    } else {
+        # Extract just the Command line for a clearer FAIL note.
+        $cmdMatch = [regex]::Match($xml, "<Command>([^<]*)</Command>")
+        $cmdValue = if ($cmdMatch.Success) { $cmdMatch.Groups[1].Value } else { "(no <Command> element)" }
+        Write-Fail "Task <Command> targets unexpected exe: $cmdValue"
     }
 
     # Wait for the daemon to bring its watchdog observer online. Same

@@ -501,3 +501,47 @@ def test_is_any_daemon_running_held_lock_returns_true(
         assert state.is_any_daemon_running() is True
     finally:
         holder.close()
+
+
+def test_is_any_daemon_running_non_contention_oserror_returns_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Codex P2 #3 follow-up on PR #243: when the lock primitive raises
+    an OSError for a reason OTHER than contention (e.g. ``ENOLCK`` on a
+    filesystem without advisory-lock support, ``EINTR``, ``ENOTSUP``),
+    the prior shape blanket-caught it as ``return True`` (lock held →
+    daemon alive). That blocked ``uninstall --purge`` recovery on systems
+    where lock probing isn't actually available. New behavior: distinguish
+    `_LOCK_CONTENTION_ERRNOS` from other errors; log + return False
+    (indeterminate → no daemon) for the non-contention case so destructive
+    verbs can proceed."""
+    import errno as _errno
+
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    lock_path = state_dir / "daemon.lock"
+    lock_path.write_bytes(b" ")
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+
+    if sys.platform == "win32":
+        import msvcrt  # type: ignore[import-not-found, unused-ignore]
+
+        def fake_locking(fd: int, mode: int, n: int) -> None:
+            raise OSError(_errno.ENOLCK, "fake non-contention error")
+
+        monkeypatch.setattr(msvcrt, "locking", fake_locking)
+    else:
+        import fcntl  # type: ignore[import-not-found, unused-ignore]
+
+        def fake_flock(fd: int, op: int) -> None:
+            raise OSError(_errno.ENOLCK, "fake non-contention error")
+
+        monkeypatch.setattr(fcntl, "flock", fake_flock)
+
+    with caplog.at_level("WARNING"):
+        result = state.is_any_daemon_running()
+
+    assert result is False, "non-contention OSError must NOT report a live daemon"
+    assert any("probe" in r.message.lower() for r in caplog.records), (
+        "should have logged a WARNING about the indeterminate probe"
+    )

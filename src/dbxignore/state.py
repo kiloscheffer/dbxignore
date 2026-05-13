@@ -9,6 +9,7 @@ macOS: ``~/Library/Application Support/dbxignore/state.json``
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import logging
 import os
@@ -34,6 +35,21 @@ _DAEMON_PROCESS_NAMES: frozenset[str] = frozenset(
         "dbxignorew",
         "dbxignorew.exe",
     }
+)
+
+# Errnos that mean "lock is held by another process" for the non-blocking
+# variants of `fcntl.flock` / `msvcrt.locking`. POSIX raises
+# `BlockingIOError` (a subclass of `OSError`) with errno `EAGAIN` or
+# `EWOULDBLOCK`. Windows raises plain `OSError` with errno mapped from
+# `ERROR_LOCK_VIOLATION` → `EACCES` (occasionally `EDEADLK` in deadlock-
+# detection paths). Any OTHER `OSError` from these primitives means the
+# lock subsystem is unavailable (e.g. `ENOLCK` on filesystems without
+# advisory lock support, `EINTR` from a signal, `EIO`, `ENOTSUP`) — the
+# probe is indeterminate and `is_any_daemon_running` should return False
+# (matching `is_daemon_alive`'s convention from item #118) rather than
+# false-positive "daemon alive" and block `--purge` recovery.
+_LOCK_CONTENTION_ERRNOS: frozenset[int] = frozenset(
+    {errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES, errno.EDEADLK}
 )
 
 
@@ -267,8 +283,16 @@ def is_any_daemon_running() -> bool:
 
             try:
                 msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
-            except OSError:
-                return True
+            except OSError as exc:
+                if exc.errno in _LOCK_CONTENTION_ERRNOS:
+                    return True
+                logger.warning(
+                    "msvcrt.locking probe on %s failed (%s: %s); treating as no daemon",
+                    lock_path,
+                    type(exc).__name__,
+                    exc,
+                )
+                return False
             # Best-effort release; fh.close() in `finally` releases anyway.
             with contextlib.suppress(OSError):
                 msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
@@ -277,8 +301,16 @@ def is_any_daemon_running() -> bool:
 
             try:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                return True
+            except OSError as exc:
+                if exc.errno in _LOCK_CONTENTION_ERRNOS:
+                    return True
+                logger.warning(
+                    "fcntl.flock probe on %s failed (%s: %s); treating as no daemon",
+                    lock_path,
+                    type(exc).__name__,
+                    exc,
+                )
+                return False
             with contextlib.suppress(OSError):
                 fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
     finally:

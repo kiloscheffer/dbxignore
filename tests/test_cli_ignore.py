@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import rich_click as click
 from click.testing import CliRunner
 
 from dbxignore import cli, reconcile, state
@@ -1401,3 +1402,121 @@ def test_unignore_refuses_when_match_file_invalid(
     # No mutation: file unchanged, marker still set.
     assert rule_file.read_text(encoding="utf-8") == "/build/\n"
     assert fake_markers.is_ignored(target)
+
+
+# ---------------------------------------------------------------------------
+# _confirm_or_messagebox / _error_or_messagebox router unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_confirm_or_messagebox_skips_gui_on_non_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On non-Windows with stdout=None, _confirm_or_messagebox must NOT call
+    confirm_destructive — the platform guard must short-circuit first.
+    The CliRunner-based tests above (test_ignore_default_prompts_then_aborts_on_no
+    etc.) validate the click.confirm path end-to-end."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "stdout", None)
+
+    from dbxignore import _windows_dialogs
+
+    dialog_calls: list[str] = []
+
+    def fake_confirm_destructive(msg: str, **kw: object) -> bool:
+        dialog_calls.append(msg)
+        return True
+
+    monkeypatch.setattr(_windows_dialogs, "confirm_destructive", fake_confirm_destructive)
+    # On non-Windows, the platform branch prevents reaching the dialog helper.
+    # should_use_gui_dialogs checks sys.platform first, so it returns False.
+    assert not _windows_dialogs.should_use_gui_dialogs()
+    # Nothing to assert about _confirm_or_messagebox's return value here (it
+    # would call click.confirm which has no TTY in this context), but we can
+    # assert that confirm_destructive was NOT reached.
+    # Wrap in CliRunner to provide a TTY for click.confirm.
+    runner = CliRunner()
+
+    @click.command()
+    def _dummy() -> None:
+        result = cli._confirm_or_messagebox("test?")
+        click.echo("yes" if result else "no")
+
+    runner.invoke(_dummy, input="y\n")
+    assert dialog_calls == []  # GUI branch never reached on non-Windows
+
+
+def test_confirm_or_messagebox_routes_to_gui_when_no_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On win32 with sys.stdout=None, _confirm_or_messagebox delegates to
+    _windows_dialogs.confirm_destructive."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "stdout", None)
+    dialog_calls: list[str] = []
+
+    from dbxignore import _windows_dialogs
+
+    def fake_confirm_destructive(msg: str, **kw: object) -> bool:
+        dialog_calls.append(msg)
+        return True
+
+    monkeypatch.setattr(_windows_dialogs, "confirm_destructive", fake_confirm_destructive)
+    result = cli._confirm_or_messagebox("Mark path?")
+    assert result is True
+    assert dialog_calls == ["Mark path?"]
+
+
+def test_confirm_or_messagebox_routes_to_gui_and_returns_false_when_no_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """confirm_destructive returning False is propagated (user clicked No)."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "stdout", None)
+
+    from dbxignore import _windows_dialogs
+
+    monkeypatch.setattr(_windows_dialogs, "confirm_destructive", lambda msg, **kw: False)
+    result = cli._confirm_or_messagebox("Mark path?")
+    assert result is False
+
+
+def test_error_or_messagebox_routes_to_gui_when_no_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On win32 with sys.stdout=None, _error_or_messagebox delegates to
+    _windows_dialogs.show_error."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "stdout", None)
+    dialog_calls: list[str] = []
+
+    from dbxignore import _windows_dialogs
+
+    def fake_show_error(msg: str, **kw: object) -> None:
+        dialog_calls.append(msg)
+
+    monkeypatch.setattr(_windows_dialogs, "show_error", fake_show_error)
+    cli._error_or_messagebox("something failed")
+    assert dialog_calls == ["something failed"]
+
+
+def test_error_or_messagebox_routes_to_click_echo_when_stdout_valid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On win32 with a non-None sys.stdout, _error_or_messagebox uses
+    click.echo — not the GUI dialog. Validated via the should_use_gui_dialogs
+    predicate (stdout non-None → predicate False → GUI branch skipped)."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    # sys.stdout is already non-None under pytest.
+    from dbxignore import _windows_dialogs
+
+    dialog_calls: list[str] = []
+
+    def fake_show_error(msg: str, **kw: object) -> None:
+        dialog_calls.append(msg)
+
+    monkeypatch.setattr(_windows_dialogs, "show_error", fake_show_error)
+    # should_use_gui_dialogs → False (stdout is not None) → show_error NOT called.
+    assert not _windows_dialogs.should_use_gui_dialogs()
+    cli._error_or_messagebox("oops")
+    assert dialog_calls == []  # click.echo path taken, not GUI

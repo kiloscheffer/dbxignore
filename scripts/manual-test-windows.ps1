@@ -42,6 +42,23 @@
     command-line tool". Click OK to dismiss. This verifies the GUI-subsystem
     + no-argv -> MessageBox path that no scripted UI test can reliably reach.
 
+    Manual visual verification for shell-verb GUI dialogs (post-#238):
+    After Phase 7 cleanup, manually:
+    1. Re-install dbxignore (`dbxignore install`) so the shell verbs register.
+    2. In Explorer, right-click any test file in your Dropbox folder.
+    3. Select "Ignore from Dropbox" — expect a MessageBox with a yellow warning
+       triangle, body asking to confirm marking the path ignored with a note that
+       Dropbox will remove the cloud copy from all linked devices, Yes/No buttons.
+    4. Click Yes -> operation runs silently. Verify the file's ADS marker via
+       `dir /R` or `dbxignore list`.
+    5. Click No on a fresh right-click -> operation cancels silently, no marker.
+    6. Right-click a file OUTSIDE the Dropbox folder -> "Ignore from Dropbox"
+       should not appear in the menu (verb's AppliesTo filter excludes non-Dropbox
+       paths).
+    7. Right-click an already-ignored file and select "Restore to Dropbox" ->
+       one-click, no confirmation dialog; marker cleared and Dropbox starts
+       re-syncing.
+
     Known shell-wait limitation (post-#30): when invoked as a foreground
     command, Windows shells (cmd.exe AND PowerShell) generally do not wait
     for the GUI-subsystem `dbxignore.exe` before returning the prompt. Pipe

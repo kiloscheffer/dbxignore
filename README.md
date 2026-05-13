@@ -207,12 +207,12 @@ If you have shell aliases or scripts that call `dbxignored` directly, replace th
 
 On Windows, `dbxignore install` registers two right-click verbs in Explorer:
 
-- **Ignore from Dropbox** — opens a console window asking for confirmation,
-  then runs `dbxignore.exe ignore <path>`. The confirmation prompt is intentional:
-  marking a path ignored causes Dropbox to delete it from the cloud and propagate
-  the deletion to every linked device.
+- **Ignore from Dropbox** — shows a MessageBox confirmation dialog (yellow warning
+  triangle, Yes/No buttons) before running `dbxignore.exe ignore <path>`. Marking a
+  path ignored causes Dropbox to delete it from the cloud and propagate the deletion
+  to every linked device, so a confirmation is required.
 - **Restore to Dropbox** — one-click; runs `dbxignore.exe unignore --yes <path>`.
-  Safe direction (Dropbox re-syncs the path).
+  Safe direction (Dropbox re-syncs the path); no confirmation dialog.
 
 The verbs only appear under discovered Dropbox roots — the `AppliesTo` filter is
 generated at install time from `~/.dropbox/info.json`. To skip the registry write,

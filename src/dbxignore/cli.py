@@ -1007,6 +1007,32 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
         click.echo(f"  error: {p} - {msg}", err=True)
 
 
+def _confirm_or_messagebox(message: str) -> bool:
+    """Confirm via GUI MessageBox when stdio is unavailable (Explorer
+    shell-verb context on the frozen GUI binary); otherwise via
+    click.confirm.
+    """
+    if sys.platform == "win32":
+        from dbxignore import _windows_dialogs  # noqa: PLC0415
+
+        if _windows_dialogs.should_use_gui_dialogs():
+            return _windows_dialogs.confirm_destructive(message)
+    return click.confirm(message, default=False)
+
+
+def _error_or_messagebox(message: str) -> None:
+    """Show error via GUI MessageBox when stdio is unavailable; otherwise
+    via click.echo(err=True).
+    """
+    if sys.platform == "win32":
+        from dbxignore import _windows_dialogs  # noqa: PLC0415
+
+        if _windows_dialogs.should_use_gui_dialogs():
+            _windows_dialogs.show_error(message)
+            return
+    click.echo(message, err=True)
+
+
 @main.command()
 @click.argument("path", type=click.Path(exists=False, path_type=Path))
 @click.option(
@@ -1032,16 +1058,14 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
     """
     target, root, discovered = _validate_target_under_root(path)
     if is_ignore_filename(target.name):
-        click.echo(
-            f"error: {path} is a .dropboxignore rule file; these are never marked ignored.",
-            err=True,
+        _error_or_messagebox(
+            f"error: {path} is a .dropboxignore rule file; these are never marked ignored."
         )
         sys.exit(2)
     if target == root:
-        click.echo(
+        _error_or_messagebox(
             f"error: {path} is a Dropbox root; refusing to mark the entire root "
-            f"ignored (Dropbox would remove the root from cloud and every linked device).",
-            err=True,
+            f"ignored (Dropbox would remove the root from cloud and every linked device)."
         )
         sys.exit(2)
     # Linux's xattr backend cannot mark symlinks (kernel refuses user.* xattrs
@@ -1049,28 +1073,26 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
     # leave an orphan rule with no marker. unignore doesn't need this guard
     # — clear_ignored is a no-op when no xattr exists.
     if sys.platform.startswith("linux") and target.is_symlink():
-        click.echo(
+        _error_or_messagebox(
             f"error: {path} is a symlink; Linux's xattr backend cannot mark "
             f"symlinks (kernel refuses user.* xattrs on symlinks with EPERM). "
             f"Mark the symlink's target directly, or use macOS/Windows where "
-            f"the marker can attach to the link.",
-            err=True,
+            f"the marker can attach to the link."
         )
         sys.exit(2)
     cache = _load_cache(discovered)
     rule_file = _select_rule_file(target, root)
     parse_err = _check_rule_file_parses(rule_file)
     if parse_err is not None:
-        click.echo(
+        _error_or_messagebox(
             f"error: existing rule file {rule_file} has invalid syntax: {parse_err}. "
-            f"Fix the file (or check the daemon log for context) before re-running.",
-            err=True,
+            f"Fix the file (or check the daemon log for context) before re-running."
         )
         sys.exit(2)
     try:
         canonical = rules.format_literal_rule(target, rule_file)
     except ValueError as exc:
-        click.echo(f"error: {exc}", err=True)
+        _error_or_messagebox(f"error: {exc}")
         sys.exit(2)
 
     # Idempotence + redundancy guards
@@ -1088,7 +1110,7 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
                         target, m.ignore_file
                     )
                 except ValueError as exc:
-                    click.echo(f"error: {exc}", err=True)
+                    _error_or_messagebox(f"error: {exc}")
                     sys.exit(2)
         via_us_match = next(
             (
@@ -1124,38 +1146,32 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
             try:
                 already_marked = markers.is_ignored(target)
             except OSError as exc:
-                click.echo(
+                _error_or_messagebox(
                     f"Could not read marker on {target}: {exc}. "
                     f"The rule is in {file_with_rule}; the daemon will set the marker "
-                    f"when running on a filesystem that supports extended attributes.",
-                    err=True,
+                    f"when running on a filesystem that supports extended attributes."
                 )
                 sys.exit(2)
             if not already_marked:
                 if dry_run:
                     click.echo(f"would set marker on {target}")
                 else:
-                    if not yes:
-                        click.echo(
-                            f"This will mark {target} ignored "
-                            f"(rule is already in {file_with_rule}, but the marker "
-                            f"is missing — daemon may not have run since rule was added)."
-                        )
-                        click.echo(
-                            "Dropbox will remove it from cloud Dropbox and from every "
-                            "other linked device. Local copies on this device are preserved."
-                        )
-                        if not click.confirm("Continue?"):
-                            click.echo("Aborted.")
-                            return
+                    if not yes and not _confirm_or_messagebox(
+                        f"Mark {target} as ignored? "
+                        f"(rule is already in {file_with_rule}, but the marker "
+                        f"is missing — daemon may not have run since rule was added.)\n"
+                        f"Dropbox will remove it from cloud Dropbox and from every "
+                        f"other linked device. Local copies on this device are preserved."
+                    ):
+                        click.echo("Aborted.")
+                        return
                     try:
                         markers.set_ignored(target)
                     except OSError as exc:
-                        click.echo(
+                        _error_or_messagebox(
                             f"Marker write failed on {target}: {exc}. "
                             f"The rule was already in {file_with_rule}; the daemon will set the marker "
-                            f"when running on a filesystem that supports extended attributes.",
-                            err=True,
+                            f"when running on a filesystem that supports extended attributes."
                         )
                         sys.exit(2)
                     click.echo(f"Set marker on {target}.")
@@ -1167,15 +1183,13 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
         click.echo(f"would set marker on {target}")
         return
 
-    if not yes:
-        click.echo(f"This will mark {target} ignored.")
-        click.echo(
-            "Dropbox will remove it from cloud Dropbox and from every "
-            "other linked device. Local copies on this device are preserved."
-        )
-        if not click.confirm("Continue?"):
-            click.echo("Aborted.")
-            return
+    if not yes and not _confirm_or_messagebox(
+        f"Mark {target} as ignored? "
+        f"Dropbox will remove it from cloud Dropbox and from every "
+        f"other linked device. Local copies on this device are preserved."
+    ):
+        click.echo("Aborted.")
+        return
 
     # Rule first, then marker: a marker-first write would race the daemon's
     # OTHER-event 500ms debounce window (it'd see a marker the rules don't
@@ -1183,19 +1197,15 @@ def ignore(path: Path, dry_run: bool, yes: bool) -> None:
     try:
         rules.append_rule(rule_file, canonical)
     except OSError as exc:
-        click.echo(
-            f"Failed to write {rule_file}: {exc}.",
-            err=True,
-        )
+        _error_or_messagebox(f"Failed to write {rule_file}: {exc}.")
         sys.exit(2)
     try:
         markers.set_ignored(target)
     except OSError as exc:
-        click.echo(
+        _error_or_messagebox(
             f"Marker write failed on {target}: {exc}. "
             f"The rule was added to {rule_file}; the daemon will set the marker "
-            f"when running on a filesystem that supports extended attributes.",
-            err=True,
+            f"when running on a filesystem that supports extended attributes."
         )
         sys.exit(2)
     click.echo(f"ignore: rule added to {rule_file}; marker set on {target}")
@@ -1226,16 +1236,14 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
     """
     target, root, discovered = _validate_target_under_root(path)
     if is_ignore_filename(target.name):
-        click.echo(
-            f"error: {path} is a .dropboxignore rule file; these are never marked ignored.",
-            err=True,
+        _error_or_messagebox(
+            f"error: {path} is a .dropboxignore rule file; these are never marked ignored."
         )
         sys.exit(2)
     if target == root:
-        click.echo(
+        _error_or_messagebox(
             f"error: {path} is a Dropbox root; refusing to mark the entire root "
-            f"ignored (Dropbox would remove the root from cloud and every linked device).",
-            err=True,
+            f"ignored (Dropbox would remove the root from cloud and every linked device)."
         )
         sys.exit(2)
     cache = _load_cache(discovered)
@@ -1249,10 +1257,9 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
         try:
             marker_set = markers.is_ignored(target)
         except OSError as exc:
-            click.echo(
+            _error_or_messagebox(
                 f"Could not read marker on {target}: {exc}. "
-                f"Re-run on a filesystem that supports extended attributes.",
-                err=True,
+                f"Re-run on a filesystem that supports extended attributes."
             )
             sys.exit(2)
         if not marker_set:
@@ -1262,19 +1269,18 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
         if dry_run:
             click.echo(f"would clear marker on {target} (no matching rule on disk)")
             return
-        if not yes:
-            click.echo(f"This will unignore {target} (no rule currently matches it).")
-            click.echo("Dropbox will start syncing it again and upload local contents to cloud.")
-            if not click.confirm("Continue?"):
-                click.echo("Aborted.")
-                return
+        if not yes and not _confirm_or_messagebox(
+            f"Unignore {target} (no rule currently matches it)? "
+            f"Dropbox will start syncing it again and upload local contents to cloud."
+        ):
+            click.echo("Aborted.")
+            return
         try:
             markers.clear_ignored(target)
         except OSError as exc:
-            click.echo(
+            _error_or_messagebox(
                 f"Marker clear failed on {target}: {exc}. "
-                f"No rule was on disk; the daemon will not re-set the marker.",
-                err=True,
+                f"No rule was on disk; the daemon will not re-set the marker."
             )
             sys.exit(2)
         click.echo(f"unignore: marker cleared on {target} (no rule was on disk)")
@@ -1292,10 +1298,9 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
     for m in matches:
         parse_err = _check_rule_file_parses(m.ignore_file)
         if parse_err is not None:
-            click.echo(
+            _error_or_messagebox(
                 f"error: rule file {m.ignore_file} has invalid syntax: {parse_err}. "
-                f"Fix the file before re-running.",
-                err=True,
+                f"Fix the file before re-running."
             )
             sys.exit(2)
 
@@ -1305,7 +1310,7 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
             try:
                 canonical_per_file[m.ignore_file] = rules.format_literal_rule(target, m.ignore_file)
             except ValueError as exc:
-                click.echo(f"error: {exc}", err=True)
+                _error_or_messagebox(f"error: {exc}")
                 sys.exit(2)
 
     removable = [
@@ -1324,10 +1329,13 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
     blockers = remaining if remaining and not remaining[-1].negation else []
 
     if blockers:
-        click.echo(f"error: {path} is also matched by:", err=True)
-        for m in blockers:
-            click.echo(f"  line {m.line} of {m.ignore_file}: {m.pattern.rstrip()}", err=True)
-        click.echo("Remove these manually if you want to unignore this path.", err=True)
+        lines = "\n".join(
+            f"  line {m.line} of {m.ignore_file}: {m.pattern.rstrip()}" for m in blockers
+        )
+        _error_or_messagebox(
+            f"error: {path} is also matched by:\n{lines}\n"
+            f"Remove these manually if you want to unignore this path."
+        )
         sys.exit(2)
 
     # Resolve canonical cache-key paths to actual on-disk paths once.  On a
@@ -1363,12 +1371,12 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
         click.echo(f"would clear marker on {target}")
         return
 
-    if not yes:
-        click.echo(f"This will unignore {target}.")
-        click.echo("Dropbox will start syncing it again and upload local contents to cloud.")
-        if not click.confirm("Continue?"):
-            click.echo("Aborted.")
-            return
+    if not yes and not _confirm_or_messagebox(
+        f"Unignore {target}? "
+        f"Dropbox will start syncing it again and upload local contents to cloud."
+    ):
+        click.echo("Aborted.")
+        return
 
     # Rules first, then marker: a marker-first clear would race the daemon's
     # OTHER-event 500ms debounce window — the daemon would see the still-present
@@ -1380,31 +1388,26 @@ def unignore(path: Path, dry_run: bool, yes: bool) -> None:
         try:
             removed_count = rules.remove_rule(on_disk_path, m.pattern)
         except OSError as exc:
-            click.echo(
-                f"Failed to write {on_disk_path}: {exc}.",
-                err=True,
-            )
+            _error_or_messagebox(f"Failed to write {on_disk_path}: {exc}.")
             sys.exit(2)
         if removed_count > 0:
             affected_files.add(on_disk_path)
     missing = expected_files - affected_files
     if missing:
         missing_str = ", ".join(str(f) for f in sorted(missing))
-        click.echo(
+        _error_or_messagebox(
             f"error: matched rules disappeared between read and write in "
-            f"{missing_str}; re-run `dbxignore unignore {path}`.",
-            err=True,
+            f"{missing_str}; re-run `dbxignore unignore {path}`."
         )
         sys.exit(2)
     files_str = ", ".join(str(f) for f in sorted(affected_files))
     try:
         markers.clear_ignored(target)
     except OSError as exc:
-        click.echo(
+        _error_or_messagebox(
             f"Marker clear failed on {target}: {exc}. "
             f"The rule was removed from {files_str}; the daemon will clear the marker "
-            f"when running on a filesystem that supports extended attributes.",
-            err=True,
+            f"when running on a filesystem that supports extended attributes."
         )
         sys.exit(2)
     click.echo(f"unignore: rule removed from {files_str}; marker cleared on {target}")

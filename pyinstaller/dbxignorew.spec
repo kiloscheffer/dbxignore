@@ -11,9 +11,9 @@
                    * Explorer double-click — pops a MessageBox saying
                      "dbxignore is a command-line tool" then exits.
 
-Same __main__.py entry as dbxignore.exe; the console-presence probe in
-_windows_dialogs.should_use_gui_dialogs() (GetConsoleWindow() == 0)
-routes the no-console invocations to MessageBox output.
+Same __main__.py entry as dbxignore.exe; the no-console-detection check
+in _windows_dialogs.should_use_gui_dialogs() routes the no-console
+invocations to MessageBox output.
 
 copy_metadata("dbxignore") bundles the dist-info directory so that
 click's --version callback can resolve the version via

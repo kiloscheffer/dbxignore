@@ -207,3 +207,75 @@ def test_uninstall_agent_raises_on_launchctl_filenotfound(
 
     # plist MUST still exist — uninstall failed before removal.
     assert plist_path.exists(), "plist must not be removed when bootout fails to invoke launchctl"
+
+
+def test_uninstall_agent_raises_on_bootout_nonzero_rc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BACKLOG #119: bootout returning non-zero rc with a non-'not loaded'
+    stderr signals a real failure (e.g. ``Boot-out failed: 5: Input/output
+    error``). Before this fix, rc and stderr were both discarded — the
+    plist got unlinked unconditionally and ``dbxignore uninstall`` reported
+    success while the daemon survived. Now: surface as RuntimeError and
+    preserve plist so the user can investigate."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("os.getuid", lambda: 501, raising=False)
+
+    plist_dir = tmp_path / "Library" / "LaunchAgents"
+    plist_dir.mkdir(parents=True)
+    plist_path = plist_dir / "com.kiloscheffer.dbxignore.plist"
+    plist_path.write_bytes(b"<plist></plist>")
+
+    def fake_run_failure(cmd: list[str], **kwargs: object) -> object:
+        class R:
+            returncode = 5
+            stderr = "Boot-out failed: 5: Input/output error"
+            stdout = ""
+
+        return R()
+
+    monkeypatch.setattr("subprocess.run", fake_run_failure)
+
+    from dbxignore.install import macos_launchd
+
+    with pytest.raises(RuntimeError, match="bootout"):
+        macos_launchd.uninstall_agent()
+
+    assert plist_path.exists(), "plist must not be removed when bootout returns non-zero rc"
+
+
+def test_uninstall_agent_tolerates_not_loaded_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BACKLOG #119: bootout returning non-zero rc with a 'not loaded'-class
+    stderr ('No such process', 'Could not find service', 'not loaded') is
+    the idempotent-uninstall case — service was already torn down (e.g.
+    user ran ``launchctl bootout`` manually between install and uninstall,
+    or a crash unloaded the service). Treat as success, proceed to plist
+    removal so a second ``dbxignore uninstall`` doesn't leave the plist on
+    disk."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("os.getuid", lambda: 501, raising=False)
+
+    plist_dir = tmp_path / "Library" / "LaunchAgents"
+    plist_dir.mkdir(parents=True)
+    plist_path = plist_dir / "com.kiloscheffer.dbxignore.plist"
+    plist_path.write_bytes(b"<plist></plist>")
+
+    def fake_run_not_loaded(cmd: list[str], **kwargs: object) -> object:
+        class R:
+            returncode = 3
+            stderr = "Boot-out failed: 3: No such process"
+            stdout = ""
+
+        return R()
+
+    monkeypatch.setattr("subprocess.run", fake_run_not_loaded)
+
+    from dbxignore.install import macos_launchd
+
+    macos_launchd.uninstall_agent()
+
+    assert not plist_path.exists(), (
+        "plist should be removed when bootout fails idempotently ('not loaded')"
+    )

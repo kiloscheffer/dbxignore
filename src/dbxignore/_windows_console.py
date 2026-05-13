@@ -59,7 +59,9 @@ def _has_console() -> bool:
     """
     try:
         return bool(ctypes.windll.kernel32.GetConsoleWindow())  # type: ignore[attr-defined, unused-ignore]
-    except OSError:
+    except (OSError, AttributeError):
+        # AttributeError covers non-Windows (ctypes.windll doesn't exist);
+        # OSError covers Windows API failures in unusual session states.
         return False
 
 
@@ -86,7 +88,9 @@ def _attach_parent_console() -> bool:
     """
     try:
         return bool(ctypes.windll.kernel32.AttachConsole(_ATTACH_PARENT_PROCESS))  # type: ignore[attr-defined, unused-ignore]
-    except OSError:
+    except (OSError, AttributeError):
+        # AttributeError covers non-Windows (ctypes.windll doesn't exist);
+        # OSError covers Windows API failures.
         return False
 
 
@@ -96,7 +100,9 @@ def _show_help_message_box() -> None:
     Wrapped in try/except so an unusual session state (no window station,
     locked-down desktop) falls through to silent exit rather than crashing.
     """
-    with contextlib.suppress(OSError):
+    with contextlib.suppress(OSError, AttributeError):
+        # AttributeError covers non-Windows (ctypes.windll doesn't exist);
+        # OSError covers MessageBox failures in unusual session states.
         ctypes.windll.user32.MessageBoxW(  # type: ignore[attr-defined, unused-ignore]
             None,
             _MESSAGE_BODY,

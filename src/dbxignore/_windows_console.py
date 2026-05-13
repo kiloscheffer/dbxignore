@@ -143,7 +143,7 @@ def _restore_inherited_stdio() -> None:
             handle = ctypes.windll.kernel32.GetStdHandle(std_handle_const)  # type: ignore[attr-defined, unused-ignore]
             if handle in (0, _INVALID_HANDLE_VALUE):
                 continue
-            fd = msvcrt.open_osfhandle(handle, fd_flags)
+            fd = msvcrt.open_osfhandle(handle, fd_flags)  # type: ignore[attr-defined, unused-ignore]
             stream = os.fdopen(fd, mode, encoding="utf-8", buffering=1)
             setattr(sys, sys_attr, stream)
         except (OSError, AttributeError, ValueError):

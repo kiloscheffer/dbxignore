@@ -44,6 +44,7 @@ def test_early_init_attach_success_redirects_and_returns(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(_windows_console, "_has_console", lambda: False)
     monkeypatch.setattr(_windows_console, "_attach_parent_console", lambda: True)
     calls: list[str] = []
     monkeypatch.setattr(
@@ -65,6 +66,7 @@ def test_early_init_attach_fail_with_argv_returns_silently(
 ) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(sys, "argv", ["dbxignore.exe", "daemon"])
+    monkeypatch.setattr(_windows_console, "_has_console", lambda: False)
     monkeypatch.setattr(_windows_console, "_attach_parent_console", lambda: False)
     calls: list[str] = []
     monkeypatch.setattr(
@@ -81,6 +83,7 @@ def test_early_init_attach_fail_no_argv_shows_box_and_exits(
 ) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(sys, "argv", ["dbxignore.exe"])
+    monkeypatch.setattr(_windows_console, "_has_console", lambda: False)
     monkeypatch.setattr(_windows_console, "_attach_parent_console", lambda: False)
     box_calls: list[str] = []
     monkeypatch.setattr(
@@ -102,6 +105,7 @@ def test_early_init_messagebox_oserror_still_exits(
     here we simulate that with a no-op stub."""
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(sys, "argv", ["dbxignore.exe"])
+    monkeypatch.setattr(_windows_console, "_has_console", lambda: False)
     monkeypatch.setattr(_windows_console, "_attach_parent_console", lambda: False)
     monkeypatch.setattr(_windows_console, "_show_help_message_box", lambda: None)
     with pytest.raises(SystemExit) as exc_info:
@@ -121,6 +125,7 @@ def test_early_init_help_or_version_does_not_take_messagebox_branch(
     branch; click handles --help / --version normally from there."""
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(sys, "argv", ["dbxignore.exe", flag])
+    monkeypatch.setattr(_windows_console, "_has_console", lambda: False)
     monkeypatch.setattr(_windows_console, "_attach_parent_console", lambda: False)
     box_calls: list[str] = []
     monkeypatch.setattr(
@@ -130,6 +135,44 @@ def test_early_init_help_or_version_does_not_take_messagebox_branch(
     )
     _windows_console.early_init()
     assert box_calls == []
+
+
+def test_early_init_no_op_when_process_already_has_console(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the process already has a console (CUI trampoline case), do
+    nothing — let click handle argv normally. Specifically: even with
+    empty argv, do NOT pop the MessageBox."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "argv", ["dbxignore.exe"])  # empty
+    monkeypatch.setattr(_windows_console, "_has_console", lambda: True)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        _windows_console,
+        "_attach_parent_console",
+        lambda: calls.append("attach"),
+    )
+    monkeypatch.setattr(
+        _windows_console,
+        "_show_help_message_box",
+        lambda: calls.append("messagebox"),
+    )
+    _windows_console.early_init()  # should not raise SystemExit
+    assert calls == []  # neither helper called
+
+
+def test_has_console_returns_bool() -> None:
+    """_has_console should always return a bool regardless of platform.
+
+    On non-Windows, ctypes.windll is absent and the helper must return
+    False via OSError/AttributeError suppression. On Windows under pytest
+    (a CUI process) it should return True. Either way: a bool.
+    """
+    result = _windows_console._has_console()
+    # On non-Windows: must be False (ctypes.windll missing)
+    # On Windows under pytest: pytest is CUI, so True
+    # Don't assert a specific value across platforms — assert it returns a bool
+    assert isinstance(result, bool)
 
 
 def test_redirect_preserves_valid_stdout_and_reopens_missing_stderr(

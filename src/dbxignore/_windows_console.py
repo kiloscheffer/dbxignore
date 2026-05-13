@@ -28,11 +28,19 @@ _MESSAGE_BODY = (
 def early_init() -> None:
     """Three-context Windows entry-point setup. No-op on non-Windows.
 
-    1. Attach to parent's console if one exists -> terminal-CLI behavior.
-    2. No parent console, argv has subcommand -> silent (Task Scheduler).
-    3. No parent console, argv empty -> MessageBox + exit (Explorer double-click).
+    1. Process already has a console (CUI binary, e.g., the non-frozen
+       trampoline from pip install / uv tool install) -> no-op, let click
+       handle argv normally. This is the most common case for interactive
+       users.
+    2. Attach to parent's console (GUI binary launched from a terminal)
+       -> terminal-CLI behavior with per-stream stdio preservation.
+    3. No parent console, argv has subcommand -> silent (Task Scheduler).
+    4. No parent console, argv empty -> MessageBox + exit (Explorer
+       double-click).
     """
     if sys.platform != "win32":
+        return
+    if _has_console():
         return
     if _attach_parent_console():
         _redirect_stdio_to_attached_console()
@@ -41,6 +49,18 @@ def early_init() -> None:
         return
     _show_help_message_box()
     sys.exit(0)
+
+
+def _has_console() -> bool:
+    """True if this process already has a console attached at startup
+    (e.g., CUI-subsystem binary, or a process launched into a session
+    with an inherited console). Returns False for GUI-subsystem binaries
+    launched from Explorer, Task Scheduler, or a terminal-less context.
+    """
+    try:
+        return bool(ctypes.windll.kernel32.GetConsoleWindow())
+    except OSError:
+        return False
 
 
 def _is_stream_connected(stream: object) -> bool:

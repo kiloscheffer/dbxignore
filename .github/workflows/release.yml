@@ -64,8 +64,12 @@ jobs:
           # parser run before output — a non-zero exit indicates an
           # import-time crash. We don't grep its output because the
           # MessageBox path can't be exercised in headless CI.
-          ./dist/dbxignorew.exe --help >/dev/null 2>&1 || true
-          ./dist/dbxignorew.exe --version >/dev/null 2>&1 || true
+          # We don't grep output (the MessageBox path can't be exercised in
+          # headless CI), but the exit code surfaces import-time crashes:
+          # bash waits synchronously thanks to the pipe redirection, and the
+          # script's `set -e` propagates a non-zero exit to fail the job.
+          ./dist/dbxignorew.exe --help >/dev/null 2>&1
+          ./dist/dbxignorew.exe --version >/dev/null 2>&1
           # Both binaries must exist and be non-empty.
           test -s ./dist/dbxignore.exe
           test -s ./dist/dbxignorew.exe

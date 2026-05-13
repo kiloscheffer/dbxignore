@@ -1,9 +1,8 @@
 """Tests for src/dbxignore/_windows_dialogs.py.
 
 All tests run cross-platform via sys.modules injection of a fake ctypes.windll
-(same pattern as test_windows_console.py's msvcrt injection). The
-platform-specific predicates are exercised by monkeypatching sys.platform and
-ctypes.windll.
+(see the FakeKernel32 / FakeUser32 helpers below). The platform-specific
+predicates are exercised by monkeypatching sys.platform and ctypes.windll.
 """
 
 from __future__ import annotations

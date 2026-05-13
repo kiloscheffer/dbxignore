@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import plistlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -244,16 +245,35 @@ def test_uninstall_agent_raises_on_bootout_nonzero_rc(
     assert plist_path.exists(), "plist must not be removed when bootout returns non-zero rc"
 
 
+@pytest.mark.parametrize(
+    ("rc", "stderr"),
+    [
+        # Each case exercises a distinct entry in
+        # macos_launchd._NOT_LOADED_STDERR_PATTERNS. Removing any of the
+        # three tuple entries below ("no such process", "could not find
+        # service", "not loaded") makes one of these parametrize cases
+        # fail — that's the regression-guard role this test plays.
+        # "could not find specified service" is intentionally NOT
+        # separately tested: it's a strict suffix of "could not find
+        # service" so any stderr matching the longer phrase also matches
+        # the shorter one, making the longer entry redundant under
+        # substring matching. Kept in the tuple as documentation of the
+        # platform-emitted wording, not as load-bearing coverage.
+        (3, "Boot-out failed: 3: No such process"),
+        (113, "Boot-out failed: 113: Could not find service in domain for port"),
+        (3, "Service not loaded"),
+    ],
+    ids=["no_such_process", "could_not_find_service", "not_loaded"],
+)
 def test_uninstall_agent_tolerates_not_loaded_stderr(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rc: int, stderr: str
 ) -> None:
     """BACKLOG #119: bootout returning non-zero rc with a 'not loaded'-class
-    stderr ('No such process', 'Could not find service', 'not loaded') is
-    the idempotent-uninstall case — service was already torn down (e.g.
-    user ran ``launchctl bootout`` manually between install and uninstall,
-    or a crash unloaded the service). Treat as success, proceed to plist
-    removal so a second ``dbxignore uninstall`` doesn't leave the plist on
-    disk."""
+    stderr is the idempotent-uninstall case — service was already torn down
+    (e.g. user ran ``launchctl bootout`` manually between install and
+    uninstall, or a crash unloaded the service). Treat as success, proceed
+    to plist removal so a second ``dbxignore uninstall`` doesn't leave the
+    plist on disk."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr("os.getuid", lambda: 501, raising=False)
 
@@ -263,12 +283,7 @@ def test_uninstall_agent_tolerates_not_loaded_stderr(
     plist_path.write_bytes(b"<plist></plist>")
 
     def fake_run_not_loaded(cmd: list[str], **kwargs: object) -> object:
-        class R:
-            returncode = 3
-            stderr = "Boot-out failed: 3: No such process"
-            stdout = ""
-
-        return R()
+        return SimpleNamespace(returncode=rc, stderr=stderr, stdout="")
 
     monkeypatch.setattr("subprocess.run", fake_run_not_loaded)
 

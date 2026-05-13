@@ -1,14 +1,15 @@
-"""Windows MessageBox dialogs for shell-verb interactive subcommands.
+"""Windows MessageBox dialogs for the GUI-subsystem dbxignorew.exe binary.
 
-When the Explorer shell-integration verbs registered by `dbxignore install`
-invoke the binary (e.g. right-click -> Ignore from Dropbox), the resulting
-process has no console — the GUI-subsystem binary built by #30 leaves
-sys.stdio at None, so click.confirm and click.echo are invisible.
+When `dbxignorew.exe` is invoked — by Windows Task Scheduler at logon, by
+an Explorer shell-verb registry entry (right-click → Ignore from Dropbox),
+or by an Explorer double-click — the process has no console window. The
+console-detection probe in `should_use_gui_dialogs()` checks
+`GetConsoleWindow() == 0` to route output through MessageBox instead of
+the click.echo / click.confirm paths that would be invisible.
 
-This module provides MessageBox-based replacements for the
-destructive-confirmation + error-reporting paths that those subcommands
-need. Used only when sys.stdout is None at the cli-handler runtime
-(the "no stdio" signal that the shell-verb context produces).
+The console-subsystem `dbxignore.exe` binary always has a console at
+startup, so `should_use_gui_dialogs()` returns False there — the click
+paths run normally.
 """
 
 from __future__ import annotations
@@ -28,15 +29,24 @@ _DEFAULT_TITLE = "dbxignore"
 
 
 def should_use_gui_dialogs() -> bool:
-    """True if the current process is in the no-stdio Windows GUI context
-    (PyInstaller noconsole binary launched without an inherited console
-    or a parent console — i.e., the Explorer shell-verb invocation path).
+    """True if the current process has no console window — the GUI-subsystem
+    `dbxignorew.exe` path (Task Scheduler daemon, shell-verb invocations,
+    Explorer double-click).
 
-    Returns False on the trampoline path, in terminals, and on non-Windows.
+    Returns False on the console-subsystem `dbxignore.exe` path, on the
+    trampoline (uv tool install / pip install) which inherits a console,
+    and on non-Windows.
     """
     if sys.platform != "win32":
         return False
-    return sys.stdout is None
+    try:
+        return not bool(ctypes.windll.kernel32.GetConsoleWindow())  # type: ignore[attr-defined, unused-ignore]
+    except (OSError, AttributeError):
+        # AttributeError covers non-Windows (defensive; sys.platform check
+        # should already have returned). OSError covers Windows API
+        # failures in unusual session states — fall through to "treat as
+        # GUI" so destructive operations don't silently confirm.
+        return True
 
 
 def confirm_destructive(message: str, title: str = _DEFAULT_TITLE) -> bool:

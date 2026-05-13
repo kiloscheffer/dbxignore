@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ctypes
+import sys
 import time
 from typing import TYPE_CHECKING, Protocol
 from unittest.mock import MagicMock
@@ -136,6 +138,46 @@ class BlockingMarkers(FakeMarkers):
     def is_ignored(self, path: Path) -> bool:
         self._gate.wait(timeout=10.0)
         return super().is_ignored(path)
+
+
+@pytest.fixture(autouse=True)
+def _stub_get_console_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force GetConsoleWindow() to report a console attached (return non-zero).
+
+    `GetConsoleWindow()` returns 0 in the pytest process when it runs without
+    an attached console window (e.g. under `uv run python -m pytest` spawned
+    from some terminals or IDE integrations on Windows). That would make
+    `_windows_dialogs.should_use_gui_dialogs()` return True for the entire
+    test run, causing every code path that calls `_error_or_messagebox` or
+    `_confirm_or_messagebox` to invoke the real `MessageBoxW` — blocking the
+    suite waiting for user input.
+
+    This fixture stubs the kernel32 call to return 0x1 (a plausible HWND) so
+    `should_use_gui_dialogs()` returns False by default across all tests.
+    Tests that specifically want to exercise the no-console branch should
+    monkeypatch `ctypes.windll` (or `_windows_dialogs.should_use_gui_dialogs`)
+    directly — that monkeypatch wins over the module-level attribute set here
+    because pytest monkeypatch restores in LIFO order.
+
+    On non-Windows the stub is a no-op (`ctypes.windll` is absent, and
+    `should_use_gui_dialogs()` already returns False via the platform guard).
+    """
+    if sys.platform != "win32":
+        return
+
+    class _FakeKernel32WithConsole:
+        @staticmethod
+        def GetConsoleWindow() -> int:  # noqa: N802
+            return 0x1  # non-zero → console attached → should_use_gui_dialogs() → False
+
+    class _FakeWindll:
+        kernel32 = _FakeKernel32WithConsole()
+        # Preserve user32 access for tests that monkeypatch confirm_destructive
+        # / show_error — they set ctypes.windll directly and don't go through
+        # this fake, so this attribute is never reached in practice.
+        user32 = getattr(getattr(ctypes, "windll", None), "user32", None)
+
+    monkeypatch.setattr(ctypes, "windll", _FakeWindll(), raising=False)
 
 
 @pytest.fixture

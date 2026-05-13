@@ -3,11 +3,12 @@
 All tests run cross-platform via sys.modules injection of a fake ctypes.windll
 (same pattern as test_windows_console.py's msvcrt injection). The
 platform-specific predicates are exercised by monkeypatching sys.platform and
-sys.stdout.
+ctypes.windll.
 """
 
 from __future__ import annotations
 
+import ctypes
 import sys
 import types
 
@@ -20,35 +21,42 @@ from dbxignore import _windows_dialogs
 # ---------------------------------------------------------------------------
 
 
-def test_should_use_gui_dialogs_false_on_non_windows(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Returns False on any non-Windows platform regardless of sys.stdout."""
-    monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(sys, "stdout", None)
-    assert _windows_dialogs.should_use_gui_dialogs() is False
-
-
-def test_should_use_gui_dialogs_false_when_stdout_valid(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Returns False when sys.platform is win32 but sys.stdout is a real stream
-    (terminal / trampoline path)."""
+def test_should_use_gui_dialogs_when_no_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No console window attached (GetConsoleWindow returns 0) → True on Windows."""
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr(sys, "stdout", sys.__stdout__ or sys.stderr)  # any non-None stream
-    assert _windows_dialogs.should_use_gui_dialogs() is False
 
+    class FakeKernel32:
+        @staticmethod
+        def GetConsoleWindow() -> int:  # noqa: N802
+            return 0
 
-def test_should_use_gui_dialogs_true_in_shell_verb_context(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Returns True when sys.platform == 'win32' AND sys.stdout is None —
-    the signature of a PyInstaller noconsole binary launched by Explorer."""
-    monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr(sys, "stdout", None)
+    class FakeWindll:
+        kernel32 = FakeKernel32()
+
+    monkeypatch.setattr(ctypes, "windll", FakeWindll(), raising=False)
     assert _windows_dialogs.should_use_gui_dialogs() is True
 
 
-def test_should_use_gui_dialogs_false_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Returns False on macOS even with stdout=None (non-Windows gate)."""
-    monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(sys, "stdout", None)
+def test_should_use_gui_dialogs_when_console_attached(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Console window attached (non-zero handle) → False on Windows."""
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    class FakeKernel32:
+        @staticmethod
+        def GetConsoleWindow() -> int:  # noqa: N802
+            return 0x12345
+
+    class FakeWindll:
+        kernel32 = FakeKernel32()
+
+    monkeypatch.setattr(ctypes, "windll", FakeWindll(), raising=False)
+    assert _windows_dialogs.should_use_gui_dialogs() is False
+
+
+def test_should_use_gui_dialogs_returns_false_on_non_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
     assert _windows_dialogs.should_use_gui_dialogs() is False
 
 

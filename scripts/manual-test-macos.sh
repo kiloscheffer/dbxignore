@@ -715,6 +715,18 @@ phase_uninstall() {
         fail "purge — emitted 'Could not fully clear' on happy path"
         sed 's/^/    /' /tmp/dbxignore-purge.out
     fi
+    # PR #241 parallel guard for the new state-files partial-failure report.
+    # Same trade-off as the marker guard above: forcing a state-dir OSError
+    # end-to-end needs platform-specific FS contortions (BACKLOG #127), and
+    # the unit tests pin the partial-failure assertion tightly. This guard
+    # pins the happy path against an accidental regression that would emit
+    # the report on every clean uninstall.
+    if ! grep -q 'Could not fully purge state files' /tmp/dbxignore-purge.out; then
+        pass "purge — no spurious 'Could not fully purge state files' on happy path (PR #241)"
+    else
+        fail "purge — emitted 'Could not fully purge state files' on happy path"
+        sed 's/^/    /' /tmp/dbxignore-purge.out
+    fi
 
     [ -f "$T/watch-me.tmp" ] && assert_xattr_unset "$T/watch-me.tmp" "purge — watch-me.tmp marker cleared"
     [ -d "$T/cache" ]        && assert_xattr_unset "$T/cache"        "purge — cache/ marker cleared"

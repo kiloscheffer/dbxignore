@@ -436,3 +436,61 @@ def test_periodic_sweep_skipped_while_initial_worker_alive(
         gate.set()
         stop.set()
         t.join(timeout=10.0)
+
+
+def test_hourly_tick_recovers_from_sweep_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    write_file: WriteFile,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A non-OSError exception from ``_sweep_once`` during an hourly tick
+    must not kill the daemon — the next tick should still fire. Without
+    the wrapper, an unexpected ``AttributeError`` / ``KeyError`` from a
+    rules-edge-case would propagate out of the while loop, the daemon
+    thread would exit, and the service manager would have to restart it
+    once an hour. The initial-sweep worker is wrapped (item #91); this
+    pins the symmetric wrap on the hourly tick."""
+    root = tmp_path / "root"
+    write_file(root / ".dropboxignore", "")
+
+    setup_daemon_state(monkeypatch, tmp_path, root)
+    monkeypatch.setattr(daemon, "_configured_logging", contextlib.nullcontext)
+    monkeypatch.setattr(daemon, "SWEEP_INTERVAL_S", 0.3)
+
+    real_sweep_once = daemon._sweep_once
+    call_count = [0]
+    third_call_event = threading.Event()
+
+    def _sweep_succeed_then_raise_then_signal(*args: object, **kwargs: object) -> None:
+        call_count[0] += 1
+        n = call_count[0]
+        if n == 1:
+            # Initial-sweep worker — run the real sweep so worker exits
+            # cleanly and the hourly loop starts ticking.
+            real_sweep_once(*args, **kwargs)  # type: ignore[arg-type]
+            return
+        if n == 2:
+            # First hourly tick — raise. Without the fix this propagates
+            # out of the while loop and the daemon dies.
+            raise RuntimeError("simulated hourly sweep failure")
+        # Subsequent tick — confirms the loop kept ticking after recovery.
+        third_call_event.set()
+
+    monkeypatch.setattr(daemon, "_sweep_once", _sweep_succeed_then_raise_then_signal)
+
+    caplog.set_level("ERROR", logger="dbxignore.daemon")
+    stop = threading.Event()
+    t = threading.Thread(target=daemon.run, args=(stop,), daemon=True)
+    t.start()
+    try:
+        assert third_call_event.wait(timeout=5.0), (
+            "daemon did not survive _sweep_once exception during hourly tick"
+        )
+        assert t.is_alive(), "daemon thread died despite supposed recovery"
+        assert any("hourly sweep" in rec.message.lower() for rec in caplog.records), (
+            "expected ERROR log naming the hourly sweep failure"
+        )
+    finally:
+        stop.set()
+        t.join(timeout=10.0)

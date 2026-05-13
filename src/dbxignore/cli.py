@@ -48,26 +48,50 @@ def _format_ignore_file_loc(path: Path, roots: list[Path]) -> str:
     return str(path)
 
 
-def _purge_dir(dir_path: Path, patterns: list[str]) -> None:
-    """Delete files matching any glob in patterns within dir_path; rmdir if empty."""
+def _purge_dir(
+    dir_path: Path,
+    patterns: list[str],
+    *,
+    errors: list[tuple[Path, str]] | None = None,
+) -> None:
+    """Delete files matching any glob in patterns within dir_path; rmdir if empty.
+
+    When ``errors`` is supplied, non-vanished-path ``OSError``s on the
+    ``unlink`` arm are appended as ``(path, message)`` tuples in addition
+    to being logged. ``uninstall --purge`` passes a list and uses the
+    result to feed the exit-2 partial-failure gate — without this, a
+    locked ``daemon.lock`` (the Windows ``schtasks /End`` timeout cascade,
+    BACKLOG #122) would silently exit 0 despite leaving the artifact on
+    disk.
+    """
     if not dir_path.exists():
         return
     for pattern in patterns:
         for f in dir_path.glob(pattern):
-            with contextlib.suppress(FileNotFoundError):
+            try:
                 f.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                logger.warning("could not remove %s: %s", f, exc)
+                if errors is not None:
+                    errors.append((f, str(exc)))
     with contextlib.suppress(OSError):
         # Non-empty (user dropped something else in there) — preserve it.
         dir_path.rmdir()
 
 
-def _purge_local_state() -> None:
+def _purge_local_state(*, errors: list[tuple[Path, str]] | None = None) -> None:
     """Delete state.json + daemon.log + rotated backups; rmdir empty dirs.
 
     Called by `uninstall --purge` after the ignore markers are cleared.
     On Windows + Linux, state and log live in the same dir. On macOS, the
     log dir (~/Library/Logs/dbxignore/) is separate from the state dir
     (~/Library/Application Support/dbxignore/), so we clean both.
+
+    When ``errors`` is supplied, per-file unlink failures from the
+    underlying ``_purge_dir`` calls are appended for the caller's exit-2
+    gate.
     """
     from dbxignore import daemon as daemon_mod
 
@@ -83,6 +107,7 @@ def _purge_local_state() -> None:
                 "daemon.log.*",
                 daemon_mod.SLOW_SWEEP_MARKER_NAME,
             ],
+            errors=errors,
         )
         click.echo(f"Cleaned {state_dir}.")
 
@@ -92,6 +117,7 @@ def _purge_local_state() -> None:
             _purge_dir(
                 log_dir,
                 patterns=["daemon.log", "daemon.log.*", "launchd.log"],
+                errors=errors,
             )
             click.echo(f"Cleaned {log_dir}.")
 
@@ -1695,6 +1721,7 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
     # errors for exit-2 escalation; plain uninstall runs it only if the user
     # didn't pass --no-shell-integration, and uses WARN-and-continue.
     shell_errors: list[tuple[str, str]] = []
+    state_errors: list[tuple[Path, str]] = []
     if purge:
         uninstall_shell_integration_if_supported(errors=shell_errors)
     elif not no_shell_integration:
@@ -1765,7 +1792,19 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
                 click.echo(f"  ... and {len(errors) - _MAX_REPORTED_ERRORS} more.", err=True)
 
         # (2) Remove state.json, daemon.log*, state dir (cross-platform).
-        _purge_local_state()
+        _purge_local_state(errors=state_errors)
+        if state_errors:
+            click.echo(
+                f"Could not fully purge state files ({len(state_errors)} errors):",
+                err=True,
+            )
+            for path, msg in state_errors[:_MAX_REPORTED_ERRORS]:
+                click.echo(f"  could not remove {path}: {msg}", err=True)
+            if len(state_errors) > _MAX_REPORTED_ERRORS:
+                click.echo(
+                    f"  ... and {len(state_errors) - _MAX_REPORTED_ERRORS} more.",
+                    err=True,
+                )
 
         # (3) Remove the systemd drop-in directory (Linux only).
         if sys.platform.startswith("linux"):
@@ -1787,7 +1826,7 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
                     f"  ... and {len(shell_errors) - _MAX_REPORTED_ERRORS} more.",
                     err=True,
                 )
-        if errors or shell_errors:
+        if errors or shell_errors or state_errors:
             sys.exit(2)
 
 

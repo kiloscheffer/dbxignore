@@ -838,6 +838,127 @@ def test_purge_preserves_files_not_matching_daemon_log_rotation(
     assert state_dir.exists()
 
 
+def test_purge_dir_continues_after_permission_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A ``PermissionError`` on one file in ``_purge_dir`` must not abort the
+    purge — other files still get cleaned, and a WARNING surfaces the
+    surviving file. Cascade of the Windows uninstall-timeout path: when
+    ``schtasks /End`` times out (``windows_task.py:208``), the daemon's
+    ``daemon.lock`` handle is still open, and ``Path.unlink`` raises
+    ``PermissionError`` (subclass of ``OSError``). Pre-fix, the only
+    suppress was ``FileNotFoundError``, so the user got a traceback instead
+    of a partial-cleanup report."""
+    from dbxignore import cli
+
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    locked = state_dir / "daemon.lock"
+    other = state_dir / "state.json"
+    locked.write_text("locked\n", encoding="utf-8")
+    other.write_text("{}", encoding="utf-8")
+
+    real_unlink = Path.unlink
+
+    def _selective_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        if self.name == "daemon.lock":
+            raise PermissionError(13, "lock held by daemon")
+        real_unlink(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "unlink", _selective_unlink)
+
+    caplog.set_level("WARNING", logger="dbxignore.cli")
+    cli._purge_dir(state_dir, patterns=["daemon.lock", "state.json"])
+
+    assert locked.exists(), "locked file should survive the purge"
+    assert not other.exists(), "non-locked file should still be cleaned"
+    assert any("daemon.lock" in rec.message for rec in caplog.records), (
+        "expected WARNING naming the surviving file"
+    )
+
+
+def test_purge_dir_records_errors_when_list_supplied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the caller passes an ``errors`` list, ``_purge_dir`` records
+    non-vanished-path ``OSError``s as ``(path, message)`` tuples in
+    addition to logging the WARNING. This is what feeds the exit-2 gate
+    in ``uninstall --purge`` — without it, state-cleanup failures (e.g.
+    Windows daemon.lock cascade per BACKLOG #122) would silently exit 0
+    despite leaving artifacts behind."""
+    from dbxignore import cli
+
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    locked = state_dir / "daemon.lock"
+    other = state_dir / "state.json"
+    locked.write_text("locked\n", encoding="utf-8")
+    other.write_text("{}", encoding="utf-8")
+
+    real_unlink = Path.unlink
+
+    def _selective_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        if self.name == "daemon.lock":
+            raise PermissionError(13, "lock held by daemon")
+        real_unlink(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "unlink", _selective_unlink)
+
+    errors: list[tuple[Path, str]] = []
+    cli._purge_dir(state_dir, patterns=["daemon.lock", "state.json"], errors=errors)
+
+    # `state.json` was cleaned; only `daemon.lock` survives.
+    assert not other.exists()
+    assert locked.exists()
+    # Errors list captures the failure for the caller's exit-2 gate.
+    assert len(errors) == 1
+    path, msg = errors[0]
+    assert path.name == "daemon.lock"
+    assert "lock held" in msg
+
+
+def test_purge_exits_two_when_state_cleanup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
+) -> None:
+    """When a file in the state dir can't be removed (typically the
+    Windows daemon-lock cascade described in BACKLOG #122 / #124), the
+    failure must propagate to the CLI exit code so scripts gating on
+    ``$?`` see the partial cleanup. Pre-fix ``_purge_dir`` logged-and-
+    continued but the failure never reached ``uninstall``'s exit-2 gate,
+    so a script could conclude the purge had succeeded while a dbxignore
+    artifact was still on disk."""
+    import click.testing
+
+    from dbxignore import cli, state
+
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    (state_dir / "daemon.lock").write_text("locked\n", encoding="utf-8")
+    (state_dir / "state.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(cli, "_discover_roots", lambda: [])
+    monkeypatch.setattr("dbxignore.install.uninstall_service", lambda: None)
+
+    real_unlink = Path.unlink
+
+    def _selective_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        if self.name == "daemon.lock":
+            raise PermissionError(13, "lock held by daemon")
+        real_unlink(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "unlink", _selective_unlink)
+
+    result = click.testing.CliRunner().invoke(cli.main, ["uninstall", "--purge"])
+
+    assert result.exit_code == 2, (result.output, result.stderr)
+    assert "daemon.lock" in result.stderr
+    assert "could not remove" in result.stderr
+    # Other file was cleaned; only daemon.lock survives.
+    assert (state_dir / "daemon.lock").exists()
+    assert not (state_dir / "state.json").exists()
+
+
 def test_purge_cleans_separate_log_dir_on_darwin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

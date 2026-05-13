@@ -306,3 +306,22 @@ def test_detect_cli_invocation_windows_frozen_returns_dbxignorew_sibling(
 
     prefix = _common.detect_cli_invocation()
     assert prefix == f'"{helper_exe}"'
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="dbxignorew is Windows-only")
+def test_detect_cli_invocation_windows_frozen_falls_back_when_helper_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Windows + frozen + dbxignorew.exe absent → fall back to sys.executable
+    with a WARNING for the shell-verb registry entry.
+    """
+    cli_exe = tmp_path / "dbxignore.exe"
+    cli_exe.write_text("")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(cli_exe))
+    from dbxignore.install import _common
+
+    with caplog.at_level("WARNING", logger="dbxignore.install._common"):
+        prefix = _common.detect_cli_invocation()
+    assert prefix == f'"{cli_exe}"'
+    assert "dbxignorew.exe not found" in caplog.text

@@ -2758,6 +2758,8 @@ Touches: `scripts/manual-test-windows.ps1:Test-Uninstall` (Windows-only extensio
 
 **Urgency:** low. Unit tests pin the contract tightly. Same shape as #121 and #127 — "new exit-2 path, hard to force the underlying failure mode." Bundle with #121 / #127 if any of the three ever escalate. Surfaced 2026-05-13 during PR #<THIS_PR>'s work on resolving #119.
 
+**Rule-of-four tripwire:** three deferrals on this shape exist now (#121, #127, #128). If a fourth deferral with the same shape lands, revisit candidate (2) above (the `DBXIGNORE_TEST_FAIL_*` env-var injection mechanism) — the cross-cutting coverage gain may justify the production-code coupling cost that earlier deferrals individually couldn't. Cross-reference back to #121, #127, #128 in that future deferral's body.
+
 Touches: `scripts/manual-test-macos.sh` Phase 6.
 
 ---

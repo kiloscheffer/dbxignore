@@ -76,3 +76,15 @@ def show_error(message: str, title: str = _DEFAULT_TITLE) -> None:
             title,
             _MB_OK | _MB_ICONERROR,
         )
+
+
+def show_info(message: str, title: str = _DEFAULT_TITLE) -> None:
+    """Show a MessageBox info dialog (blue info icon, OK button). Silent on
+    failure (unusual session state, non-Windows)."""
+    with contextlib.suppress(OSError, AttributeError):
+        ctypes.windll.user32.MessageBoxW(  # type: ignore[attr-defined, unused-ignore]
+            None,
+            message,
+            title,
+            _MB_OK | _MB_ICONINFORMATION,
+        )

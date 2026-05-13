@@ -219,3 +219,116 @@ def test_show_error_swallows_attributeerror_silently(monkeypatch: pytest.MonkeyP
     """AttributeError (ctypes.windll absent) must not propagate."""
     monkeypatch.setattr("ctypes.windll", None, raising=False)
     _windows_dialogs.show_error("msg")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# show_info
+# ---------------------------------------------------------------------------
+
+
+def test_show_info_calls_messagebox_with_ok_and_information_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MessageBoxW must be called with MB_OK | MB_ICONINFORMATION (0x40)."""
+    fake_windll = _make_fake_windll(messagebox_return=1)  # IDOK
+    monkeypatch.setattr("ctypes.windll", fake_windll, raising=False)
+    _windows_dialogs.show_info("this is a cli tool", title="dbxignore")
+    calls = fake_windll._calls
+    assert len(calls) == 1
+    hwnd, text, caption, utype = calls[0]
+    assert hwnd is None
+    assert text == "this is a cli tool"
+    assert caption == "dbxignore"
+    # MB_OK (0x0) | MB_ICONINFORMATION (0x40) == 0x40
+    assert utype == (0x00000000 | 0x00000040)
+
+
+def test_show_info_uses_default_title(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When no title is supplied, the default 'dbxignore' title is used."""
+    fake_windll = _make_fake_windll(messagebox_return=1)
+    monkeypatch.setattr("ctypes.windll", fake_windll, raising=False)
+    _windows_dialogs.show_info("msg")
+    calls = fake_windll._calls
+    assert calls[0][2] == "dbxignore"
+
+
+def test_show_info_swallows_oserror_silently(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OSError in MessageBoxW must not propagate — show_info returns None."""
+
+    def _raise_oserror(*args: object, **kwargs: object) -> int:
+        raise OSError("no window station")
+
+    fake_user32 = types.SimpleNamespace(MessageBoxW=_raise_oserror)
+    fake_windll = types.SimpleNamespace(user32=fake_user32)
+    monkeypatch.setattr("ctypes.windll", fake_windll, raising=False)
+    _windows_dialogs.show_info("msg")  # must not raise
+
+
+def test_show_info_swallows_attributeerror_silently(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AttributeError (ctypes.windll absent) must not propagate."""
+    monkeypatch.setattr("ctypes.windll", None, raising=False)
+    _windows_dialogs.show_info("msg")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# _handle_explorer_double_click (via __main__)
+# ---------------------------------------------------------------------------
+
+
+def test_handle_explorer_double_click_no_op_when_argv_has_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """argv with 2+ elements → returns without calling show_info or sys.exit."""
+    from dbxignore import __main__
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "argv", ["dbxignorew.exe", "status"])
+    show_info_calls: list[str] = []
+    monkeypatch.setattr(
+        _windows_dialogs, "show_info", lambda msg, **kw: show_info_calls.append(msg)
+    )
+
+    __main__._handle_explorer_double_click()
+
+    assert show_info_calls == []
+
+
+def test_handle_explorer_double_click_no_op_when_console_attached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """argv empty + console attached (should_use_gui_dialogs → False) → no dialog."""
+    from dbxignore import __main__
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "argv", ["dbxignorew.exe"])
+    monkeypatch.setattr(_windows_dialogs, "should_use_gui_dialogs", lambda: False)
+    show_info_calls: list[str] = []
+    monkeypatch.setattr(
+        _windows_dialogs, "show_info", lambda msg, **kw: show_info_calls.append(msg)
+    )
+
+    __main__._handle_explorer_double_click()
+
+    assert show_info_calls == []
+
+
+def test_handle_explorer_double_click_shows_info_and_exits_when_no_console(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """argv empty + no console (should_use_gui_dialogs → True) → show_info + sys.exit(0)."""
+    from dbxignore import __main__
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "argv", ["dbxignorew.exe"])
+    monkeypatch.setattr(_windows_dialogs, "should_use_gui_dialogs", lambda: True)
+    show_info_calls: list[str] = []
+    monkeypatch.setattr(
+        _windows_dialogs, "show_info", lambda msg, **kw: show_info_calls.append(msg)
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        __main__._handle_explorer_double_click()
+
+    assert exc_info.value.code == 0
+    assert len(show_info_calls) == 1
+    assert "dbxignore --help" in show_info_calls[0]

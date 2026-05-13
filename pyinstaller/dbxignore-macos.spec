@@ -47,14 +47,14 @@ def _analysis():
 
 
 # ---- Single binary -------------------------------------------------------
-a_cli = _analysis()
-pyz_cli = PYZ(a_cli.pure, a_cli.zipped_data, cipher=None)
-exe_cli = EXE(
-    pyz_cli,
-    a_cli.scripts,
-    a_cli.binaries,
-    a_cli.zipfiles,
-    a_cli.datas,
+a = _analysis()
+pyz = PYZ(a.pure, a.zipped_data, cipher=None)
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
     [],
     name="dbxignore",
     debug=False,

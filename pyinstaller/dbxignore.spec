@@ -30,14 +30,14 @@ def _analysis(name: str):
 
 
 # ---- Single binary --------------------------------------------------------
-a_console = _analysis("dbxignore")
-pyz_console = PYZ(a_console.pure, a_console.zipped_data, cipher=None)
-exe_console = EXE(
-    pyz_console,
-    a_console.scripts,
-    a_console.binaries,
-    a_console.zipfiles,
-    a_console.datas,
+a = _analysis("dbxignore")
+pyz = PYZ(a.pure, a.zipped_data, cipher=None)
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
     [],
     name="dbxignore",
     debug=False,

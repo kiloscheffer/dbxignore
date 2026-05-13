@@ -54,6 +54,34 @@ def _service_target(label: str = LABEL) -> str:
     return f"{_domain()}/{label}"
 
 
+# Stderr substrings (case-insensitive) that launchctl emits when bootout's
+# target service isn't currently loaded — the idempotent-uninstall case.
+# A re-run after a successful uninstall, a manual `launchctl bootout`
+# between install and uninstall, or a daemon crash all reach `uninstall_agent`
+# with the service already gone; treating any of these as failure would
+# regress the "uninstall is idempotent" contract Linux/Windows uphold via
+# their respective service-managers. macOS phrasing varies by major version:
+# "No such process" maps to errno-3 ESRCH (modern macOS); "Could not find
+# service" / "Could not find specified service" are the Ventura/Sequoia
+# wordings; "not loaded" appears in older 10.x logs. If a future macOS rev
+# adds a new phrase, the user-visible symptom is "second uninstall fails
+# noisily" — fix forward by extending this list.
+_NOT_LOADED_STDERR_PATTERNS = (
+    "no such process",
+    "could not find service",
+    "could not find specified service",
+    "not loaded",
+)
+
+
+def _is_service_not_loaded(stderr: str) -> bool:
+    """Return True if launchctl bootout's stderr indicates the target service
+    wasn't loaded (idempotent uninstall), False otherwise. Matches the
+    patterns in ``_NOT_LOADED_STDERR_PATTERNS`` case-insensitively."""
+    lowered = stderr.lower()
+    return any(pat in lowered for pat in _NOT_LOADED_STDERR_PATTERNS)
+
+
 def _run_launchctl(cmd: list[str]) -> None:
     """Run a launchctl command; raise RuntimeError on non-zero exit or invocation failure.
 
@@ -148,22 +176,46 @@ def install_agent() -> None:
 
 
 def uninstall_agent() -> None:
-    # Bootout — missing service is fine (check=False, returns non-zero
-    # without raising), but an OSError invocation failure (FNFE if
-    # `launchctl` itself isn't on PATH; PermissionError) MUST surface
-    # as RuntimeError. Unlike install_agent's bootout, this one is the
-    # actual daemon-shutdown step. Silently proceeding to plist removal
-    # below would leave an orphaned live daemon mutating state.json
-    # and markers while `dbxignore uninstall` reports success — and a
-    # subsequent `--purge` would clear state under the running daemon.
+    # Bootout is the actual daemon-shutdown step on macOS (unlike Windows
+    # where schtasks /End + /Delete are distinct, or Linux where systemctl
+    # --user disable --now handles both). Two failure modes need different
+    # handling:
+    #
+    # 1. OSError on invocation (launchctl missing / PermissionError) — raise
+    #    RuntimeError, preserve plist. Silently proceeding to plist removal
+    #    would leave an orphaned live daemon mutating state.json and markers
+    #    while `dbxignore uninstall` reports success — and a subsequent
+    #    `--purge` would clear state under the running daemon.
+    #
+    # 2. Non-zero rc — distinguish "service was already unloaded" (idempotent
+    #    success, proceed to plist removal) from "service refused to die"
+    #    (real failure, raise + preserve plist). The distinction uses
+    #    stderr-pattern matching via `_is_service_not_loaded` because
+    #    launchctl's rc isn't a stable indicator across macOS versions.
+    #
+    # BACKLOG #119: prior shape discarded both rc and stderr, leaving the
+    # tug-of-war silent. The fix below mirrors the eventual-consistency
+    # contract Linux/Windows uphold via their respective service-managers.
     try:
-        subprocess.run(  # noqa: S603 — hardcoded args, no user data
+        result = subprocess.run(  # noqa: S603 — hardcoded args, no user data
             ["launchctl", "bootout", _service_target()],
             check=False,
             capture_output=True,
+            text=True,
         )
     except OSError as exc:
         raise RuntimeError(f"launchctl bootout could not be invoked: {exc}") from exc
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        if not _is_service_not_loaded(stderr):
+            raise RuntimeError(
+                f"launchctl bootout returned {result.returncode}: "
+                f"{stderr or (result.stdout or '').strip() or '(no output)'}"
+            )
+        logger.info(
+            "launchctl bootout reported service not loaded (rc=%s); proceeding to plist removal",
+            result.returncode,
+        )
     path = _plist_path()
     if path.exists():
         path.unlink()

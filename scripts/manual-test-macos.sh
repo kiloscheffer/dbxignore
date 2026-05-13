@@ -694,6 +694,30 @@ phase_uninstall() {
         fail "6a — --summary did not advance to state=not_running within 30s (last: $sum_uninst)"
     fi
 
+    # 6c — idempotent uninstall when service is already unloaded
+    # (BACKLOG #119 / PR #<THIS_PR>). Install, manually bootout via
+    # launchctl, then `dbxignore uninstall` — the bootout call inside
+    # `uninstall_agent` returns rc=3 / "No such process" stderr; the
+    # stderr-tolerant arm in `macos_launchd._is_service_not_loaded`
+    # treats this as idempotent success, proceeds to plist removal,
+    # and the CLI returns 0. Pre-fix, the swallowed rc made the whole
+    # case indistinguishable from happy-path uninstall, hiding the
+    # symmetric "service refused to die" failure mode the same code
+    # path now surfaces as exit-2.
+    note "6c — idempotent uninstall after manual bootout (BACKLOG #119)"
+    dbxignore install >/dev/null 2>&1 || abort "6c re-install failed"
+    sleep 2
+    launchctl bootout "gui/${uid}/com.kiloscheffer.dbxignore" >/dev/null 2>&1 || true
+    if dbxignore uninstall >/tmp/dbxignore-idemp.out 2>&1; then
+        pass "6c — idempotent uninstall after manual bootout (rc=0)"
+    else
+        fail "6c — idempotent uninstall after manual bootout"
+        sed 's/^/    /' /tmp/dbxignore-idemp.out
+    fi
+    [ ! -f "$HOME/Library/LaunchAgents/com.kiloscheffer.dbxignore.plist" ] \
+        && pass "6c — LaunchAgent plist removed by idempotent uninstall" \
+        || fail "6c — LaunchAgent plist still present after idempotent uninstall"
+
     # re-install briefly, then --purge
     note "re-installing for --purge test..."
     dbxignore install >/dev/null 2>&1 || abort "re-install failed"

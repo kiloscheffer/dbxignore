@@ -8,6 +8,7 @@ tests that gate on `sys.platform == "win32"`.
 from __future__ import annotations
 
 import sys
+import types
 
 import pytest
 
@@ -220,6 +221,10 @@ def test_restore_inherited_stdio_skips_already_valid_streams(
     sentinel_stdout = sys.stdout
     sentinel_stderr = sys.stderr
     sentinel_stdin = sys.stdin
+    # _restore_inherited_stdio starts with `import msvcrt` (Windows-only stdlib);
+    # inject a fake so the test runs cross-platform (sys.modules-injection pattern).
+    fake_msvcrt = types.ModuleType("msvcrt")
+    monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
     _windows_console._restore_inherited_stdio()
     assert sys.stdout is sentinel_stdout
     assert sys.stderr is sentinel_stderr
@@ -232,8 +237,6 @@ def test_restore_inherited_stdio_recovers_valid_win32_handle(
     """If sys.stdout is None but GetStdHandle returns a valid handle, the
     helper should wrap it as a Python file object. Verifies the
     rehydrate-before-fallback contract."""
-    import msvcrt
-
     monkeypatch.setattr(sys, "stdout", None)
     monkeypatch.setattr(sys, "stderr", None)
     monkeypatch.setattr(sys, "stdin", None)
@@ -260,7 +263,11 @@ def test_restore_inherited_stdio_recovers_valid_win32_handle(
         fake_idx[0] += 1
         return stream
 
-    monkeypatch.setattr(msvcrt, "open_osfhandle", fake_open_osfhandle)
+    # _restore_inherited_stdio starts with `import msvcrt` (Windows-only stdlib);
+    # inject a fake so the test runs cross-platform (sys.modules-injection pattern).
+    fake_msvcrt = types.ModuleType("msvcrt")
+    fake_msvcrt.open_osfhandle = fake_open_osfhandle  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
     monkeypatch.setattr("os.fdopen", fake_fdopen)
 
     _windows_console._restore_inherited_stdio()
@@ -287,6 +294,11 @@ def test_restore_inherited_stdio_skips_invalid_handle(
 
     fake_windll = type("FakeWindll", (), {"kernel32": FakeKernel32()})()
     monkeypatch.setattr("ctypes.windll", fake_windll, raising=False)
+
+    # _restore_inherited_stdio starts with `import msvcrt` (Windows-only stdlib);
+    # inject a fake so the test runs cross-platform (sys.modules-injection pattern).
+    fake_msvcrt = types.ModuleType("msvcrt")
+    monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
 
     _windows_console._restore_inherited_stdio()
     assert sys.stdout is None

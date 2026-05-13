@@ -54,10 +54,21 @@ def detect_invocation() -> tuple[Path, str]:
         return Path(sys.executable), "-m dbxignore daemon"
 
     # Linux / macOS non-frozen: shutil.which("dbxignore") if it exists,
-    # else sys.executable with -m.
+    # else sys.executable with -m dbxignore daemon. If sys.executable is
+    # empty (some embedded interpreters) or unset, fall back to python3 on
+    # PATH; if neither, raise RuntimeError so the service entry is never
+    # written with a broken executable.
     dbxignore_in_path = shutil.which("dbxignore")
     if dbxignore_in_path:
         return Path(dbxignore_in_path), "daemon"
+    if not sys.executable:
+        python3 = shutil.which("python3")
+        if not python3:
+            raise RuntimeError(
+                "Cannot determine Python interpreter for service entry: "
+                "sys.executable is empty and python3 not on PATH.",
+            )
+        return Path(python3), "-m dbxignore daemon"
     return Path(sys.executable), "-m dbxignore daemon"
 
 

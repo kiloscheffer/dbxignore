@@ -201,3 +201,43 @@ def test_detect_cli_invocation_raises_when_no_python_and_no_sys_executable(
 
     with pytest.raises(RuntimeError, match="dbxignore not on PATH"):
         _common.detect_cli_invocation()
+
+
+def test_detect_invocation_raises_when_sys_executable_empty_and_no_python3(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In misconfigured embedded interpreters, sys.executable may be '' or None.
+
+    If neither it nor python3 on PATH is discoverable, detect_invocation raises
+    RuntimeError rather than writing a broken executable like Path('.') into the
+    systemd unit / launchd plist.
+    """
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "executable", "")
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    from dbxignore.install import _common
+
+    with pytest.raises(RuntimeError, match="Cannot determine Python interpreter"):
+        _common.detect_invocation()
+
+
+def test_detect_invocation_falls_back_to_python3_when_sys_executable_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When sys.executable is empty but python3 is on PATH, use python3 with -m dbxignore daemon."""
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "executable", "")
+
+    def fake_which(name: str) -> str | None:
+        if name == "python3":
+            return "/usr/bin/python3"
+        return None
+
+    monkeypatch.setattr("shutil.which", fake_which)
+    from dbxignore.install import _common
+
+    exe, args = _common.detect_invocation()
+    assert exe == Path("/usr/bin/python3")
+    assert args == "-m dbxignore daemon"

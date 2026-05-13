@@ -11,6 +11,8 @@ platform-specific assumptions from the maintainer.
 
 from pathlib import Path
 
+from PyInstaller.utils.hooks import copy_metadata
+
 SRC = Path("src").resolve()
 ENTRY = SRC / "dbxignore" / "__main__.py"
 
@@ -20,7 +22,7 @@ def _analysis():
         [str(ENTRY)],
         pathex=[str(SRC)],
         binaries=[],
-        datas=[],
+        datas=copy_metadata("dbxignore"),
         # FSEvents is the macOS watchdog backend. PyInstaller's analyzer
         # doesn't see the dynamic import via watchdog's platform-detection
         # layer, so force the bundle.

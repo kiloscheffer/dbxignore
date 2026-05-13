@@ -11,14 +11,14 @@ import pytest
 def test_detect_invocation_frozen_returns_executable_with_daemon(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Frozen (PyInstaller): always return (sys.executable, "daemon") unconditionally.
+    """Frozen non-Windows: return sys.executable + "daemon".
 
-    After #30 unification there is no separate dbxignored binary — the single
-    dbxignore[.exe] binary handles all subcommands. The pre-#30 three-step
-    "find dbxignored shim" logic is gone.
+    Windows has its own test (test_detect_invocation_windows_frozen_*) that
+    asserts the dbxignorew.exe sibling lookup.
     """
-    cli_name = "dbxignore.exe" if sys.platform == "win32" else "dbxignore"
-    cli_exe = tmp_path / cli_name
+    if sys.platform == "win32":
+        pytest.skip("Windows frozen path tested separately via dbxignorew sibling tests")
+    cli_exe = tmp_path / "dbxignore"
     cli_exe.write_text("")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(cli_exe))
@@ -137,12 +137,16 @@ def test_detect_invocation_falls_back_to_python_exe_on_windows_when_pythonw_miss
 def test_detect_cli_invocation_frozen_uses_sibling_exe(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Frozen PyInstaller install: dbxignore.exe sibling is the registered target."""
-    daemon_name = "dbxignored.exe" if sys.platform == "win32" else "dbxignored"
-    daemon_exe = tmp_path / daemon_name
+    """Frozen PyInstaller install on non-Windows: dbxignore sibling is the registered target.
+
+    Windows has its own test (test_detect_cli_invocation_windows_frozen_*) that
+    asserts the dbxignorew.exe sibling lookup.
+    """
+    if sys.platform == "win32":
+        pytest.skip("Windows frozen path tested separately via dbxignorew sibling tests")
+    daemon_exe = tmp_path / "dbxignored"
     daemon_exe.write_text("")
-    cli_name = "dbxignore.exe" if sys.platform == "win32" else "dbxignore"
-    cli_exe = tmp_path / cli_name
+    cli_exe = tmp_path / "dbxignore"
     cli_exe.write_text("")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(daemon_exe))
@@ -241,3 +245,83 @@ def test_detect_invocation_falls_back_to_python3_when_sys_executable_empty(
     exe, args = _common.detect_invocation()
     assert exe == Path("/usr/bin/python3")
     assert args == "-m dbxignore daemon"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="dbxignorew is Windows-only")
+def test_detect_invocation_windows_frozen_returns_dbxignorew_sibling(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Windows + frozen + dbxignorew.exe sibling exists → return the sibling
+    with "daemon", not sys.executable.
+    """
+    cli_exe = tmp_path / "dbxignore.exe"
+    cli_exe.write_text("")
+    helper_exe = tmp_path / "dbxignorew.exe"
+    helper_exe.write_text("")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(cli_exe))
+    from dbxignore.install import _common
+
+    exe, args = _common.detect_invocation()
+    assert exe == helper_exe
+    assert args == "daemon"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="dbxignorew is Windows-only")
+def test_detect_invocation_windows_frozen_falls_back_when_helper_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Windows + frozen + dbxignorew.exe sibling absent → fall back to
+    sys.executable with a WARNING. (Defensive fallback for truncated
+    bundles; ships only happen with both binaries present.)
+    """
+    cli_exe = tmp_path / "dbxignore.exe"
+    cli_exe.write_text("")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(cli_exe))
+    from dbxignore.install import _common
+
+    with caplog.at_level("WARNING", logger="dbxignore.install._common"):
+        exe, args = _common.detect_invocation()
+    assert exe == cli_exe
+    assert args == "daemon"
+    assert "dbxignorew.exe not found" in caplog.text
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="dbxignorew is Windows-only")
+def test_detect_cli_invocation_windows_frozen_returns_dbxignorew_sibling(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Windows + frozen + dbxignorew.exe sibling exists → shell-verb
+    registry value targets the GUI binary, so verbs invoke without a
+    console flash and route output through MessageBox.
+    """
+    cli_exe = tmp_path / "dbxignore.exe"
+    cli_exe.write_text("")
+    helper_exe = tmp_path / "dbxignorew.exe"
+    helper_exe.write_text("")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(cli_exe))
+    from dbxignore.install import _common
+
+    prefix = _common.detect_cli_invocation()
+    assert prefix == f'"{helper_exe}"'
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="dbxignorew is Windows-only")
+def test_detect_cli_invocation_windows_frozen_falls_back_when_helper_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Windows + frozen + dbxignorew.exe absent → fall back to sys.executable
+    with a WARNING for the shell-verb registry entry.
+    """
+    cli_exe = tmp_path / "dbxignore.exe"
+    cli_exe.write_text("")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(cli_exe))
+    from dbxignore.install import _common
+
+    with caplog.at_level("WARNING", logger="dbxignore.install._common"):
+        prefix = _common.detect_cli_invocation()
+    assert prefix == f'"{cli_exe}"'
+    assert "dbxignorew.exe not found" in caplog.text

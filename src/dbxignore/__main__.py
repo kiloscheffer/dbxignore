@@ -1,13 +1,15 @@
-"""Entry point for `python -m dbxignore` and (after Task 10's pyproject
-change) for the `dbxignore` console script.
+"""Entry point for `python -m dbxignore` and the `dbxignore` console script.
 
-On Windows, _windows_console.early_init() runs BEFORE the cli import:
-- Attaches the GUI-subsystem binary to the parent console if one exists.
-- Pops a MessageBox on Explorer double-click (no parent + no argv).
-- No-op on Linux / macOS.
+Both Windows binaries (dbxignore.exe and dbxignorew.exe) ship from this
+same entry. The console-presence probe in
+src/dbxignore/_windows_dialogs.py:should_use_gui_dialogs() decides
+whether interactive subcommands route output through MessageBox.
 
-The cli import is deferred so rich-click's rich.console.Console() (which
-captures sys.stdout at module-import time) sees the post-attach stdout.
+On Windows we additionally guard against the Explorer double-click case
+on the GUI helper: if dbxignorew.exe is launched with no arguments and
+no console, click would write its usage to a stream that goes nowhere
+and the process would exit silently. The pre-cli hook below pops a
+"this is a command-line tool" MessageBox instead.
 """
 
 from __future__ import annotations
@@ -17,12 +19,34 @@ import sys
 
 def main_entry() -> None:
     if sys.platform == "win32":
-        from dbxignore import _windows_console
-
-        _windows_console.early_init()  # may sys.exit(0) on double-click path
-    from dbxignore.cli import main  # deferred import — after stdio redirect
+        _handle_explorer_double_click()
+    from dbxignore.cli import main
 
     main()
+
+
+def _handle_explorer_double_click() -> None:
+    """Pop a help MessageBox + exit if invoked by Explorer double-click on
+    the GUI helper (dbxignorew.exe).
+
+    Identified by (a) empty argv beyond the program name and (b) no
+    attached console window. The console-subsystem dbxignore.exe always
+    has a console at startup, so it bypasses via (b) — click prints
+    usage to the terminal normally.
+    """
+    if len(sys.argv) > 1:
+        return
+    from dbxignore import _windows_dialogs
+
+    if not _windows_dialogs.should_use_gui_dialogs():
+        return
+    _windows_dialogs.show_info(
+        "dbxignore is a command-line tool.\n\n"
+        "Open Windows Terminal, PowerShell, or Command Prompt and run:\n\n"
+        "    dbxignore --help\n\n"
+        "for the list of available commands."
+    )
+    sys.exit(0)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,20 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
+# Valid daemon process names for the is_daemon_alive name guard. The
+# `"python"` substring check covers source runs (`python -m dbxignore daemon`
+# and `pythonw -m dbxignore daemon`); this set covers the frozen-binary
+# names: dbxignore.exe (CLI; foreground daemon launches), dbxignorew.exe
+# (Task Scheduler default after PR #239), and their Linux/macOS analogs.
+_DAEMON_PROCESS_NAMES: frozenset[str] = frozenset(
+    {
+        "dbxignore",
+        "dbxignore.exe",
+        "dbxignorew",
+        "dbxignorew.exe",
+    }
+)
+
 
 @dataclass
 class LastError:
@@ -109,9 +123,10 @@ def is_daemon_alive(pid: int | None, create_time: float | None = None) -> bool:
     the process at that PID is plausibly a dbxignore daemon by name: a
     recycled PID claimed by an unrelated process registers as alive under
     a bare existence check, which is the PID-reuse false positive we want
-    to avoid. Frozen PyInstaller installs and the unified binary run as
-    ``dbxignore.exe``; source runs are typically ``python -m dbxignore daemon``
-    (or pytest under the test suite).
+    to avoid. Frozen PyInstaller installs run as ``dbxignore.exe`` (terminal
+    CLI) or ``dbxignorew.exe`` (Task Scheduler / shell-verb GUI helper);
+    source runs are typically ``python -m dbxignore daemon`` or
+    ``pythonw -m dbxignore daemon`` (or pytest under the test suite).
 
     The second stage, gated on a non-None ``create_time``, additionally
     requires the live process's ``psutil.Process.create_time()`` to match
@@ -169,7 +184,7 @@ def is_daemon_alive(pid: int | None, create_time: float | None = None) -> bool:
         name = proc.name().lower()
     except psutil.Error:
         return False
-    if "python" not in name and name not in ("dbxignore", "dbxignore.exe"):
+    if "python" not in name and name not in _DAEMON_PROCESS_NAMES:
         return False
     if create_time is None:
         return True

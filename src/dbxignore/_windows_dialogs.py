@@ -1,14 +1,17 @@
-"""Windows MessageBox dialogs for shell-verb interactive subcommands.
+"""Windows MessageBox dialogs for the GUI-subsystem dbxignorew.exe binary.
 
-When the Explorer shell-integration verbs registered by `dbxignore install`
-invoke the binary (e.g. right-click -> Ignore from Dropbox), the resulting
-process has no console — the GUI-subsystem binary built by #30 leaves
-sys.stdio at None, so click.confirm and click.echo are invisible.
+When `dbxignorew.exe` is invoked — by Windows Task Scheduler at logon, by
+an Explorer shell-verb registry entry (right-click → Ignore from Dropbox),
+or by an Explorer double-click — the process has no console window and no
+inherited stdio handle. `should_use_gui_dialogs()` checks both conditions
+to route output through MessageBox instead of the click.echo / click.confirm
+paths that would be invisible.
 
-This module provides MessageBox-based replacements for the
-destructive-confirmation + error-reporting paths that those subcommands
-need. Used only when sys.stdout is None at the cli-handler runtime
-(the "no stdio" signal that the shell-verb context produces).
+The console-subsystem `dbxignore.exe` binary always has a console at
+startup, so `should_use_gui_dialogs()` returns False there — the click
+paths run normally. `dbxignore.exe` launched with `CREATE_NO_WINDOW` from
+automation also returns False — the inherited pipe handle is real and output
+should flow there, not a MessageBox the parent script can't see.
 """
 
 from __future__ import annotations
@@ -28,15 +31,50 @@ _DEFAULT_TITLE = "dbxignore"
 
 
 def should_use_gui_dialogs() -> bool:
-    """True if the current process is in the no-stdio Windows GUI context
-    (PyInstaller noconsole binary launched without an inherited console
-    or a parent console — i.e., the Explorer shell-verb invocation path).
+    """True if the current process has no console AND stdio has no real backing.
 
-    Returns False on the trampoline path, in terminals, and on non-Windows.
+    Routes output through MessageBox in two scenarios:
+    - `dbxignorew.exe` invoked by Task Scheduler / Explorer shell verbs /
+      double-click: no console, PyInstaller noconsole-bootloader stub writer
+      whose `fileno()` raises.
+    - Unusual session states where the GetConsoleWindow probe itself fails
+      (defensive fall-through).
+
+    Returns False on:
+    - The console-subsystem `dbxignore.exe` (has a real console at startup).
+    - `dbxignore.exe` launched with `CREATE_NO_WINDOW` from automation
+      (no console, but `sys.stdout` is a real inherited pipe — output
+      should flow there, not a MessageBox the parent can't see).
+    - The pip/uv-tool trampoline (inherits a console from the launching shell).
+    - Non-Windows.
     """
     if sys.platform != "win32":
         return False
-    return sys.stdout is None
+    try:
+        if ctypes.windll.kernel32.GetConsoleWindow():  # type: ignore[attr-defined, unused-ignore]
+            return False
+    except (OSError, AttributeError):
+        # AttributeError on non-Windows (defensive); OSError on unusual
+        # session states. Conservative fall-through: treat as GUI so
+        # destructive operations get a visible MessageBox confirmation
+        # rather than silently auto-confirming via click.confirm.
+        return True
+    # No console. Is sys.stdout a real inherited handle (CREATE_NO_WINDOW
+    # parent's pipe) or the PyInstaller noconsole-bootloader stub? Only
+    # the latter routes through MessageBox.
+    if sys.stdout is None:
+        return True
+    try:
+        sys.stdout.fileno()
+    except (AttributeError, OSError, ValueError):
+        return True
+    return False
+
+
+def _show_messagebox(message: str, title: str, flags: int) -> None:
+    """Call user32.MessageBoxW; silent on failure (unusual session state, non-Windows)."""
+    with contextlib.suppress(OSError, AttributeError):
+        ctypes.windll.user32.MessageBoxW(None, message, title, flags)  # type: ignore[attr-defined, unused-ignore]
 
 
 def confirm_destructive(message: str, title: str = _DEFAULT_TITLE) -> bool:
@@ -57,12 +95,10 @@ def confirm_destructive(message: str, title: str = _DEFAULT_TITLE) -> bool:
 
 
 def show_error(message: str, title: str = _DEFAULT_TITLE) -> None:
-    """Show a MessageBox error dialog (red X, OK button). Silent on failure
-    (unusual session state, non-Windows)."""
-    with contextlib.suppress(OSError, AttributeError):
-        ctypes.windll.user32.MessageBoxW(  # type: ignore[attr-defined, unused-ignore]
-            None,
-            message,
-            title,
-            _MB_OK | _MB_ICONERROR,
-        )
+    """Show a MessageBox error dialog (red X, OK button)."""
+    _show_messagebox(message, title, _MB_OK | _MB_ICONERROR)
+
+
+def show_info(message: str, title: str = _DEFAULT_TITLE) -> None:
+    """Show a MessageBox info dialog (blue info icon, OK button)."""
+    _show_messagebox(message, title, _MB_OK | _MB_ICONINFORMATION)

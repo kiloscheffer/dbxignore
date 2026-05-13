@@ -1412,12 +1412,11 @@ def test_unignore_refuses_when_match_file_invalid(
 def test_confirm_or_messagebox_skips_gui_on_non_windows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """On non-Windows with stdout=None, _confirm_or_messagebox must NOT call
-    confirm_destructive — the platform guard must short-circuit first.
+    """On non-Windows, _confirm_or_messagebox must NOT call confirm_destructive —
+    the platform guard short-circuits first regardless of console state.
     The CliRunner-based tests above (test_ignore_default_prompts_then_aborts_on_no
     etc.) validate the click.confirm path end-to-end."""
     monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(sys, "stdout", None)
 
     from dbxignore import _windows_dialogs
 
@@ -1446,16 +1445,18 @@ def test_confirm_or_messagebox_skips_gui_on_non_windows(
     assert dialog_calls == []  # GUI branch never reached on non-Windows
 
 
-def test_confirm_or_messagebox_routes_to_gui_when_no_stdout(
+def test_confirm_or_messagebox_routes_to_gui_when_no_console(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """On win32 with sys.stdout=None, _confirm_or_messagebox delegates to
-    _windows_dialogs.confirm_destructive."""
+    """On win32 with no console window (GetConsoleWindow == 0),
+    _confirm_or_messagebox delegates to _windows_dialogs.confirm_destructive."""
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr(sys, "stdout", None)
     dialog_calls: list[str] = []
 
     from dbxignore import _windows_dialogs
+
+    # Simulate the no-console context by making should_use_gui_dialogs return True.
+    monkeypatch.setattr(_windows_dialogs, "should_use_gui_dialogs", lambda: True)
 
     def fake_confirm_destructive(msg: str, **kw: object) -> bool:
         dialog_calls.append(msg)
@@ -1467,30 +1468,31 @@ def test_confirm_or_messagebox_routes_to_gui_when_no_stdout(
     assert dialog_calls == ["Mark path?"]
 
 
-def test_confirm_or_messagebox_routes_to_gui_and_returns_false_when_no_stdout(
+def test_confirm_or_messagebox_routes_to_gui_and_returns_false_when_no_console(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """confirm_destructive returning False is propagated (user clicked No)."""
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr(sys, "stdout", None)
 
     from dbxignore import _windows_dialogs
 
+    monkeypatch.setattr(_windows_dialogs, "should_use_gui_dialogs", lambda: True)
     monkeypatch.setattr(_windows_dialogs, "confirm_destructive", lambda msg, **kw: False)
     result = cli._confirm_or_messagebox("Mark path?")
     assert result is False
 
 
-def test_error_or_messagebox_routes_to_gui_when_no_stdout(
+def test_error_or_messagebox_routes_to_gui_when_no_console(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """On win32 with sys.stdout=None, _error_or_messagebox delegates to
+    """On win32 with no console window, _error_or_messagebox delegates to
     _windows_dialogs.show_error."""
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr(sys, "stdout", None)
     dialog_calls: list[str] = []
 
     from dbxignore import _windows_dialogs
+
+    monkeypatch.setattr(_windows_dialogs, "should_use_gui_dialogs", lambda: True)
 
     def fake_show_error(msg: str, **kw: object) -> None:
         dialog_calls.append(msg)
@@ -1500,15 +1502,18 @@ def test_error_or_messagebox_routes_to_gui_when_no_stdout(
     assert dialog_calls == ["something failed"]
 
 
-def test_error_or_messagebox_routes_to_click_echo_when_stdout_valid(
+def test_error_or_messagebox_routes_to_click_echo_when_console_attached(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """On win32 with a non-None sys.stdout, _error_or_messagebox uses
-    click.echo — not the GUI dialog. Validated via the should_use_gui_dialogs
-    predicate (stdout non-None → predicate False → GUI branch skipped)."""
+    """On win32 with a console window attached (GetConsoleWindow non-zero),
+    _error_or_messagebox uses click.echo — not the GUI dialog."""
     monkeypatch.setattr(sys, "platform", "win32")
-    # sys.stdout is already non-None under pytest.
+
     from dbxignore import _windows_dialogs
+
+    # Stub directly: on non-Windows, ctypes.windll is absent and the
+    # conservative fallback returns True, which this test doesn't exercise.
+    monkeypatch.setattr(_windows_dialogs, "should_use_gui_dialogs", lambda: False)
 
     dialog_calls: list[str] = []
 
@@ -1516,7 +1521,7 @@ def test_error_or_messagebox_routes_to_click_echo_when_stdout_valid(
         dialog_calls.append(msg)
 
     monkeypatch.setattr(_windows_dialogs, "show_error", fake_show_error)
-    # should_use_gui_dialogs → False (stdout is not None) → show_error NOT called.
+    # should_use_gui_dialogs → False (console attached) → show_error NOT called.
     assert not _windows_dialogs.should_use_gui_dialogs()
     cli._error_or_messagebox("oops")
     assert dialog_calls == []  # click.echo path taken, not GUI

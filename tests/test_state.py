@@ -263,6 +263,28 @@ def test_is_daemon_alive_no_longer_recognizes_dbxignored(
     assert state.is_daemon_alive(12345) is False
 
 
+def test_is_daemon_alive_accepts_dbxignorew_process_name(
+    fake_psutil_process: FakePsutilProcess,
+) -> None:
+    """After dual-binary split, the daemon process name on Windows is
+    typically dbxignorew.exe (launched by Task Scheduler with the GUI
+    helper). is_daemon_alive must recognize it as a valid dbxignore daemon
+    so destructive CLI verbs' daemon-alive guard works correctly.
+    """
+    fake_psutil_process(name="dbxignorew.exe")
+    assert state.is_daemon_alive(12345) is True
+
+
+def test_is_daemon_alive_accepts_dbxignorew_without_suffix(
+    fake_psutil_process: FakePsutilProcess,
+) -> None:
+    """proc.name() may return either "dbxignorew" or "dbxignorew.exe"
+    depending on psutil's Windows backend version — both must pass.
+    """
+    fake_psutil_process(name="dbxignorew")
+    assert state.is_daemon_alive(12345) is True
+
+
 def test_is_daemon_alive_create_time_match_returns_true(
     fake_psutil_process: FakePsutilProcess,
 ) -> None:

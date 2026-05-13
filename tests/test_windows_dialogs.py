@@ -1,13 +1,13 @@
 """Tests for src/dbxignore/_windows_dialogs.py.
 
 All tests run cross-platform via sys.modules injection of a fake ctypes.windll
-(same pattern as test_windows_console.py's msvcrt injection). The
-platform-specific predicates are exercised by monkeypatching sys.platform and
-sys.stdout.
+(see the FakeKernel32 / FakeUser32 helpers below). The platform-specific
+predicates are exercised by monkeypatching sys.platform and ctypes.windll.
 """
 
 from __future__ import annotations
 
+import ctypes
 import sys
 import types
 
@@ -16,40 +16,105 @@ import pytest  # noqa: TC002
 from dbxignore import _windows_dialogs
 
 # ---------------------------------------------------------------------------
-# should_use_gui_dialogs
+# should_use_gui_dialogs — fake-kernel32 factory + tests
 # ---------------------------------------------------------------------------
 
 
-def test_should_use_gui_dialogs_false_on_non_windows(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Returns False on any non-Windows platform regardless of sys.stdout."""
-    monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(sys, "stdout", None)
-    assert _windows_dialogs.should_use_gui_dialogs() is False
+def _make_fake_kernel32_windll(
+    getconsolewindow_result: int | type[BaseException] | BaseException,
+) -> object:
+    """Build a fake ctypes.windll with a kernel32.GetConsoleWindow stub.
+
+    `getconsolewindow_result` is either an int returned by the stub or an
+    exception instance/class raised by it.
+    """
+
+    class FakeKernel32:
+        @staticmethod
+        def GetConsoleWindow() -> int:  # noqa: N802
+            if isinstance(getconsolewindow_result, BaseException) or (
+                isinstance(getconsolewindow_result, type)
+                and issubclass(getconsolewindow_result, BaseException)
+            ):
+                raise getconsolewindow_result
+            return getconsolewindow_result
+
+    return types.SimpleNamespace(kernel32=FakeKernel32())
 
 
-def test_should_use_gui_dialogs_false_when_stdout_valid(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Returns False when sys.platform is win32 but sys.stdout is a real stream
-    (terminal / trampoline path)."""
-    monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr(sys, "stdout", sys.__stdout__ or sys.stderr)  # any non-None stream
-    assert _windows_dialogs.should_use_gui_dialogs() is False
-
-
-def test_should_use_gui_dialogs_true_in_shell_verb_context(
+def test_should_use_gui_dialogs_when_no_console_and_no_stdio_backing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Returns True when sys.platform == 'win32' AND sys.stdout is None —
-    the signature of a PyInstaller noconsole binary launched by Explorer."""
+    """No console window AND stdio has no real fileno → True (dbxignorew.exe
+    GUI helper invoked by Task Scheduler / Explorer / double-click)."""
     monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(ctypes, "windll", _make_fake_kernel32_windll(0), raising=False)
+
+    # PyInstaller noconsole bootloader stub: writable but no fileno.
+    class NoFilenoStream:
+        def fileno(self) -> int:
+            raise OSError("no fileno on noconsole stub")
+
+    monkeypatch.setattr(sys, "stdout", NoFilenoStream())
+    assert _windows_dialogs.should_use_gui_dialogs() is True
+
+
+def test_should_use_gui_dialogs_false_when_no_console_but_stdio_has_fileno(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No console window BUT stdio has a real fileno (CREATE_NO_WINDOW
+    invocation from automation) → False. Output should flow through the
+    inherited pipe, not a MessageBox the parent script can't see.
+    """
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(ctypes, "windll", _make_fake_kernel32_windll(0), raising=False)
+
+    class RealFilenoStream:
+        def fileno(self) -> int:
+            return 1
+
+    monkeypatch.setattr(sys, "stdout", RealFilenoStream())
+    assert _windows_dialogs.should_use_gui_dialogs() is False
+
+
+def test_should_use_gui_dialogs_true_when_no_console_and_stdout_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No console window AND sys.stdout is None (legacy noconsole shape) → True."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(ctypes, "windll", _make_fake_kernel32_windll(0), raising=False)
     monkeypatch.setattr(sys, "stdout", None)
     assert _windows_dialogs.should_use_gui_dialogs() is True
 
 
-def test_should_use_gui_dialogs_false_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Returns False on macOS even with stdout=None (non-Windows gate)."""
-    monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(sys, "stdout", None)
+def test_should_use_gui_dialogs_when_console_attached(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Console window attached (non-zero handle) → False on Windows."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(ctypes, "windll", _make_fake_kernel32_windll(0x12345), raising=False)
     assert _windows_dialogs.should_use_gui_dialogs() is False
+
+
+def test_should_use_gui_dialogs_returns_false_on_non_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert _windows_dialogs.should_use_gui_dialogs() is False
+
+
+def test_should_use_gui_dialogs_returns_true_on_getconsolewindow_oserror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OSError from GetConsoleWindow() falls through to True (conservative: treat as GUI).
+
+    This is the safety-sensitive branch: a probe failure on an unusual
+    Windows session state must NOT cause destructive operations to silently
+    auto-confirm. Returning True ensures the MessageBox confirmation fires.
+    """
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(
+        ctypes, "windll", _make_fake_kernel32_windll(OSError("no window station")), raising=False
+    )
+    assert _windows_dialogs.should_use_gui_dialogs() is True
 
 
 # ---------------------------------------------------------------------------
@@ -188,3 +253,116 @@ def test_show_error_swallows_attributeerror_silently(monkeypatch: pytest.MonkeyP
     """AttributeError (ctypes.windll absent) must not propagate."""
     monkeypatch.setattr("ctypes.windll", None, raising=False)
     _windows_dialogs.show_error("msg")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# show_info
+# ---------------------------------------------------------------------------
+
+
+def test_show_info_calls_messagebox_with_ok_and_information_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MessageBoxW must be called with MB_OK | MB_ICONINFORMATION (0x40)."""
+    fake_windll = _make_fake_windll(messagebox_return=1)  # IDOK
+    monkeypatch.setattr("ctypes.windll", fake_windll, raising=False)
+    _windows_dialogs.show_info("this is a cli tool", title="dbxignore")
+    calls = fake_windll._calls
+    assert len(calls) == 1
+    hwnd, text, caption, utype = calls[0]
+    assert hwnd is None
+    assert text == "this is a cli tool"
+    assert caption == "dbxignore"
+    # MB_OK (0x0) | MB_ICONINFORMATION (0x40) == 0x40
+    assert utype == (0x00000000 | 0x00000040)
+
+
+def test_show_info_uses_default_title(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When no title is supplied, the default 'dbxignore' title is used."""
+    fake_windll = _make_fake_windll(messagebox_return=1)
+    monkeypatch.setattr("ctypes.windll", fake_windll, raising=False)
+    _windows_dialogs.show_info("msg")
+    calls = fake_windll._calls
+    assert calls[0][2] == "dbxignore"
+
+
+def test_show_info_swallows_oserror_silently(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OSError in MessageBoxW must not propagate — show_info returns None."""
+
+    def _raise_oserror(*args: object, **kwargs: object) -> int:
+        raise OSError("no window station")
+
+    fake_user32 = types.SimpleNamespace(MessageBoxW=_raise_oserror)
+    fake_windll = types.SimpleNamespace(user32=fake_user32)
+    monkeypatch.setattr("ctypes.windll", fake_windll, raising=False)
+    _windows_dialogs.show_info("msg")  # must not raise
+
+
+def test_show_info_swallows_attributeerror_silently(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AttributeError (ctypes.windll absent) must not propagate."""
+    monkeypatch.setattr("ctypes.windll", None, raising=False)
+    _windows_dialogs.show_info("msg")  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# _handle_explorer_double_click (via __main__)
+# ---------------------------------------------------------------------------
+
+
+def test_handle_explorer_double_click_no_op_when_argv_has_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """argv with 2+ elements → returns without calling show_info or sys.exit."""
+    from dbxignore import __main__
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "argv", ["dbxignorew.exe", "status"])
+    show_info_calls: list[str] = []
+    monkeypatch.setattr(
+        _windows_dialogs, "show_info", lambda msg, **kw: show_info_calls.append(msg)
+    )
+
+    __main__._handle_explorer_double_click()
+
+    assert show_info_calls == []
+
+
+def test_handle_explorer_double_click_no_op_when_console_attached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """argv empty + console attached (should_use_gui_dialogs → False) → no dialog."""
+    from dbxignore import __main__
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "argv", ["dbxignorew.exe"])
+    monkeypatch.setattr(_windows_dialogs, "should_use_gui_dialogs", lambda: False)
+    show_info_calls: list[str] = []
+    monkeypatch.setattr(
+        _windows_dialogs, "show_info", lambda msg, **kw: show_info_calls.append(msg)
+    )
+
+    __main__._handle_explorer_double_click()
+
+    assert show_info_calls == []
+
+
+def test_handle_explorer_double_click_shows_info_and_exits_when_no_console(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """argv empty + no console (should_use_gui_dialogs → True) → show_info + sys.exit(0)."""
+    from dbxignore import __main__
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "argv", ["dbxignorew.exe"])
+    monkeypatch.setattr(_windows_dialogs, "should_use_gui_dialogs", lambda: True)
+    show_info_calls: list[str] = []
+    monkeypatch.setattr(
+        _windows_dialogs, "show_info", lambda msg, **kw: show_info_calls.append(msg)
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        __main__._handle_explorer_double_click()
+
+    assert exc_info.value.code == 0
+    assert len(show_info_calls) == 1
+    assert "dbxignore --help" in show_info_calls[0]

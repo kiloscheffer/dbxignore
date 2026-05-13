@@ -899,6 +899,9 @@ def _sweep_once(
     daemon_create_time: float | None = None,
     *,
     stop_event: threading.Event | None = None,
+    cache_ready: threading.Event | None = None,
+    deferred: _DeferredEvents | None = None,
+    redispatch: Callable[[Any], None] | None = None,
 ) -> None:
     sweep_start = time.perf_counter()
 
@@ -918,6 +921,36 @@ def _sweep_once(
             logger.debug("sweep cancelled in phase 1; skipping remaining roots")
             return
         cache.load_root(r, stop_event=stop_event)
+
+    # Re-check after Phase 1: ``load_root`` returns early with a partial
+    # cache when ``stop_event`` fires mid-walk during the FINAL root, and
+    # the top-of-loop guard above doesn't catch that. Without this check,
+    # the cache_ready signal below — or the Phase 2 reconcile that
+    # follows — would race against incomplete rules and could clear
+    # markers for not-yet-loaded rule files. (Codex P2 followup on PR #240.)
+    if stop_event is not None and stop_event.is_set():
+        logger.debug("sweep cancelled after phase 1; skipping reconcile")
+        return
+
+    # Initial-sweep-only: signal cache readiness and drain the deferred-
+    # event queue BEFORE Phase 2's reconcile pass starts. Hourly ticks
+    # pass cache_ready=None / deferred=None and skip both steps — the
+    # cache was already signalled ready by the initial sweep, and the
+    # queue was drained there too. Co-locating the signal + drain with
+    # Phase 1's completion (instead of pre-loading in the worker and
+    # re-loading here) eliminates the double-walk that the worker's
+    # pre-load + Phase 1 used to incur on big trees. (Codex P2 followup
+    # on PR #240.)
+    if cache_ready is not None:
+        cache_ready.set()
+    if deferred is not None and redispatch is not None:
+        for event in deferred.drain():
+            if stop_event is not None and stop_event.is_set():
+                return
+            try:
+                redispatch(event)
+            except Exception:  # noqa: BLE001 — one bad event must not skip the rest
+                logger.exception("deferred event re-dispatch failed: %r", event)
 
     # Phase 2: reconcile each root. Reads cache (no writes) and writes
     # per-file markers on disjoint paths, so threads don't contend.
@@ -1132,56 +1165,27 @@ def _initial_sweep_worker(
     rather than escaping the worker thread silently and stranding the
     daemon in ``state=starting`` (item #91).
 
-    The ``cache_ready`` event is set AFTER the rule cache is populated
-    (here, between the optional pad-wait and ``_sweep_once``) so that
-    OTHER/DIR_CREATE events queued in the debouncer during startup wait
-    until the cache is loaded before dispatching. Loading the cache
-    pre-sweep is a duplicate of ``_sweep_once`` Phase 1's ``load_root``
-    calls; ``_load_if_changed``'s mtime+size short-circuit makes the
-    second load a near-no-op, and the explicit-then-implicit shape keeps
-    the readiness signal at the point readers actually need it.
+    Cache loading, the ``cache_ready`` signal, and the deferred-event
+    drain all live INSIDE ``_sweep_once`` (between Phase 1 and Phase 2)
+    so that the initial sweep walks the tree exactly once. An earlier
+    shape pre-loaded the cache in this worker and then re-ran Phase 1
+    in ``_sweep_once``; ``_load_if_changed`` skipped reparse, but
+    ``RuleCache.load_root``'s ``os.walk`` still ran in full, doubling
+    the startup wall-clock on big trees. (Codex P2 followup on PR #240.)
     """
     try:
         pad_s = _slow_sweep_pad_seconds()
         if pad_s > 0 and stop_event.wait(pad_s):
             return
-        for r in roots:
-            if stop_event.is_set():
-                return
-            cache.load_root(r, stop_event=stop_event)
-        # Re-check after the loop: if `stop_event` fired during the FINAL
-        # `load_root`'s walk, the top-of-loop guard above doesn't catch it.
-        # `RuleCache.load_root` returns early with a PARTIAL cache when
-        # cooperative-cancellation fires mid-walk. Setting `cache_ready`
-        # in that state would let the debouncer drain deferred events
-        # against incomplete rules — match() returns False for any rule
-        # whose `.dropboxignore` hadn't loaded yet, and reconcile would
-        # clear the corresponding marker. (Codex P2 followup on PR #240.)
-        if stop_event.is_set():
-            return
-        if cache_ready is not None:
-            cache_ready.set()
-        # Drain any events that arrived while the cache was loading and were
-        # deferred by `_dispatch`. The drain runs BEFORE `_sweep_once` so a
-        # newly-created ignored directory is marked within ~cache-load-time
-        # rather than waiting for the sweep's ~50s wall-clock to reach it.
-        # Events that arrive AFTER `cache_ready.set()` skip the queue entirely
-        # (atomic check inside `_DeferredEvents.append`), so this drain handles
-        # the bounded startup-window backlog and nothing more.
-        if deferred is not None and redispatch is not None:
-            for event in deferred.drain():
-                if stop_event.is_set():
-                    return
-                try:
-                    redispatch(event)
-                except Exception:  # noqa: BLE001 — one bad event must not skip the rest
-                    logger.exception("deferred event re-dispatch failed: %r", event)
         _sweep_once(
             roots,
             cache,
             daemon_started,
             daemon_create_time,
             stop_event=stop_event,
+            cache_ready=cache_ready,
+            deferred=deferred,
+            redispatch=redispatch,
         )
     except Exception:
         logger.exception("initial sweep worker failed; shutting daemon down")

@@ -8,12 +8,14 @@ helper's parsing branches; an integration test pins the worker call site.
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import threading
 import time
 from typing import TYPE_CHECKING
 
-from dbxignore import daemon, state
+from dbxignore import daemon, reconcile, state
+from dbxignore.rules import RuleCache
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -340,36 +342,48 @@ def test_initial_sweep_worker_no_pad_when_marker_missing(
     )
 
 
-def test_initial_sweep_worker_sets_cache_ready_before_sweep(
+def test_sweep_once_sets_cache_ready_between_phase1_and_phase2(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Pins the item-1 contract: the worker loads the rule cache and signals
-    `cache_ready` BEFORE calling `_sweep_once`. The order matters — debounced
-    events that arrived during the startup window can dispatch the moment
-    `cache_ready` is set, even though Phase 2 (reconcile sweep) is still
-    running. Without this ordering, gated events would queue until the full
-    sweep completes, an unnecessary ~50s delay on big trees."""
+    """Pins the item-1 contract: ``_sweep_once`` signals ``cache_ready``
+    between Phase 1 (load) and Phase 2 (reconcile). The order matters —
+    debounced events that arrived during the startup window can dispatch
+    the moment ``cache_ready`` is set, even though Phase 2 is still
+    running. Without this ordering, gated events would queue until the
+    full sweep completes, an unnecessary ~50s delay on big trees.
+
+    Logic was relocated from ``_initial_sweep_worker`` into ``_sweep_once``
+    in the double-walk fix (Codex P2 followup on PR #240) so that initial
+    sweep walks the tree exactly once; this test now exercises the new
+    ``_sweep_once`` cache_ready / deferred params directly."""
     monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
 
-    cache_ready_was_set_when_sweep_started: list[bool] = []
+    # Track when cache_ready was set relative to reconcile_subtree calls.
+    cache_ready_state_at_reconcile: list[bool] = []
 
-    def fake_sweep_once(*_args: object, **_kwargs: object) -> None:
-        cache_ready_was_set_when_sweep_started.append(cache_ready.is_set())
+    def fake_reconcile(_root: Path, _sub: Path, _cache: object, **_kw: object) -> reconcile.Report:
+        cache_ready_state_at_reconcile.append(cache_ready.is_set())
+        return reconcile.Report()
 
-    monkeypatch.setattr(daemon, "_sweep_once", fake_sweep_once)
+    monkeypatch.setattr(daemon, "reconcile_subtree", fake_reconcile)
 
+    cache = RuleCache()
     stop = threading.Event()
     cache_ready = threading.Event()
-    daemon._initial_sweep_worker(
-        roots=[],  # empty roots → for-loop is a no-op; we test the set-before-sweep wiring
-        cache=None,  # type: ignore[arg-type]
-        daemon_started=None,  # type: ignore[arg-type]
+
+    daemon._sweep_once(
+        roots=[tmp_path],
+        cache=cache,
+        daemon_started=dt.datetime.now(dt.UTC),
         daemon_create_time=None,
         stop_event=stop,
         cache_ready=cache_ready,
     )
-    assert cache_ready_was_set_when_sweep_started == [True], (
-        "cache_ready must be set before _sweep_once is called"
+
+    assert cache_ready.is_set(), "cache_ready must be set after Phase 1"
+    assert cache_ready_state_at_reconcile, "reconcile_subtree was never called"
+    assert all(cache_ready_state_at_reconcile), (
+        "cache_ready must already be set when Phase 2's reconcile calls fire"
     )
 
 
@@ -408,54 +422,45 @@ def test_initial_sweep_worker_does_not_set_cache_ready_when_stopped_early(
     assert not cache_ready.is_set(), "cache_ready must NOT be set when the worker returns early"
 
 
-def test_initial_sweep_worker_does_not_set_cache_ready_when_load_root_returned_partial(
+def test_sweep_once_does_not_set_cache_ready_when_load_root_returned_partial(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 followup on PR #240: if `stop_event` fires mid-walk during
-    the FINAL `cache.load_root`, the top-of-loop stop check above doesn't
-    catch it (the loop has already exited), and `cache_ready.set()` used
-    to fire against a partial cache. The post-loop re-check now refuses
-    to signal ready in that state."""
-    monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
+    """Codex P2 followup on PR #240: if ``stop_event`` fires mid-walk
+    during the FINAL ``cache.load_root``, the top-of-loop stop check
+    inside ``_sweep_once`` doesn't catch it (loop has exited), and
+    ``cache_ready.set()`` used to fire against a partial cache. The
+    post-loop re-check refuses to signal ready in that state.
 
-    sweep_called: list[bool] = []
-    monkeypatch.setattr(daemon, "_sweep_once", lambda *a, **kw: sweep_called.append(True))
+    Logic moved from ``_initial_sweep_worker`` into ``_sweep_once`` so
+    initial sweep walks the tree exactly once; this test targets
+    ``_sweep_once`` directly."""
+    reconcile_calls: list[Path] = []
 
-    # Fake cache whose load_root simulates the "saw stop_event mid-walk,
-    # returned early with partial state" contract.
+    def fake_reconcile(_root: Path, sub: Path, _cache: object, **_kw: object) -> reconcile.Report:
+        reconcile_calls.append(sub)
+        return reconcile.Report()
+
+    monkeypatch.setattr(daemon, "reconcile_subtree", fake_reconcile)
+
+    # Fake cache whose load_root sets stop_event after recording the call —
+    # simulates RuleCache.load_root's cooperative-cancellation surface
+    # (returns early with partial state when stop_event fires mid-walk).
     class PartialLoadCache:
         def __init__(self) -> None:
             self.loaded: list[object] = []
 
         def load_root(self, r: object, stop_event: threading.Event) -> None:
             self.loaded.append(r)
-            # Simulate load_root noticing stop mid-walk: caller set
-            # stop_event before this call, and load_root cooperatively
-            # bails after recording the call but BEFORE the cache is
-            # fully populated. Same effect as a real partial walk.
-            return
+            stop_event.set()  # mid-walk cancellation surface
 
     fake_cache = PartialLoadCache()
     stop = threading.Event()
     cache_ready = threading.Event()
 
-    # Set stop BEFORE the worker enters its load_root call. The first
-    # iteration's top-of-loop check would catch this, so we want the
-    # worker to start with stop unset, fire stop during load_root, then
-    # exit the loop. Easiest: arrange one root, set stop INSIDE
-    # load_root via a wrapper.
-    real_load_root = fake_cache.load_root
-
-    def stop_during_load(r: object, stop_event: threading.Event) -> None:
-        real_load_root(r, stop_event)
-        stop_event.set()  # mid-walk cancellation surface
-
-    fake_cache.load_root = stop_during_load  # type: ignore[method-assign]
-
-    daemon._initial_sweep_worker(
+    daemon._sweep_once(
         roots=[tmp_path],  # one root → loop runs once → no top-of-loop catch
         cache=fake_cache,  # type: ignore[arg-type]
-        daemon_started=None,  # type: ignore[arg-type]
+        daemon_started=dt.datetime.now(dt.UTC),
         daemon_create_time=None,
         stop_event=stop,
         cache_ready=cache_ready,
@@ -466,81 +471,81 @@ def test_initial_sweep_worker_does_not_set_cache_ready_when_load_root_returned_p
     assert not cache_ready.is_set(), (
         "cache_ready MUST stay unset when load_root returned with stop_event set"
     )
-    assert sweep_called == [], "_sweep_once must not run after stop"
+    assert reconcile_calls == [], "Phase 2 reconcile must not run after stop"
 
 
-def test_initial_sweep_worker_drains_deferred_after_cache_ready(
+def test_sweep_once_drains_deferred_between_phases(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Codex P2 followup on PR #240: events that arrived during the
-    startup window MUST be re-dispatched after `cache_ready.set()` so a
+    startup window MUST be re-dispatched after Phase 1 finishes so a
     newly-created ignored directory is marked within ~cache-load-time
-    rather than waiting for the sweep's wall-clock to reach it.
+    rather than waiting for Phase 2's wall-clock to reach it.
 
-    The drain runs BEFORE `_sweep_once` (so the user-visible mark window
-    shrinks) and AFTER `cache_ready.set()` (so the gate's atomic-check
-    sends any concurrent appends down the direct-dispatch path)."""
-    monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
-
-    sweep_called: list[bool] = []
-    monkeypatch.setattr(daemon, "_sweep_once", lambda *a, **kw: sweep_called.append(True))
-
+    The drain runs AFTER ``cache_ready.set()`` (so any concurrent
+    append falls through to direct dispatch via the atomic-check) and
+    BEFORE Phase 2 (so the marker decision uses the loaded cache)."""
     # Pre-load the queue with three deferred "events" (opaque strings here —
-    # the worker passes them through redispatch verbatim).
+    # _sweep_once passes them through redispatch verbatim).
     deferred = daemon._DeferredEvents()
     deferred.append("ev1", threading.Event())  # unset event → append succeeds
     deferred.append("ev2", threading.Event())
     deferred.append("ev3", threading.Event())
 
-    redispatched: list[object] = []
     cache_ready = threading.Event()
-    drain_order: list[str] = []
+    order: list[str] = []
 
     def fake_redispatch(event: object) -> None:
-        # Worker must drain AFTER cache_ready.set() — pin that ordering.
+        # Drain must run AFTER cache_ready.set() — pin that ordering.
         assert cache_ready.is_set(), (
             "cache_ready must be set before deferred events are re-dispatched"
         )
-        drain_order.append("redispatch")
-        redispatched.append(event)
+        order.append(f"redispatch:{event}")
 
-    # _sweep_once should run AFTER all redispatches.
-    def recording_sweep(*_a: object, **_kw: object) -> None:
-        drain_order.append("sweep")
-        sweep_called.append(True)
+    def fake_reconcile(_root: Path, _sub: Path, _cache: object, **_kw: object) -> reconcile.Report:
+        order.append("reconcile")
+        return reconcile.Report()
 
-    monkeypatch.setattr(daemon, "_sweep_once", recording_sweep)
+    monkeypatch.setattr(daemon, "reconcile_subtree", fake_reconcile)
 
-    stop = threading.Event()
-    daemon._initial_sweep_worker(
-        roots=[],
-        cache=None,  # type: ignore[arg-type]
-        daemon_started=None,  # type: ignore[arg-type]
+    daemon._sweep_once(
+        roots=[tmp_path],
+        cache=RuleCache(),
+        daemon_started=dt.datetime.now(dt.UTC),
         daemon_create_time=None,
-        stop_event=stop,
+        stop_event=threading.Event(),
         cache_ready=cache_ready,
         deferred=deferred,
         redispatch=fake_redispatch,
     )
 
-    assert redispatched == ["ev1", "ev2", "ev3"], "drain must replay events in FIFO order"
-    assert drain_order == ["redispatch", "redispatch", "redispatch", "sweep"], (
-        "drain must complete before _sweep_once runs"
+    # All three deferred events fire BEFORE Phase 2's first reconcile.
+    redispatches = [s for s in order if s.startswith("redispatch:")]
+    first_reconcile_idx = next((i for i, s in enumerate(order) if s == "reconcile"), -1)
+    assert redispatches == ["redispatch:ev1", "redispatch:ev2", "redispatch:ev3"], (
+        "drain must replay events in FIFO order"
+    )
+    assert first_reconcile_idx > 0, "Phase 2 reconcile must fire"
+    assert order.index("redispatch:ev3") < first_reconcile_idx, (
+        "drain must complete before Phase 2 reconcile"
     )
     # Queue is empty after drain.
     assert deferred.drain() == []
 
 
-def test_initial_sweep_worker_continues_drain_on_redispatch_exception(
+def test_sweep_once_continues_drain_on_redispatch_exception(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """One bad deferred event (or one whose path vanished between
     deferral and replay) must NOT abort the rest of the drain. The
-    worker logs the exception and continues. Mirrors the watchdog
+    drain logs the exception and continues. Mirrors the watchdog
     handler's broad-except pattern at the dispatch entry — convergence
     is the goal, not strict per-event correctness."""
-    monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
-    monkeypatch.setattr(daemon, "_sweep_once", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        daemon,
+        "reconcile_subtree",
+        lambda r, sub, c, **kw: reconcile.Report(),
+    )
 
     deferred = daemon._DeferredEvents()
     cache_ready = threading.Event()
@@ -556,14 +561,13 @@ def test_initial_sweep_worker_continues_drain_on_redispatch_exception(
             raise RuntimeError("simulated dispatch failure")
         seen.append(event)
 
-    stop = threading.Event()
     caplog.set_level(logging.ERROR, logger="dbxignore.daemon")
-    daemon._initial_sweep_worker(
-        roots=[],
-        cache=None,  # type: ignore[arg-type]
-        daemon_started=None,  # type: ignore[arg-type]
+    daemon._sweep_once(
+        roots=[tmp_path],
+        cache=RuleCache(),
+        daemon_started=dt.datetime.now(dt.UTC),
         daemon_create_time=None,
-        stop_event=stop,
+        stop_event=threading.Event(),
         cache_ready=cache_ready,
         deferred=deferred,
         redispatch=maybe_failing,
@@ -573,3 +577,41 @@ def test_initial_sweep_worker_continues_drain_on_redispatch_exception(
     assert any("deferred event re-dispatch failed" in rec.message for rec in caplog.records), [
         rec.message for rec in caplog.records
     ]
+
+
+def test_initial_sweep_worker_forwards_cache_ready_and_deferred_to_sweep_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Thin wrapper test: the worker now delegates ALL of cache_ready /
+    deferred / redispatch to ``_sweep_once``. Pin the call-site wiring
+    so a future refactor that drops one of the kwargs doesn't silently
+    regress the initial-sweep contract."""
+    monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
+
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_sweep_once(*_args: object, **kwargs: object) -> None:
+        captured_kwargs.update(kwargs)
+
+    monkeypatch.setattr(daemon, "_sweep_once", fake_sweep_once)
+
+    cache_ready = threading.Event()
+    deferred = daemon._DeferredEvents()
+
+    def redispatch(_event: object) -> None:
+        pass
+
+    daemon._initial_sweep_worker(
+        roots=[],
+        cache=None,  # type: ignore[arg-type]
+        daemon_started=None,  # type: ignore[arg-type]
+        daemon_create_time=None,
+        stop_event=threading.Event(),
+        cache_ready=cache_ready,
+        deferred=deferred,
+        redispatch=redispatch,
+    )
+
+    assert captured_kwargs["cache_ready"] is cache_ready
+    assert captured_kwargs["deferred"] is deferred
+    assert captured_kwargs["redispatch"] is redispatch

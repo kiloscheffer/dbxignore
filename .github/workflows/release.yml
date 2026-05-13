@@ -39,10 +39,19 @@ jobs:
         # PyInstaller analyzer miss (the v0.4.0a1 macOS `_cffi_backend` shape)
         # surfaces here rather than fails-on-first-tester. Bash for parity with
         # the macOS leg; Git Bash ships on `windows-latest`.
+        #
+        # Post-#30 the binary is GUI-subsystem (console=False), so Windows
+        # shells don't block on foreground invocation. The capture form below
+        # (assigning to a variable) forces synchronous behavior — bash waits
+        # for the binary to exit before the assignment completes. We also
+        # grep the output for "Usage:" so an import-time crash that produced
+        # no output surfaces as a non-zero exit from grep.
         shell: bash
         run: |
           set -e
-          ./dist/dbxignore.exe --help
+          out=$(./dist/dbxignore.exe --help 2>&1)
+          echo "$out"
+          echo "$out" | grep -q "Usage:"
 
       - name: Upload dist artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

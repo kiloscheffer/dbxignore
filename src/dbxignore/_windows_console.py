@@ -12,11 +12,18 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import os
 import sys
 
 _ATTACH_PARENT_PROCESS = -1
 _MB_OK_ICONINFO = 0x00000040  # MB_OK (0) | MB_ICONINFORMATION (0x40)
 _MESSAGE_TITLE = "dbxignore"
+
+# Win32 standard-handle constants (GetStdHandle argument values)
+_STD_INPUT_HANDLE = -10
+_STD_OUTPUT_HANDLE = -11
+_STD_ERROR_HANDLE = -12
+_INVALID_HANDLE_VALUE = -1
 _MESSAGE_BODY = (
     "dbxignore is a command-line tool.\n\n"
     "Open Windows Terminal, PowerShell, or Command Prompt and run:\n\n"
@@ -111,17 +118,51 @@ def _show_help_message_box() -> None:
         )
 
 
+def _restore_inherited_stdio() -> None:
+    """Rehydrate sys.stdin/stdout/stderr from Win32-inherited OS handles.
+
+    PyInstaller's noconsole bootloader sets sys.stdio to None at startup,
+    even when the parent shell passed in inherited file/pipe handles via
+    STARTF_USESTDHANDLES. Recover the handles via GetStdHandle() and wrap
+    them as Python file objects. Streams that are already valid (e.g. on
+    the CUI trampoline path) are left untouched. Streams whose Win32
+    handle is missing/invalid (Task Scheduler at logon) remain unset —
+    the caller's CONOUT$/CONIN$ fallback fills those.
+    """
+    import msvcrt
+
+    streams: list[tuple[int, str, str, int]] = [
+        (_STD_INPUT_HANDLE, "stdin", "r", os.O_RDONLY),
+        (_STD_OUTPUT_HANDLE, "stdout", "w", os.O_APPEND),
+        (_STD_ERROR_HANDLE, "stderr", "w", os.O_APPEND),
+    ]
+    for std_handle_const, sys_attr, mode, fd_flags in streams:
+        if _is_stream_connected(getattr(sys, sys_attr)):
+            continue
+        try:
+            handle = ctypes.windll.kernel32.GetStdHandle(std_handle_const)  # type: ignore[attr-defined, unused-ignore]
+            if handle in (0, _INVALID_HANDLE_VALUE):
+                continue
+            fd = msvcrt.open_osfhandle(handle, fd_flags)
+            stream = os.fdopen(fd, mode, encoding="utf-8", buffering=1)
+            setattr(sys, sys_attr, stream)
+        except (OSError, AttributeError, ValueError):
+            continue
+
+
 def _redirect_stdio_to_attached_console() -> None:
     """Reopen each stream against CONOUT$ / CONIN$ ONLY if it's missing or
-    invalid. Each stream is handled independently — preserves mixed cases
-    like `dbxignore --version 2> err.log` (stdout to console, stderr to file).
+    invalid AFTER rehydrating any Win32-inherited handles. Each stream is
+    handled independently — preserves mixed cases like
+    `dbxignore --version 2> err.log` (stdout to console, stderr to file).
 
-    CRITICAL: don't replace streams that have valid inherited FDs. If the user
-    ran `dbxignore --version > out.txt` or `dbxignore --version | findstr ...`
-    from a shell, the inherited stdio is the redirected file or pipe —
-    overwriting with CONOUT$ would send output to the console instead,
-    breaking the redirection contract.
+    The rehydrate-first order is load-bearing for the PyInstaller frozen
+    binary: noconsole mode sets sys.stdio to None even when the parent
+    shell passed in redirected file/pipe handles. Without the
+    GetStdHandle pass, `dbxignore --version > out.txt` would overwrite
+    the inherited file handle with CONOUT$ and write to the console.
     """
+    _restore_inherited_stdio()
     if not _is_stream_connected(sys.stdout):
         with contextlib.suppress(OSError):
             sys.stdout = open("CONOUT$", "w", encoding="utf-8", buffering=1)  # noqa: SIM115

@@ -180,12 +180,17 @@ def test_redirect_preserves_valid_stdout_and_reopens_missing_stderr(
 ) -> None:
     """Mixed case: stdout valid (already wired up), stderr None.
     Must NOT overwrite stdout; MUST reopen stderr against CONOUT$.
-    Verifies the per-stream preservation contract from the spec."""
+    Verifies the per-stream preservation contract from the spec.
+
+    _restore_inherited_stdio is mocked to a no-op here — this test
+    exercises the CONOUT$/CONIN$ fallback specifically, not the
+    Win32-handle rehydration path."""
     monkeypatch.setattr(sys, "platform", "win32")
     fake_stdout = sys.stdout  # already valid under pytest
     monkeypatch.setattr(sys, "stdout", fake_stdout)
     monkeypatch.setattr(sys, "stderr", None)
     monkeypatch.setattr(sys, "stdin", None)
+    monkeypatch.setattr(_windows_console, "_restore_inherited_stdio", lambda: None)
 
     opened: list[tuple[str, str]] = []
 
@@ -202,3 +207,88 @@ def test_redirect_preserves_valid_stdout_and_reopens_missing_stderr(
     assert sys.stdin is not None
     # Confirm the opens went to CONOUT$ (for stderr) and CONIN$ (for stdin) — NOT stdout
     assert opened == [("CONOUT$", "w"), ("CONIN$", "r")]
+
+
+def test_restore_inherited_stdio_skips_already_valid_streams(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If a stream already has a valid fileno, _restore should leave it alone
+    even when GetStdHandle would return a different handle. Verifies the
+    "skip if already valid" guard."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(_windows_console, "_is_stream_connected", lambda s: s is not None)
+    sentinel_stdout = sys.stdout
+    sentinel_stderr = sys.stderr
+    sentinel_stdin = sys.stdin
+    _windows_console._restore_inherited_stdio()
+    assert sys.stdout is sentinel_stdout
+    assert sys.stderr is sentinel_stderr
+    assert sys.stdin is sentinel_stdin
+
+
+def test_restore_inherited_stdio_recovers_valid_win32_handle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If sys.stdout is None but GetStdHandle returns a valid handle, the
+    helper should wrap it as a Python file object. Verifies the
+    rehydrate-before-fallback contract."""
+    import msvcrt
+
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    monkeypatch.setattr(sys, "stdin", None)
+
+    # Mock the Win32 GetStdHandle to return a fake "valid" handle (any positive int).
+    # Use __getattr__ dispatch to avoid ruff N802 (non-lowercase method name).
+    class FakeKernel32:
+        def __getattr__(self, name: str):  # type: ignore[no-untyped-def]
+            if name == "GetStdHandle":
+                return lambda which: 42  # any non-zero non-(-1) value
+            raise AttributeError(name)
+
+    fake_windll = type("FakeWindll", (), {"kernel32": FakeKernel32()})()
+    monkeypatch.setattr("ctypes.windll", fake_windll, raising=False)
+
+    fake_streams = [object(), object(), object()]
+    fake_idx = [0]
+
+    def fake_open_osfhandle(handle: int, flags: int) -> int:
+        return 100 + handle  # fake fd
+
+    def fake_fdopen(fd: int, mode: str, **kwargs: object) -> object:
+        stream = fake_streams[fake_idx[0]]
+        fake_idx[0] += 1
+        return stream
+
+    monkeypatch.setattr(msvcrt, "open_osfhandle", fake_open_osfhandle)
+    monkeypatch.setattr("os.fdopen", fake_fdopen)
+
+    _windows_console._restore_inherited_stdio()
+    assert sys.stdin is fake_streams[0]
+    assert sys.stdout is fake_streams[1]
+    assert sys.stderr is fake_streams[2]
+
+
+def test_restore_inherited_stdio_skips_invalid_handle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If GetStdHandle returns 0 or INVALID_HANDLE_VALUE (-1), the helper
+    should leave sys.<stream> unchanged (still None) — caller's CONOUT$
+    fallback fills it."""
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    monkeypatch.setattr(sys, "stdin", None)
+
+    class FakeKernel32:
+        def __getattr__(self, name: str):  # type: ignore[no-untyped-def]
+            if name == "GetStdHandle":
+                return lambda which: -1  # INVALID_HANDLE_VALUE
+            raise AttributeError(name)
+
+    fake_windll = type("FakeWindll", (), {"kernel32": FakeKernel32()})()
+    monkeypatch.setattr("ctypes.windll", fake_windll, raising=False)
+
+    _windows_console._restore_inherited_stdio()
+    assert sys.stdout is None
+    assert sys.stderr is None
+    assert sys.stdin is None

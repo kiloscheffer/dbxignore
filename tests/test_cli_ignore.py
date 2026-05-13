@@ -1511,11 +1511,8 @@ def test_error_or_messagebox_routes_to_click_echo_when_console_attached(
 
     from dbxignore import _windows_dialogs
 
-    # Stub should_use_gui_dialogs directly so the test is platform-agnostic.
-    # On non-Windows, ctypes.windll doesn't exist and the function's
-    # AttributeError-branch returns True (conservative fallback), which would
-    # contradict the predicate this test asserts. The three adjacent
-    # GUI-routing tests use the same monkeypatch pattern.
+    # Stub directly: on non-Windows, ctypes.windll is absent and the
+    # conservative fallback returns True, which this test doesn't exercise.
     monkeypatch.setattr(_windows_dialogs, "should_use_gui_dialogs", lambda: False)
 
     dialog_calls: list[str] = []

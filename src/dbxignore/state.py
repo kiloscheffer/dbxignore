@@ -21,6 +21,20 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
+# Valid daemon process names for the is_daemon_alive name guard. The
+# `"python"` substring check covers source runs (`python -m dbxignore daemon`
+# and `pythonw -m dbxignore daemon`); this set covers the frozen-binary
+# names: dbxignore.exe (CLI; foreground daemon launches), dbxignorew.exe
+# (Task Scheduler default after PR #239), and their Linux/macOS analogs.
+_DAEMON_PROCESS_NAMES: frozenset[str] = frozenset(
+    {
+        "dbxignore",
+        "dbxignore.exe",
+        "dbxignorew",
+        "dbxignorew.exe",
+    }
+)
+
 
 @dataclass
 class LastError:
@@ -170,12 +184,7 @@ def is_daemon_alive(pid: int | None, create_time: float | None = None) -> bool:
         name = proc.name().lower()
     except psutil.Error:
         return False
-    if "python" not in name and name not in (
-        "dbxignore",
-        "dbxignore.exe",
-        "dbxignorew",
-        "dbxignorew.exe",
-    ):
+    if "python" not in name and name not in _DAEMON_PROCESS_NAMES:
         return False
     if create_time is None:
         return True

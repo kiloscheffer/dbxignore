@@ -172,10 +172,6 @@ def _stub_get_console_window(monkeypatch: pytest.MonkeyPatch) -> None:
 
     class _FakeWindll:
         kernel32 = _FakeKernel32WithConsole()
-        # Preserve user32 access for tests that monkeypatch confirm_destructive
-        # / show_error — they set ctypes.windll directly and don't go through
-        # this fake, so this attribute is never reached in practice.
-        user32 = getattr(getattr(ctypes, "windll", None), "user32", None)
 
     monkeypatch.setattr(ctypes, "windll", _FakeWindll(), raising=False)
 

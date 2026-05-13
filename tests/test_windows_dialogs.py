@@ -16,8 +16,30 @@ import pytest  # noqa: TC002
 from dbxignore import _windows_dialogs
 
 # ---------------------------------------------------------------------------
-# should_use_gui_dialogs
+# should_use_gui_dialogs — fake-kernel32 factory + tests
 # ---------------------------------------------------------------------------
+
+
+def _make_fake_kernel32_windll(
+    getconsolewindow_result: int | type[BaseException] | BaseException,
+) -> object:
+    """Build a fake ctypes.windll with a kernel32.GetConsoleWindow stub.
+
+    `getconsolewindow_result` is either an int returned by the stub or an
+    exception instance/class raised by it.
+    """
+
+    class FakeKernel32:
+        @staticmethod
+        def GetConsoleWindow() -> int:  # noqa: N802
+            if isinstance(getconsolewindow_result, BaseException) or (
+                isinstance(getconsolewindow_result, type)
+                and issubclass(getconsolewindow_result, BaseException)
+            ):
+                raise getconsolewindow_result
+            return getconsolewindow_result
+
+    return types.SimpleNamespace(kernel32=FakeKernel32())
 
 
 def test_should_use_gui_dialogs_when_no_console_and_no_stdio_backing(
@@ -26,16 +48,7 @@ def test_should_use_gui_dialogs_when_no_console_and_no_stdio_backing(
     """No console window AND stdio has no real fileno → True (dbxignorew.exe
     GUI helper invoked by Task Scheduler / Explorer / double-click)."""
     monkeypatch.setattr(sys, "platform", "win32")
-
-    class FakeKernel32:
-        @staticmethod
-        def GetConsoleWindow() -> int:  # noqa: N802
-            return 0
-
-    class FakeWindll:
-        kernel32 = FakeKernel32()
-
-    monkeypatch.setattr(ctypes, "windll", FakeWindll(), raising=False)
+    monkeypatch.setattr(ctypes, "windll", _make_fake_kernel32_windll(0), raising=False)
 
     # PyInstaller noconsole bootloader stub: writable but no fileno.
     class NoFilenoStream:
@@ -54,19 +67,8 @@ def test_should_use_gui_dialogs_false_when_no_console_but_stdio_has_fileno(
     inherited pipe, not a MessageBox the parent script can't see.
     """
     monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(ctypes, "windll", _make_fake_kernel32_windll(0), raising=False)
 
-    class FakeKernel32:
-        @staticmethod
-        def GetConsoleWindow() -> int:  # noqa: N802
-            return 0
-
-    class FakeWindll:
-        kernel32 = FakeKernel32()
-
-    monkeypatch.setattr(ctypes, "windll", FakeWindll(), raising=False)
-
-    # Default sys.stdout (pytest's capture) has a fileno; if for some
-    # reason the surrounding test context doesn't, we set one explicitly:
     class RealFilenoStream:
         def fileno(self) -> int:
             return 1
@@ -80,16 +82,7 @@ def test_should_use_gui_dialogs_true_when_no_console_and_stdout_is_none(
 ) -> None:
     """No console window AND sys.stdout is None (legacy noconsole shape) → True."""
     monkeypatch.setattr(sys, "platform", "win32")
-
-    class FakeKernel32:
-        @staticmethod
-        def GetConsoleWindow() -> int:  # noqa: N802
-            return 0
-
-    class FakeWindll:
-        kernel32 = FakeKernel32()
-
-    monkeypatch.setattr(ctypes, "windll", FakeWindll(), raising=False)
+    monkeypatch.setattr(ctypes, "windll", _make_fake_kernel32_windll(0), raising=False)
     monkeypatch.setattr(sys, "stdout", None)
     assert _windows_dialogs.should_use_gui_dialogs() is True
 
@@ -97,16 +90,7 @@ def test_should_use_gui_dialogs_true_when_no_console_and_stdout_is_none(
 def test_should_use_gui_dialogs_when_console_attached(monkeypatch: pytest.MonkeyPatch) -> None:
     """Console window attached (non-zero handle) → False on Windows."""
     monkeypatch.setattr(sys, "platform", "win32")
-
-    class FakeKernel32:
-        @staticmethod
-        def GetConsoleWindow() -> int:  # noqa: N802
-            return 0x12345
-
-    class FakeWindll:
-        kernel32 = FakeKernel32()
-
-    monkeypatch.setattr(ctypes, "windll", FakeWindll(), raising=False)
+    monkeypatch.setattr(ctypes, "windll", _make_fake_kernel32_windll(0x12345), raising=False)
     assert _windows_dialogs.should_use_gui_dialogs() is False
 
 
@@ -127,16 +111,9 @@ def test_should_use_gui_dialogs_returns_true_on_getconsolewindow_oserror(
     auto-confirm. Returning True ensures the MessageBox confirmation fires.
     """
     monkeypatch.setattr(sys, "platform", "win32")
-
-    class FakeKernel32:
-        @staticmethod
-        def GetConsoleWindow() -> int:  # noqa: N802
-            raise OSError("no window station")
-
-    class FakeWindll:
-        kernel32 = FakeKernel32()
-
-    monkeypatch.setattr(ctypes, "windll", FakeWindll(), raising=False)
+    monkeypatch.setattr(
+        ctypes, "windll", _make_fake_kernel32_windll(OSError("no window station")), raising=False
+    )
     assert _windows_dialogs.should_use_gui_dialogs() is True
 
 

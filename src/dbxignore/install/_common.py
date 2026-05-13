@@ -21,6 +21,16 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _windows_helper_path(exe: Path) -> Path | None:
+    """Return the ``dbxignorew.exe`` sibling next to ``exe`` if it exists.
+
+    Defensive-fallback callers log a WARNING on None and proceed with
+    ``exe`` itself (which produces a console flash but works).
+    """
+    helper = exe.with_name("dbxignorew.exe")
+    return helper if helper.exists() else None
+
+
 def detect_invocation() -> tuple[Path, str]:
     """Return (executable_path, args_string) for the installed daemon entry.
 
@@ -45,8 +55,8 @@ def detect_invocation() -> tuple[Path, str]:
         # single binary doubles as daemon and CLI, so sys.executable is fine.
         exe = Path(sys.executable)
         if sys.platform == "win32":
-            helper = exe.with_name("dbxignorew.exe")
-            if helper.exists():
+            helper = _windows_helper_path(exe)
+            if helper is not None:
                 return helper, "daemon"
             logger.warning(
                 "dbxignorew.exe not found next to %s; falling back to dbxignore.exe. "
@@ -119,8 +129,8 @@ def detect_cli_invocation() -> str:
             # Shell-verb invocations must route through dbxignorew.exe so
             # they don't flash a console window and so output flows
             # through MessageBox (no stdio in that context).
-            helper = exe.parent / "dbxignorew.exe"
-            if helper.exists():
+            helper = _windows_helper_path(exe)
+            if helper is not None:
                 return f'"{helper}"'
             # Truncated-bundle defensive fallback — same WARNING shape as
             # detect_invocation. The verb invocation will flash a console

@@ -59,27 +59,22 @@ def should_use_gui_dialogs() -> bool:
         # destructive operations get a visible MessageBox confirmation
         # rather than silently auto-confirming via click.confirm.
         return True
-    # No console window. The remaining question: is `sys.stdout` backed
-    # by a real OS handle (e.g. an inherited pipe from a CREATE_NO_WINDOW
-    # parent), or is it the PyInstaller noconsole-bootloader stub whose
-    # output goes nowhere? The latter is what we route through MessageBox.
-    return not _stdout_has_real_backing()
-
-
-def _stdout_has_real_backing() -> bool:
-    """True if sys.stdout has a valid backing OS file descriptor.
-
-    A stream backed by a pipe / file / console returns an int from
-    `fileno()`; the PyInstaller noconsole stub raises (no FD because no
-    inherited handle).
-    """
+    # No console. Is sys.stdout a real inherited handle (CREATE_NO_WINDOW
+    # parent's pipe) or the PyInstaller noconsole-bootloader stub? Only
+    # the latter routes through MessageBox.
     if sys.stdout is None:
-        return False
+        return True
     try:
         sys.stdout.fileno()
     except (AttributeError, OSError, ValueError):
-        return False
-    return True
+        return True
+    return False
+
+
+def _show_messagebox(message: str, title: str, flags: int) -> None:
+    """Call user32.MessageBoxW; silent on failure (unusual session state, non-Windows)."""
+    with contextlib.suppress(OSError, AttributeError):
+        ctypes.windll.user32.MessageBoxW(None, message, title, flags)  # type: ignore[attr-defined, unused-ignore]
 
 
 def confirm_destructive(message: str, title: str = _DEFAULT_TITLE) -> bool:
@@ -100,24 +95,10 @@ def confirm_destructive(message: str, title: str = _DEFAULT_TITLE) -> bool:
 
 
 def show_error(message: str, title: str = _DEFAULT_TITLE) -> None:
-    """Show a MessageBox error dialog (red X, OK button). Silent on failure
-    (unusual session state, non-Windows)."""
-    with contextlib.suppress(OSError, AttributeError):
-        ctypes.windll.user32.MessageBoxW(  # type: ignore[attr-defined, unused-ignore]
-            None,
-            message,
-            title,
-            _MB_OK | _MB_ICONERROR,
-        )
+    """Show a MessageBox error dialog (red X, OK button)."""
+    _show_messagebox(message, title, _MB_OK | _MB_ICONERROR)
 
 
 def show_info(message: str, title: str = _DEFAULT_TITLE) -> None:
-    """Show a MessageBox info dialog (blue info icon, OK button). Silent on
-    failure (unusual session state, non-Windows)."""
-    with contextlib.suppress(OSError, AttributeError):
-        ctypes.windll.user32.MessageBoxW(  # type: ignore[attr-defined, unused-ignore]
-            None,
-            message,
-            title,
-            _MB_OK | _MB_ICONINFORMATION,
-        )
+    """Show a MessageBox info dialog (blue info icon, OK button)."""
+    _show_messagebox(message, title, _MB_OK | _MB_ICONINFORMATION)

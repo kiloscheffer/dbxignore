@@ -29,15 +29,10 @@ def _handle_explorer_double_click() -> None:
     """Pop a help MessageBox + exit if invoked by Explorer double-click on
     the GUI helper (dbxignorew.exe).
 
-    Explorer double-click is identified by the combination of (a) empty
-    argv beyond the program name and (b) no attached console window.
-    Task Scheduler invocations always pass "daemon" as an argument;
-    shell-verb invocations always pass a subcommand like "ignore" or
-    "unignore" + the target path. Both bypass this hook by virtue of (a).
-
-    The console-subsystem dbxignore.exe binary always has a console at
-    startup, so should_use_gui_dialogs() returns False and the hook
-    bypasses via (b) — letting click print usage to the terminal normally.
+    Identified by (a) empty argv beyond the program name and (b) no
+    attached console window. The console-subsystem dbxignore.exe always
+    has a console at startup, so it bypasses via (b) — click prints
+    usage to the terminal normally.
     """
     if len(sys.argv) > 1:
         return

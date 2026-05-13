@@ -408,6 +408,67 @@ def test_initial_sweep_worker_does_not_set_cache_ready_when_stopped_early(
     assert not cache_ready.is_set(), "cache_ready must NOT be set when the worker returns early"
 
 
+def test_initial_sweep_worker_does_not_set_cache_ready_when_load_root_returned_partial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 followup on PR #240: if `stop_event` fires mid-walk during
+    the FINAL `cache.load_root`, the top-of-loop stop check above doesn't
+    catch it (the loop has already exited), and `cache_ready.set()` used
+    to fire against a partial cache. The post-loop re-check now refuses
+    to signal ready in that state."""
+    monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
+
+    sweep_called: list[bool] = []
+    monkeypatch.setattr(daemon, "_sweep_once", lambda *a, **kw: sweep_called.append(True))
+
+    # Fake cache whose load_root simulates the "saw stop_event mid-walk,
+    # returned early with partial state" contract.
+    class PartialLoadCache:
+        def __init__(self) -> None:
+            self.loaded: list[object] = []
+
+        def load_root(self, r: object, stop_event: threading.Event) -> None:
+            self.loaded.append(r)
+            # Simulate load_root noticing stop mid-walk: caller set
+            # stop_event before this call, and load_root cooperatively
+            # bails after recording the call but BEFORE the cache is
+            # fully populated. Same effect as a real partial walk.
+            return
+
+    fake_cache = PartialLoadCache()
+    stop = threading.Event()
+    cache_ready = threading.Event()
+
+    # Set stop BEFORE the worker enters its load_root call. The first
+    # iteration's top-of-loop check would catch this, so we want the
+    # worker to start with stop unset, fire stop during load_root, then
+    # exit the loop. Easiest: arrange one root, set stop INSIDE
+    # load_root via a wrapper.
+    real_load_root = fake_cache.load_root
+
+    def stop_during_load(r: object, stop_event: threading.Event) -> None:
+        real_load_root(r, stop_event)
+        stop_event.set()  # mid-walk cancellation surface
+
+    fake_cache.load_root = stop_during_load  # type: ignore[method-assign]
+
+    daemon._initial_sweep_worker(
+        roots=[tmp_path],  # one root → loop runs once → no top-of-loop catch
+        cache=fake_cache,  # type: ignore[arg-type]
+        daemon_started=None,  # type: ignore[arg-type]
+        daemon_create_time=None,
+        stop_event=stop,
+        cache_ready=cache_ready,
+    )
+
+    assert fake_cache.loaded == [tmp_path], "load_root was called exactly once"
+    assert stop.is_set(), "stop_event was set during the load_root call"
+    assert not cache_ready.is_set(), (
+        "cache_ready MUST stay unset when load_root returned with stop_event set"
+    )
+    assert sweep_called == [], "_sweep_once must not run after stop"
+
+
 def test_initial_sweep_worker_drains_deferred_after_cache_ready(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

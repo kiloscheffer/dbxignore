@@ -1149,6 +1149,16 @@ def _initial_sweep_worker(
             if stop_event.is_set():
                 return
             cache.load_root(r, stop_event=stop_event)
+        # Re-check after the loop: if `stop_event` fired during the FINAL
+        # `load_root`'s walk, the top-of-loop guard above doesn't catch it.
+        # `RuleCache.load_root` returns early with a PARTIAL cache when
+        # cooperative-cancellation fires mid-walk. Setting `cache_ready`
+        # in that state would let the debouncer drain deferred events
+        # against incomplete rules — match() returns False for any rule
+        # whose `.dropboxignore` hadn't loaded yet, and reconcile would
+        # clear the corresponding marker. (Codex P2 followup on PR #240.)
+        if stop_event.is_set():
+            return
         if cache_ready is not None:
             cache_ready.set()
         # Drain any events that arrived while the cache was loading and were

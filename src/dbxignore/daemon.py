@@ -858,13 +858,25 @@ def run(stop_event: threading.Event | None = None) -> None:
                         # Codex on PR #162.
                         if worker.is_alive():
                             continue
-                        _sweep_once(
-                            configured_roots,
-                            cache,
-                            daemon_started,
-                            daemon_create_time,
-                            stop_event=stop_event,
-                        )
+                        try:
+                            _sweep_once(
+                                configured_roots,
+                                cache,
+                                daemon_started,
+                                daemon_create_time,
+                                stop_event=stop_event,
+                            )
+                        except Exception:  # noqa: BLE001 — one bad tick must not kill the daemon
+                            # ``_reconcile_path`` already swallows OSError on a
+                            # per-path basis; this arm catches the residual
+                            # AttributeError / KeyError / pathspec edge case
+                            # that would otherwise propagate out of the while
+                            # loop and force a service-manager restart. The
+                            # initial-sweep worker carries the symmetric wrap
+                            # (item #91). BaseException (SystemExit / Keyboard
+                            # Interrupt) still propagates so shutdown stays
+                            # responsive.
+                            logger.exception("hourly sweep tick failed; continuing")
                 finally:
                     observer.stop()
                     observer.join()

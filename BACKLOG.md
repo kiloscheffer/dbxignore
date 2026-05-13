@@ -2653,11 +2653,81 @@ Touches: `scripts/_phase_extended_cli.sh` (new Phase 4.5 case if fix candidate 1
 
 ---
 
+## 122. `uninstall --purge` proceeds when daemon-exit timeout fires on Windows
+
+Item #87 / PR #171 made `install/windows_task.py:uninstall_task()` wait up to 30s for the daemon process to exit after `schtasks /End`. The wait is bounded: `windows_task.py:208-216` confirms that if the daemon doesn't exit within 30s, the function logs a WARNING and proceeds with `/Delete`. The subsequent `--purge` block in `cli.uninstall` then walks every Dropbox root clearing markers (a sub-minute reconcile loop in the still-live daemon will set them right back) and calls `_purge_local_state()` (the daemon's next state-write recreates `state.json` after we removed it). The tug-of-war is rare in practice — a daemon stuck for 30+ seconds is itself an anomaly — but the failure mode is silent: the user sees "Cleared N markers" while the daemon re-applies them, and `state.json` reappears after purge.
+
+This is also the direct cause of #124 (resolved in the same PR): the live daemon's `daemon.lock` handle is still open, `Path.unlink` raises `PermissionError`, and pre-#124 that escaped as a traceback out of `_purge_dir`.
+
+**Fix candidates:**
+
+1. **Acquire the singleton lock as a precondition for purge.** At the top of `cli.uninstall`'s `if purge:` block, try `daemon._acquire_singleton_lock()`. If acquired, hold for the duration of purge; if not, refuse with "daemon still running; stop it manually" and exit 2. Defense-in-depth: `schtasks /End` is the happy path, the lock-acquire is the fail-closed guard.
+2. **Re-poll `is_daemon_alive` at the boundary of the purge block and refuse on positive result.** Lighter touch than holding the lock; doesn't depend on `_acquire_singleton_lock` being callable from CLI context (it's currently a daemon-internal helper). Same fail-closed semantic.
+3. **Defer.** Document the asymmetry in CLAUDE.md and rely on operator vigilance. Cheapest, but silent-tug-of-war is the worst-failure-mode shape.
+
+**Urgency:** medium. The 30s-timeout firing requires a daemon stuck on a slow filesystem operation — uncommon but not impossible. When it fires, the purge appears to succeed while leaving the daemon, markers, and state.json in place. Bundle with the next `cli.uninstall` or `install/windows_task.py` edit. Surfaced 2026-05-13 in the external-review pass that produced #123 / #124 / #125 / #126.
+
+Touches: `src/dbxignore/cli.py` `uninstall` body; possibly `src/dbxignore/daemon.py` `_acquire_singleton_lock` (export if fix candidate 1); `tests/test_install.py` new "purge refuses when daemon survives /End wait" Windows-only test.
+
+---
+
+## 123. Hourly sweep tick had no exception wrapper — one bug could kill the daemon thread
+
+**Status: RESOLVED 2026-05-13 (PR #<THIS_PR>).** `daemon.run()`'s while loop now wraps the `_sweep_once` call in `try/except Exception: logger.exception("hourly sweep tick failed; continuing")` so an unexpected non-`OSError` exception (`AttributeError`, `KeyError`, pathspec edge case — anything the per-path broad-`OSError` arm in `_reconcile_path` doesn't catch) no longer propagates out of the while loop. Pre-fix it would have taken down the daemon thread and forced a service-manager restart every hour until the underlying bug was found. The `_initial_sweep_worker` carries the symmetric wrap (item #91); this closes the asymmetry. `BaseException` (`SystemExit` / `KeyboardInterrupt`) still propagates so shutdown stays responsive. Regression test in `test_daemon_initial_sweep.py::test_hourly_tick_recovers_from_sweep_exception` injects a counted-call sweep that succeeds for the initial-sweep worker, raises on the first hourly tick, and signals on the next tick — asserts the daemon thread stays alive across the raise and the loop keeps ticking. Filed and resolved in the same PR. Surfaced 2026-05-13 in the external-review pass that produced #122 / #124 / #125 / #126.
+
+Touches: `src/dbxignore/daemon.py` (~12 LOC wrap); `tests/test_daemon_initial_sweep.py` (one new test).
+
+---
+
+## 124. `_purge_dir` only suppressed `FileNotFoundError`; `PermissionError` from a Windows-locked file escaped as traceback
+
+**Status: RESOLVED 2026-05-13 (PR #<THIS_PR>).** `cli._purge_dir` now catches the full `OSError` hierarchy on the `f.unlink()` arm. `FileNotFoundError` still short-circuits silently (the vanished-path idiom from #109); any other `OSError` is logged as a WARNING naming the surviving file. Cascade trigger: when #122's 30s-timeout fires on Windows, the still-live daemon's `daemon.lock` handle is open, `Path.unlink` raises `PermissionError` (subclass of `OSError`), and pre-fix the user saw a Python traceback instead of a partial-cleanup report. Regression test in `test_install.py::test_purge_dir_continues_after_permission_error` monkeypatches `Path.unlink` to raise `PermissionError` selectively for `daemon.lock` and asserts (a) other files still get cleaned, (b) the locked file survives, (c) a WARNING surfaces the surviving file. Filed and resolved in the same PR. Surfaced 2026-05-13 alongside #122.
+
+Touches: `src/dbxignore/cli.py:_purge_dir` (~7 LOC); `tests/test_install.py` (one new test).
+
+---
+
+## 125. macOS dual-attr `set_ignored` partial-failure leaves stale xattr that masks future retries
+
+`_backends/macos_xattr.py:set_ignored` writes two attribute names in dual-attr mode (`pluginkit` unavailable + no decisive path signal — see `_detect()`). If the first write succeeds and the second raises (quota, EPERM on an unusual filesystem), the second's exception propagates and `_reconcile_path` catches it as a write-side error. But `is_ignored` (`_backends/macos_xattr.py:354-377`) short-circuits True on the FIRST non-empty xattr found — so the next sweep sees the path as "already ignored" and never retries the second write. Net result: the path is marked for one sync stack but not the other. If the user is actually on the unwritten stack, Dropbox still uploads.
+
+The docstring at `:389-394` acknowledges the partial-state propagation, framing it as "mirroring the single-attr contract that set_ignored is either fully successful or raises." The propagation IS correct; the gap is that the next retry doesn't materialize because `is_ignored`'s first-hit-wins semantic hides the partial state.
+
+**Fix candidates:**
+
+1. **On second-write failure, clear the first xattr before propagating.** Restores the atomic "either both set or neither set" invariant the docstring claims. ~5 LOC plus a nested try/except for the clear-side error (which itself logs but doesn't mask the original exception). Preferred.
+2. **Re-read after the writes and validate both attribute names are set; if not, raise.** Slightly more expensive (extra `xattr.getxattr` calls on success path) but catches a wider class of partial-write failures.
+3. **Change `is_ignored` to require ALL detected attributes set in dual-attr mode.** Symmetrical with set; the next sweep would see "not fully set" and call `set_ignored` again, which is idempotent for the already-set attribute. Larger blast radius — affects every `is_ignored` read on the dual-attr path, including reconcile's read-arm.
+
+**Urgency:** low. Requires (a) dual-attr mode (rare), (b) a writable filesystem that fails specifically on the second attr (rare). No user report. Bundle with the next `_backends/macos_xattr.py` edit. Surfaced 2026-05-13 in the external-review pass that produced #122 / #123 / #124 / #126.
+
+Touches: `src/dbxignore/_backends/macos_xattr.py:set_ignored` (~5 LOC for fix candidate 1); `tests/test_macos_xattr_unit.py` (new dual-attr partial-failure test forcing the second `setxattr` to raise after the first succeeds).
+
+---
+
+## 126. `_DeferredEvents.drain` redispatches serially on the worker thread; large bursts could delay Phase 2
+
+`daemon._sweep_once`'s drain block (`daemon.py:946-953`) iterates `deferred.drain()` and calls `redispatch(event)` synchronously per event before Phase 2 reconcile begins. Each `redispatch` runs `_dispatch` which can call `reconcile_subtree` synchronously. If a burst of N OTHER events lands during the ~50s initial-sweep window on a large tree, the drain's wall-clock becomes `N × per-event reconcile cost` — directly delaying Phase 2's start.
+
+Practical bound: Phase 2 follows immediately after drain and reconciles every root anyway, so drained events are mostly redundant with Phase 2 — they exist to provide faster reaction time inside the startup window, not to be a load-bearing event queue. A burst large enough to delay Phase 2 by seconds is dominated by Phase 2's wall-clock in any case.
+
+**Fix candidates:**
+
+1. **Cap the queue at a few hundred entries.** `_DeferredEvents.append` returns False when full; the caller (`_dispatch`) treats it as "cache_ready set, dispatch directly" — except with `cache_ready` still actually False, the gate above skips the event. Effectively: overflow drops events; Phase 2's full walk catches them. Crisp boundary, minimal LOC.
+2. **Track drain wall-clock; if it exceeds N seconds, abort and let Phase 2 handle the rest.** More dynamic; harder to test deterministically.
+3. **Defer.** The bound is not observable today — no report of a startup-window event burst large enough to matter. Document the trade-off where `_DeferredEvents` lives (currently the docstring at line 177-197 describes the protocol but not the unbounded-queue assumption).
+
+**Urgency:** low. No observed problem. Bundle with the next `daemon._DeferredEvents` edit. Surfaced 2026-05-13 in the external-review pass that produced #122 / #123 / #124 / #125.
+
+Touches: `src/dbxignore/daemon.py` `_DeferredEvents` class (~10 LOC for cap if fix candidate 1); `tests/test_daemon_synthetic_events.py` (new overflow test).
+
+---
+
 ## Status
 
 ### Open
 
-Sixteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12). Item #117 surfaced 2026-05-12 during the chore/115 work session (uv venv hygiene); the other two items from that session shipped 2026-05-12: #116 (uv build-cache hygiene) in PR #227, #118 (is_daemon_alive SystemError escalation) in PR #230. Item #119 surfaced 2026-05-12 from a macOS beta-tester run of `scripts/manual-test-macos.sh` Phase 6 on v0.5.1 — `launchctl bootout` failed silently and the launchd job survived `dbxignore uninstall`. Item #121 surfaced 2026-05-13 during PR #240's external-review pass — manual-test coverage for the new `list`/`clear` scan-error exit-2 path; deferred per the AGENTS.md "limitation called out" clause because forcing OSError needs platform-specific filesystem setup.
+Nineteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12). Item #117 surfaced 2026-05-12 during the chore/115 work session (uv venv hygiene); the other two items from that session shipped 2026-05-12: #116 (uv build-cache hygiene) in PR #227, #118 (is_daemon_alive SystemError escalation) in PR #230. Item #119 surfaced 2026-05-12 from a macOS beta-tester run of `scripts/manual-test-macos.sh` Phase 6 on v0.5.1 — `launchctl bootout` failed silently and the launchd job survived `dbxignore uninstall`. Item #121 surfaced 2026-05-13 during PR #240's external-review pass — manual-test coverage for the new `list`/`clear` scan-error exit-2 path; deferred per the AGENTS.md "limitation called out" clause because forcing OSError needs platform-specific filesystem setup. Items #122, #125, #126 surfaced 2026-05-13 in a second external-review pass (alongside the same-PR-resolved #123 / #124) — daemon recovery + uninstall-race + macOS dual-attr surface findings.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -2675,9 +2745,14 @@ Sixteen items. Most are passive (no concrete trigger requires action) — bundle
 - **#117** — Failed `uv tool uninstall` leaves the venv directory behind; the next `uv tool install` does an incremental update instead of fresh install, producing a hybrid venv (mixed install-event packages). Triggers subtle import / C-extension issues. Recovery is manual `Remove-Item ~\AppData\Roaming\uv\tools\<pkg>`.
 - **#119** — macOS `uninstall_agent` calls `launchctl bootout` with `check=False, capture_output=True` and discards both rc and stderr; plist gets unlinked unconditionally and `dbxignore uninstall` returns rc=0 even when bootout failed. Parallel to Windows #87/PR #171; same silent-swallow class as #98/PR #204. Surfaced by macOS beta tester on v0.5.1 2026-05-12. (Partial fix in PR #240: the OSError invocation-failure case now raises `RuntimeError`; the non-zero-rc swallow remains.)
 - **#121** — Manual-test Phase 4.5 doesn't exercise the new `scan_errors` exit-2 path for `list` / `clear` (PR #240). Unit tests pin the contract end-to-end; manual-test extension deferred because forcing ENOTSUP on a real Dropbox tree needs platform-specific filesystem setup. Surfaced by Codex on PR #240 (2026-05-13).
+- **#122** — `uninstall --purge` proceeds when the Windows daemon-exit timeout fires after `schtasks /End`. The 30s wait is bounded; on timeout the still-live daemon's reconcile loop re-applies markers and its next state-write recreates `state.json` after `_purge_local_state` removes it. Silent tug-of-war; root cause of the now-resolved #124. Bundle with the next `cli.uninstall` or `install/windows_task.py` edit.
+- **#125** — macOS dual-attr `set_ignored` partial-failure leaves one xattr set; `is_ignored`'s first-hit-wins short-circuit then hides the partial state from the next sweep's retry. Low-frequency (requires dual-attr mode + a filesystem failing specifically on the second attr).
+- **#126** — `_DeferredEvents.drain` redispatches serially on the worker thread before Phase 2 starts; a large startup-window burst could delay Phase 2's wall-clock unnecessarily. Mostly redundant with Phase 2 anyway. No observed problem.
 ### Resolved (reverse chronological)
 
 #### 2026-05-13
+
+- **#123** + **#124** (2026-05-13, PR #<THIS_PR>) — External-review followups, filed and resolved in the same PR. **#123**: `daemon.run()`'s hourly while loop now wraps `_sweep_once` in `try/except Exception: logger.exception("hourly sweep tick failed; continuing")`. Pre-fix an unexpected non-`OSError` exception (`AttributeError`, `KeyError`, pathspec edge case) would propagate out of the loop and force a service-manager restart every hour until the underlying bug was found. The `_initial_sweep_worker` carries the symmetric wrap (item #91); this closes the asymmetry. **#124**: `cli._purge_dir` widened its `f.unlink()` suppress from `FileNotFoundError` to the full `OSError` hierarchy, with WARNING-and-continue on non-vanished-path errors. Cascade trigger: when #122's 30s-timeout fires, the still-live daemon holds `daemon.lock` open; pre-fix the user saw a Python traceback instead of a partial-cleanup report. Regression tests: `test_daemon_initial_sweep.py::test_hourly_tick_recovers_from_sweep_exception` (counted-call sweep that succeeds once, raises once, signals on the next tick; asserts daemon stays alive across the raise + the loop keeps ticking + ERROR log fires) and `test_install.py::test_purge_dir_continues_after_permission_error` (monkeypatches `Path.unlink` to raise selectively for `daemon.lock` and asserts other files cleaned + locked file survives + WARNING surfaces the surviving file).
 
 - **#120** (2026-05-13, PR #239) — Single-binary AttachConsole approach from #30 (PR #238) defeated by PowerShell async-foreground behavior. Reverted to dual-binary `dbxignore.exe` (console=True) + `dbxignorew.exe` (console=False) per python.exe/pythonw.exe pattern. Deleted `_windows_console.py` (~175 LOC). Side-fix: `copy_metadata("dbxignore")` added to both Windows + macOS specs to fix a latent `--version` `RuntimeError`. Twelve new tests across `tests/test_windows_dialogs.py` (4 GUI-routing probe variants including OSError fallback), `tests/test_install_common.py` (4 Windows frozen-path tests for both helpers + their fallback warnings), `tests/test_state.py` (2 dbxignorew process-name guard tests). Open count unchanged (filed and resolved in the same PR).
 

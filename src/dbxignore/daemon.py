@@ -29,7 +29,7 @@ from dbxignore.roots import find_containing
 from dbxignore.rules import RuleCache, is_ignore_filename
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
     from watchdog.observers.api import BaseObserver
 
@@ -174,11 +174,60 @@ def _classify(
     return None
 
 
+class _DeferredEvents:
+    """Hold watchdog events that arrived before ``cache_ready`` was set.
+
+    Two-phase race protocol used by ``_dispatch`` and ``_initial_sweep_worker``:
+
+    1. While the daemon's rule cache is still loading, ``_dispatch`` calls
+       ``append(event, cache_ready)`` for any OTHER/DIR_CREATE event. The
+       check on ``cache_ready.is_set()`` happens inside the lock, so an
+       event either lands in the queue OR ``append`` returns False and the
+       caller dispatches directly — never both, never neither.
+    2. After the worker calls ``cache_ready.set()``, it calls ``drain()``
+       once. Any in-flight ``append`` call that started before the ``set()``
+       finishes (under the lock) before drain sees it; any ``append`` that
+       starts after ``set()`` returns False immediately and the caller
+       processes the event on the live cache. No orphans.
+
+    Without the queue the gate would drop events instead of deferring them,
+    leaving newly-created ignored directories unmarked until the initial
+    sweep reached them (~50s on big trees) — Dropbox could ingest in the
+    meantime. Surfaced by Codex on PR #240.
+    """
+
+    def __init__(self) -> None:
+        self._events: list[Any] = []
+        self._lock = threading.Lock()
+
+    def append(self, event: Any, cache_ready: threading.Event) -> bool:
+        """Append ``event`` if ``cache_ready`` is not yet set.
+
+        Returns True on append (caller returns immediately), False if
+        ``cache_ready`` is already set (caller dispatches directly).
+        Atomic w.r.t. ``drain()`` via the internal lock.
+        """
+        with self._lock:
+            if cache_ready.is_set():
+                return False
+            self._events.append(event)
+            return True
+
+    def drain(self) -> list[Any]:
+        """Return all queued events and clear the queue. Caller is
+        responsible for re-dispatching each in order."""
+        with self._lock:
+            out = self._events[:]
+            self._events.clear()
+        return out
+
+
 def _dispatch(
     event: Any,
     cache: RuleCache,
     roots: list[Path],
     cache_ready: threading.Event | None = None,
+    deferred: _DeferredEvents | None = None,
 ) -> None:
     classification = _classify(event, roots)
     if classification is None:
@@ -203,28 +252,43 @@ def _dispatch(
     # dispatch with an empty cache, `cache.match()` returns False,
     # `reconcile_subtree` clears the existing marker, and Dropbox sees the
     # marker disappear before the initial-sweep worker's Phase 2 re-applies
-    # it. The window is bounded by Phase 1 wall-clock (cache.load_root
-    # across roots; typically seconds), but big-tree users could observe
-    # transient unmarking and Dropbox could start re-uploading. RULES events
-    # are NOT gated: they handle their own cache mutations (`reload_file` /
-    # `remove_file`) and don't depend on a pre-populated cache.
+    # it. RULES events are NOT gated: they handle their own cache mutations
+    # (`reload_file` / `remove_file`) and don't depend on a pre-populated
+    # cache.
+    #
+    # When ``deferred`` is supplied, gated events are appended to the
+    # deferred queue and re-dispatched after ``cache_ready.set()`` — closes
+    # both the transient-unmark race AND the symmetric "new ignored dir
+    # not marked during startup window" race (Codex P2 followup on PR #240).
+    # When ``deferred`` is None, gated events are dropped and the initial
+    # sweep handles them — used by direct test callers that don't need the
+    # queue.
     #
     # ``cache_ready=None`` means "no gate" — the in-codebase convention for
     # optional-gate parameters mirroring ``reconcile_subtree``'s
-    # ``stop_event``. Production ``daemon.run()`` always supplies a real
-    # event; direct test callers may omit it when their own setup pre-loads
-    # the cache.
+    # ``stop_event``. Production ``daemon.run()`` always supplies both
+    # cache_ready and deferred.
     if (
         cache_ready is not None
         and not cache_ready.is_set()
         and kind in (EventKind.OTHER, EventKind.DIR_CREATE)
     ):
-        logger.debug(
-            "skipping %s event before cache ready: %s",
-            kind.value,
-            event.src_path,
-        )
-        return
+        if deferred is not None and deferred.append(event, cache_ready):
+            logger.debug(
+                "deferring %s event until cache ready: %s",
+                kind.value,
+                event.src_path,
+            )
+            return
+        # deferred=None (drop), OR append returned False (cache_ready was
+        # set inside the lock — fall through and dispatch directly).
+        if deferred is None:
+            logger.debug(
+                "skipping %s event before cache ready: %s",
+                kind.value,
+                event.src_path,
+            )
+            return
 
     if kind is EventKind.RULES:
         if event.event_type == "deleted":
@@ -710,9 +774,12 @@ def run(stop_event: threading.Event | None = None) -> None:
             # ignored subtree doesn't reconcile against an empty cache and
             # transiently clear its marker before Phase 2 restores it.
             cache_ready = threading.Event()
+            deferred = _DeferredEvents()
 
             debouncer = Debouncer(
-                on_emit=lambda item: _dispatch(item[2], cache, configured_roots, cache_ready),
+                on_emit=lambda item: _dispatch(
+                    item[2], cache, configured_roots, cache_ready, deferred
+                ),
                 timeouts_ms=_timeouts_from_env(),
             )
             handler = _WatchdogHandler(debouncer, configured_roots, cache)
@@ -748,6 +815,16 @@ def run(stop_event: threading.Event | None = None) -> None:
                 # ~50s. On worker failure, the worker logs the exception
                 # and sets stop_event, triggering the same shutdown path
                 # signal handlers use.
+                # Re-dispatch closure captures the same cache + roots + gate
+                # the debouncer's on_emit uses, so a drained deferred event
+                # walks the identical code path it would have taken at
+                # original-dispatch time. ``deferred`` is intentionally NOT
+                # passed in — by drain time ``cache_ready`` is set, so the
+                # gate falls through to direct dispatch and there's nothing
+                # to re-queue.
+                def _redispatch_deferred(event: Any) -> None:
+                    _dispatch(event, cache, configured_roots, cache_ready)
+
                 worker = threading.Thread(
                     target=_initial_sweep_worker,
                     args=(
@@ -757,6 +834,8 @@ def run(stop_event: threading.Event | None = None) -> None:
                         daemon_create_time,
                         stop_event,
                         cache_ready,
+                        deferred,
+                        _redispatch_deferred,
                     ),
                     daemon=False,
                     name="dbxignored-initial-sweep",
@@ -1032,6 +1111,8 @@ def _initial_sweep_worker(
     daemon_create_time: float | None,
     stop_event: threading.Event,
     cache_ready: threading.Event | None = None,
+    deferred: _DeferredEvents | None = None,
+    redispatch: Callable[[Any], None] | None = None,
 ) -> None:
     """Run the initial sweep in a worker thread (item #53).
 
@@ -1070,6 +1151,21 @@ def _initial_sweep_worker(
             cache.load_root(r, stop_event=stop_event)
         if cache_ready is not None:
             cache_ready.set()
+        # Drain any events that arrived while the cache was loading and were
+        # deferred by `_dispatch`. The drain runs BEFORE `_sweep_once` so a
+        # newly-created ignored directory is marked within ~cache-load-time
+        # rather than waiting for the sweep's ~50s wall-clock to reach it.
+        # Events that arrive AFTER `cache_ready.set()` skip the queue entirely
+        # (atomic check inside `_DeferredEvents.append`), so this drain handles
+        # the bounded startup-window backlog and nothing more.
+        if deferred is not None and redispatch is not None:
+            for event in deferred.drain():
+                if stop_event.is_set():
+                    return
+                try:
+                    redispatch(event)
+                except Exception:  # noqa: BLE001 — one bad event must not skip the rest
+                    logger.exception("deferred event re-dispatch failed: %r", event)
         _sweep_once(
             roots,
             cache,

@@ -772,6 +772,163 @@ def test_dispatch_other_event_runs_when_cache_ready(
     assert reconcile_calls == [(root, new_file.parent)]
 
 
+# ---- Deferred replay (Codex P2 followup on PR #240) -----------------------
+# Codex pointed out that dropping gated events leaves newly-created ignored
+# directories unmarked until the initial sweep reaches them (~50s on big
+# trees), allowing Dropbox to ingest in the meantime. Production now defers
+# gated events into a `_DeferredEvents` queue and re-dispatches them after
+# `cache_ready.set()`, closing both the transient-unmark race AND the
+# symmetric "new ignored dir not marked" race.
+
+
+def test_dispatch_other_event_appended_to_deferred_when_cache_not_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When deferred is provided and cache_ready is unset, an OTHER event
+    is appended to the queue rather than dropped — the worker replays it
+    after cache_ready.set() so the marker decision uses the loaded cache."""
+    import threading as threading_mod
+
+    root = tmp_path.resolve()
+    cache = MagicMock()
+    reconcile_calls: list[tuple[Path, Path]] = []
+    monkeypatch.setattr(
+        daemon, "reconcile_subtree", lambda r, sub, c: reconcile_calls.append((r, sub))
+    )
+
+    (root / "build").mkdir()
+    new_file = root / "build" / "x.o"
+    new_file.write_text("", encoding="utf-8")
+    ev = _stub_event("created", str(new_file), is_directory=False)
+
+    cache_ready = threading_mod.Event()  # unset
+    deferred = daemon._DeferredEvents()
+    daemon._dispatch(ev, cache, roots=[root], cache_ready=cache_ready, deferred=deferred)
+
+    # Event was deferred (not reconciled now, not dropped).
+    assert reconcile_calls == [], "event must not reconcile while cache_ready is unset"
+    assert deferred.drain() == [ev], "event must be queued for replay"
+
+
+def test_dispatch_dir_create_event_appended_to_deferred_when_cache_not_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same defer semantics for DIR_CREATE: the new dir's marker can be
+    set as soon as the cache loads, instead of waiting for the sweep wall-
+    clock to reach it (the Codex P2 ingestion race)."""
+    import threading as threading_mod
+
+    root = tmp_path.resolve()
+    cache = MagicMock()
+    reconcile_calls: list[tuple[Path, Path]] = []
+    monkeypatch.setattr(
+        daemon, "reconcile_subtree", lambda r, sub, c: reconcile_calls.append((r, sub))
+    )
+
+    new_dir = root / "node_modules"
+    new_dir.mkdir()
+    ev = _stub_event("created", str(new_dir), is_directory=True)
+
+    cache_ready = threading_mod.Event()  # unset
+    deferred = daemon._DeferredEvents()
+    daemon._dispatch(ev, cache, roots=[root], cache_ready=cache_ready, deferred=deferred)
+
+    assert reconcile_calls == [], "DIR_CREATE must not reconcile while cache_ready is unset"
+    assert deferred.drain() == [ev], "DIR_CREATE must be queued for replay"
+
+
+def test_dispatch_rules_event_bypasses_deferred_queue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RULES events must NEVER be deferred — they handle their own cache
+    mutations and the daemon's rule reload depends on prompt dispatch
+    even during the startup window. The gate's kind filter restricts to
+    OTHER and DIR_CREATE."""
+    import threading as threading_mod
+
+    root = tmp_path.resolve()
+    cache = MagicMock()
+    reconcile_calls: list[tuple[Path, Path]] = []
+    monkeypatch.setattr(
+        daemon, "reconcile_subtree", lambda r, sub, c: reconcile_calls.append((r, sub))
+    )
+
+    ignore_file = root / "proj" / ".dropboxignore"
+    ignore_file.parent.mkdir()
+    ignore_file.write_text("build/\n", encoding="utf-8")
+    ev = _stub_event("modified", str(ignore_file))
+
+    cache_ready = threading_mod.Event()  # unset
+    deferred = daemon._DeferredEvents()
+    daemon._dispatch(ev, cache, roots=[root], cache_ready=cache_ready, deferred=deferred)
+
+    # RULES dispatched immediately; deferred queue stays empty.
+    cache.reload_file.assert_called_once_with(ignore_file)
+    assert reconcile_calls == [(root, ignore_file.parent)]
+    assert deferred.drain() == []
+
+
+def test_deferred_append_returns_false_after_cache_ready_set() -> None:
+    """Atomic-check race: once cache_ready is set, append must return False
+    so the caller falls through to direct dispatch. Pins the no-orphan
+    guarantee — without the inside-the-lock recheck, an event could land in
+    the queue AFTER the worker's drain pass, never to be replayed."""
+    import threading as threading_mod
+
+    cache_ready = threading_mod.Event()
+    deferred = daemon._DeferredEvents()
+
+    # cache_ready unset → append succeeds.
+    assert deferred.append("fake_event", cache_ready) is True
+    assert deferred.drain() == ["fake_event"]
+
+    # cache_ready set → append refuses (caller dispatches directly).
+    cache_ready.set()
+    assert deferred.append("another_event", cache_ready) is False
+    assert deferred.drain() == []
+
+
+def test_dispatch_falls_through_when_cache_ready_set_inside_append_race(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the append's atomic check sees cache_ready set (because the
+    worker set it after _dispatch's outer check but before the lock was
+    taken), _dispatch must fall through to direct dispatch instead of
+    silently dropping the event. Simulated by setting cache_ready right
+    before the append fires."""
+    import threading as threading_mod
+
+    root = tmp_path.resolve()
+    cache = MagicMock()
+    reconcile_calls: list[tuple[Path, Path]] = []
+    monkeypatch.setattr(
+        daemon, "reconcile_subtree", lambda r, sub, c: reconcile_calls.append((r, sub))
+    )
+
+    (root / "build").mkdir()
+    new_file = root / "build" / "x.o"
+    new_file.write_text("", encoding="utf-8")
+    ev = _stub_event("created", str(new_file), is_directory=False)
+
+    cache_ready = threading_mod.Event()
+
+    class RacingDeferred(daemon._DeferredEvents):
+        """Simulate cache_ready transitioning to set between _dispatch's
+        outer check and the append's inner check. Exercises the
+        fall-through arm in _dispatch."""
+
+        def append(self, event: object, cr: threading_mod.Event) -> bool:
+            cr.set()  # race: cache_ready is now set
+            return super().append(event, cr)
+
+    deferred: daemon._DeferredEvents = RacingDeferred()
+    daemon._dispatch(ev, cache, roots=[root], cache_ready=cache_ready, deferred=deferred)
+
+    # Event was dispatched directly (not queued and not silently dropped).
+    assert reconcile_calls == [(root, new_file.parent)]
+    assert deferred.drain() == []
+
+
 # ---- Symlink-escape via .resolve() (external-review item 2) ---------------
 # `_resolve_under_roots` used to call Path.resolve() unconditionally,
 # which made a symlink inside Dropbox pointing OUTSIDE Dropbox escape

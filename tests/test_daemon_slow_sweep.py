@@ -406,3 +406,109 @@ def test_initial_sweep_worker_does_not_set_cache_ready_when_stopped_early(
 
     assert sweep_called == [], "_sweep_once must not run after stop_event"
     assert not cache_ready.is_set(), "cache_ready must NOT be set when the worker returns early"
+
+
+def test_initial_sweep_worker_drains_deferred_after_cache_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex P2 followup on PR #240: events that arrived during the
+    startup window MUST be re-dispatched after `cache_ready.set()` so a
+    newly-created ignored directory is marked within ~cache-load-time
+    rather than waiting for the sweep's wall-clock to reach it.
+
+    The drain runs BEFORE `_sweep_once` (so the user-visible mark window
+    shrinks) and AFTER `cache_ready.set()` (so the gate's atomic-check
+    sends any concurrent appends down the direct-dispatch path)."""
+    monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
+
+    sweep_called: list[bool] = []
+    monkeypatch.setattr(daemon, "_sweep_once", lambda *a, **kw: sweep_called.append(True))
+
+    # Pre-load the queue with three deferred "events" (opaque strings here —
+    # the worker passes them through redispatch verbatim).
+    deferred = daemon._DeferredEvents()
+    deferred.append("ev1", threading.Event())  # unset event → append succeeds
+    deferred.append("ev2", threading.Event())
+    deferred.append("ev3", threading.Event())
+
+    redispatched: list[object] = []
+    cache_ready = threading.Event()
+    drain_order: list[str] = []
+
+    def fake_redispatch(event: object) -> None:
+        # Worker must drain AFTER cache_ready.set() — pin that ordering.
+        assert cache_ready.is_set(), (
+            "cache_ready must be set before deferred events are re-dispatched"
+        )
+        drain_order.append("redispatch")
+        redispatched.append(event)
+
+    # _sweep_once should run AFTER all redispatches.
+    def recording_sweep(*_a: object, **_kw: object) -> None:
+        drain_order.append("sweep")
+        sweep_called.append(True)
+
+    monkeypatch.setattr(daemon, "_sweep_once", recording_sweep)
+
+    stop = threading.Event()
+    daemon._initial_sweep_worker(
+        roots=[],
+        cache=None,  # type: ignore[arg-type]
+        daemon_started=None,  # type: ignore[arg-type]
+        daemon_create_time=None,
+        stop_event=stop,
+        cache_ready=cache_ready,
+        deferred=deferred,
+        redispatch=fake_redispatch,
+    )
+
+    assert redispatched == ["ev1", "ev2", "ev3"], "drain must replay events in FIFO order"
+    assert drain_order == ["redispatch", "redispatch", "redispatch", "sweep"], (
+        "drain must complete before _sweep_once runs"
+    )
+    # Queue is empty after drain.
+    assert deferred.drain() == []
+
+
+def test_initial_sweep_worker_continues_drain_on_redispatch_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """One bad deferred event (or one whose path vanished between
+    deferral and replay) must NOT abort the rest of the drain. The
+    worker logs the exception and continues. Mirrors the watchdog
+    handler's broad-except pattern at the dispatch entry — convergence
+    is the goal, not strict per-event correctness."""
+    monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(daemon, "_sweep_once", lambda *a, **kw: None)
+
+    deferred = daemon._DeferredEvents()
+    cache_ready = threading.Event()
+    # Append directly to the internal list to avoid the cache_ready atomic
+    # check (we want these in the queue regardless).
+    with deferred._lock:
+        deferred._events.extend(["ev1", "boom", "ev3"])
+
+    seen: list[object] = []
+
+    def maybe_failing(event: object) -> None:
+        if event == "boom":
+            raise RuntimeError("simulated dispatch failure")
+        seen.append(event)
+
+    stop = threading.Event()
+    caplog.set_level(logging.ERROR, logger="dbxignore.daemon")
+    daemon._initial_sweep_worker(
+        roots=[],
+        cache=None,  # type: ignore[arg-type]
+        daemon_started=None,  # type: ignore[arg-type]
+        daemon_create_time=None,
+        stop_event=stop,
+        cache_ready=cache_ready,
+        deferred=deferred,
+        redispatch=maybe_failing,
+    )
+
+    assert seen == ["ev1", "ev3"], "drain must skip the failing event but continue"
+    assert any("deferred event re-dispatch failed" in rec.message for rec in caplog.records), [
+        rec.message for rec in caplog.records
+    ]

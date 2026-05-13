@@ -80,6 +80,44 @@ def test_build_xml_escapes_ampersand_in_arguments(monkeypatch: pytest.MonkeyPatc
 # test_detect_invocation_returns_pythonw_on_windows there.
 
 
+def test_install_task_wraps_filenotfounderror_from_schtasks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Item 8 from external review: when schtasks.exe isn't on PATH
+    (atypical on Windows but possible in Nano Server / stripped sandboxes),
+    install_task must surface a clean RuntimeError instead of letting the
+    FileNotFoundError traceback escape past cli.install's
+    RuntimeError-only catch."""
+
+    def fake_run_missing(*_a: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+        raise FileNotFoundError(2, "No such file or directory", "schtasks")
+
+    monkeypatch.setattr(install.subprocess, "run", fake_run_missing)  # type: ignore[attr-defined]
+
+    with pytest.raises(RuntimeError, match="could not be invoked"):
+        install.install_task()
+
+
+def test_uninstall_task_wraps_filenotfounderror_from_schtasks_delete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The /Delete arm of uninstall_task must surface a clean RuntimeError
+    when schtasks isn't invocable. The /End arm logs a warning and continues
+    (best-effort), so uninstall reaches /Delete; that call must not escape
+    as a raw traceback."""
+    from dbxignore import state as state_module
+
+    monkeypatch.setattr(state_module, "read", lambda: None)
+
+    def fake_run_missing(*_a: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+        raise FileNotFoundError(2, "No such file or directory", "schtasks")
+
+    monkeypatch.setattr(install.subprocess, "run", fake_run_missing)  # type: ignore[attr-defined]
+
+    with pytest.raises(RuntimeError, match="schtasks /Delete could not be invoked"):
+        install.uninstall_task()
+
+
 def test_uninstall_task_raises_on_schtasks_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """schtasks /Delete's non-zero exit must surface as a RuntimeError so the
     CLI stops claiming "Uninstalled scheduled task" when the task still

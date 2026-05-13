@@ -43,19 +43,36 @@ _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
 def _resolve_under_roots(raw_path: str | None, roots: list[Path]) -> tuple[Path, Path] | None:
-    """Return ``(root, resolved_path)`` if ``raw_path`` is under a watched root.
+    """Return ``(root, path)`` if ``raw_path`` is under a watched root.
 
-    Resolution is deferred until after ``find_containing`` succeeds — the
-    Path.resolve() syscall is the cost item #43 hoisted out of reconcile,
-    so paying it for events outside any root would defeat the win.
+    Lexical-first containment preserves the "symlinks are leaves"
+    invariant. A symlink inside Dropbox pointing outside the root would,
+    under ``Path.resolve()``, produce a path outside every watched root
+    and cause ``reconcile_subtree`` to either raise on its
+    ``is_relative_to(root)`` guard or operate on filesystem paths the
+    daemon shouldn't touch. For events whose ``src_path`` is already
+    under a watched root by string comparison the daemon operates on
+    the link path itself — markers attach to the link object, matching
+    the CLI's ``_normalize_under_root`` behavior.
+
+    Fallback: an out-of-Dropbox path that ``.resolve()`` lands inside
+    a watched root via a symlink alias (e.g. ``/data/link`` ->
+    ``~/Dropbox``) still dispatches against the resolved in-root path.
+    Same shape as the CLI's resolved-path fallback. The resolve syscall
+    only runs for events that fail the lexical check (rare), so the
+    item #43 cost hoist is preserved in the common case.
     """
     if not raw_path:
         return None
     p = Path(raw_path)
     root = find_containing(p, roots)
+    if root is not None:
+        return root, p
+    resolved = p.resolve()
+    root = find_containing(resolved, roots)
     if root is None:
         return None
-    return root, p.resolve()
+    return root, resolved
 
 
 def _moved_dest_under_root(event: Any, roots: list[Path]) -> tuple[Path, Path] | None:
@@ -72,10 +89,16 @@ def _moved_dest_under_root(event: Any, roots: list[Path]) -> tuple[Path, Path] |
     dest_path = Path(event.dest_path)
     if not is_ignore_filename(dest_path.name):
         return None
+    # Lexical-first containment matches `_resolve_under_roots` — see that
+    # function's docstring for the symlink-escape rationale.
     dest_root = find_containing(dest_path, roots)
+    if dest_root is not None:
+        return dest_root, dest_path
+    resolved = dest_path.resolve()
+    dest_root = find_containing(resolved, roots)
     if dest_root is None:
         return None
-    return dest_root, dest_path.resolve()
+    return dest_root, resolved
 
 
 def _classify(
@@ -151,7 +174,12 @@ def _classify(
     return None
 
 
-def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
+def _dispatch(
+    event: Any,
+    cache: RuleCache,
+    roots: list[Path],
+    cache_ready: threading.Event | None = None,
+) -> None:
     classification = _classify(event, roots)
     if classification is None:
         return
@@ -167,6 +195,36 @@ def _dispatch(event: Any, cache: RuleCache, roots: list[Path]) -> None:
         event.event_type,
         src,
     )
+
+    # Gate OTHER and DIR_CREATE events on the cache having loaded at least
+    # once. Without the gate, an OTHER event arriving in the startup window
+    # (observer is scheduled in `run()` before the initial-sweep worker
+    # populates the cache) under an already-marked ignored subtree would
+    # dispatch with an empty cache, `cache.match()` returns False,
+    # `reconcile_subtree` clears the existing marker, and Dropbox sees the
+    # marker disappear before the initial-sweep worker's Phase 2 re-applies
+    # it. The window is bounded by Phase 1 wall-clock (cache.load_root
+    # across roots; typically seconds), but big-tree users could observe
+    # transient unmarking and Dropbox could start re-uploading. RULES events
+    # are NOT gated: they handle their own cache mutations (`reload_file` /
+    # `remove_file`) and don't depend on a pre-populated cache.
+    #
+    # ``cache_ready=None`` means "no gate" — the in-codebase convention for
+    # optional-gate parameters mirroring ``reconcile_subtree``'s
+    # ``stop_event``. Production ``daemon.run()`` always supplies a real
+    # event; direct test callers may omit it when their own setup pre-loads
+    # the cache.
+    if (
+        cache_ready is not None
+        and not cache_ready.is_set()
+        and kind in (EventKind.OTHER, EventKind.DIR_CREATE)
+    ):
+        logger.debug(
+            "skipping %s event before cache ready: %s",
+            kind.value,
+            event.src_path,
+        )
+        return
 
     if kind is EventKind.RULES:
         if event.event_type == "deleted":
@@ -637,20 +695,24 @@ def run(stop_event: threading.Event | None = None) -> None:
 
             cache = RuleCache()
             # `cache.load_root` is NOT called here on purpose. The worker
-            # thread's `_sweep_once` does it (and its own reconcile pass)
-            # so the main thread's early `state.write` below isn't blocked
-            # by a slow `rglob('**/.dropboxignore')` on large trees. The
-            # cost the BACKLOG #53 fix is meant to remove was the synchronous
-            # initial sweep, but a similar argument applies to the rule scan
-            # — both belong on the worker side. Watchdog events arriving
-            # before the worker populates the cache are still dispatched;
-            # `_dispatch` calls `cache.reload_file` for RULES events, and
-            # OTHER/DIR_CREATE events on an empty cache simply produce
-            # `match()=False` (no markers set) until the worker's sweep
-            # converges the state. Surfaced by Codex on PR #162.
+            # thread does it before signaling `cache_ready`, so the main
+            # thread's early `state.write` below isn't blocked by a slow
+            # `rglob('**/.dropboxignore')` on large trees. The cost the
+            # BACKLOG #53 fix is meant to remove was the synchronous
+            # initial sweep, but a similar argument applies to the rule
+            # scan — both belong on the worker side.
+            #
+            # Watchdog events arriving before the worker populates the cache
+            # are handled per-kind: RULES events still dispatch (they call
+            # `cache.reload_file` / `remove_file` themselves and don't depend
+            # on a pre-populated cache); OTHER and DIR_CREATE events are
+            # gated on `cache_ready` so that an event under an already-marked
+            # ignored subtree doesn't reconcile against an empty cache and
+            # transiently clear its marker before Phase 2 restores it.
+            cache_ready = threading.Event()
 
             debouncer = Debouncer(
-                on_emit=lambda item: _dispatch(item[2], cache, configured_roots),
+                on_emit=lambda item: _dispatch(item[2], cache, configured_roots, cache_ready),
                 timeouts_ms=_timeouts_from_env(),
             )
             handler = _WatchdogHandler(debouncer, configured_roots, cache)
@@ -694,6 +756,7 @@ def run(stop_event: threading.Event | None = None) -> None:
                         daemon_started,
                         daemon_create_time,
                         stop_event,
+                        cache_ready,
                     ),
                     daemon=False,
                     name="dbxignored-initial-sweep",
@@ -968,6 +1031,7 @@ def _initial_sweep_worker(
     daemon_started: dt.datetime,
     daemon_create_time: float | None,
     stop_event: threading.Event,
+    cache_ready: threading.Event | None = None,
 ) -> None:
     """Run the initial sweep in a worker thread (item #53).
 
@@ -986,11 +1050,26 @@ def _initial_sweep_worker(
     an unanticipated exception type routes through the same shutdown arm
     rather than escaping the worker thread silently and stranding the
     daemon in ``state=starting`` (item #91).
+
+    The ``cache_ready`` event is set AFTER the rule cache is populated
+    (here, between the optional pad-wait and ``_sweep_once``) so that
+    OTHER/DIR_CREATE events queued in the debouncer during startup wait
+    until the cache is loaded before dispatching. Loading the cache
+    pre-sweep is a duplicate of ``_sweep_once`` Phase 1's ``load_root``
+    calls; ``_load_if_changed``'s mtime+size short-circuit makes the
+    second load a near-no-op, and the explicit-then-implicit shape keeps
+    the readiness signal at the point readers actually need it.
     """
     try:
         pad_s = _slow_sweep_pad_seconds()
         if pad_s > 0 and stop_event.wait(pad_s):
             return
+        for r in roots:
+            if stop_event.is_set():
+                return
+            cache.load_root(r, stop_event=stop_event)
+        if cache_ready is not None:
+            cache_ready.set()
         _sweep_once(
             roots,
             cache,

@@ -202,6 +202,11 @@ def test_discover_non_utf8_bytes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     # Write raw CP1252-encoded bytes that aren't valid UTF-8 where Dropbox
     # has historically stored non-ASCII path components on older installs.
     (dropbox_dir / "info.json").write_bytes(b'{"personal": {"path": "C:\\\\Dr\xf6pbox"}}')
+    # Clear the OTHER candidate env vars so the fallback path doesn't pick up
+    # the test runner's real LOCALAPPDATA (which on Windows can contain a real
+    # Dropbox install) and silently "succeed." Without this, the post-item-5
+    # fallback behavior masks the malformed-bytes case under test.
+    _clear_platform_env(monkeypatch)
     monkeypatch.setenv(env_var, str(base))
     assert roots.discover() == []
 
@@ -297,4 +302,81 @@ def test_discover_warns_with_both_candidates_when_neither_exists(
         and "AppData" in rec.message
         and "LocalAppData" in rec.message
         for rec in caplog.records
+    ), [rec.message for rec in caplog.records]
+
+
+def test_discover_falls_back_when_first_candidate_malformed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Item 5 from external review: a stale APPDATA\\Dropbox\\info.json
+    from an uninstalled per-user install used to mask a valid
+    LOCALAPPDATA\\Dropbox\\info.json. Now, if the first existing
+    candidate fails to parse, discover falls through to the next
+    candidate, logs a warning per failed candidate, and returns the
+    first usable result."""
+    if sys.platform != "win32":
+        import pytest
+
+        pytest.skip("LOCALAPPDATA is Windows-only")
+
+    import logging
+
+    # APPDATA: malformed JSON (parses as JSON but top-level is a list,
+    # not an object — tripping _read_dropbox_account_paths's isinstance
+    # check and raising ValueError).
+    appdata = tmp_path / "AppData"
+    (appdata / "Dropbox").mkdir(parents=True)
+    (appdata / "Dropbox" / "info.json").write_text("[1, 2, 3]", encoding="utf-8")
+    monkeypatch.setenv("APPDATA", str(appdata))
+
+    # LOCALAPPDATA: valid personal info.json.
+    localappdata = tmp_path / "LocalAppData"
+    (localappdata / "Dropbox").mkdir(parents=True)
+    (localappdata / "Dropbox" / "info.json").write_text(
+        (FIXTURES / "info_personal.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LOCALAPPDATA", str(localappdata))
+
+    with caplog.at_level(logging.WARNING, logger="dbxignore.roots"):
+        result = roots.discover()
+
+    # Falls back to the LOCALAPPDATA personal account path.
+    assert result == [Path(r"C:\Dropbox")]
+    # A per-candidate warning surfaces the bad APPDATA file with a
+    # "trying next candidate" hint, but discover still succeeds.
+    assert any(
+        "AppData" in rec.message and "trying next candidate" in rec.message
+        for rec in caplog.records
+    ), [rec.message for rec in caplog.records]
+
+
+def test_discover_returns_empty_when_all_candidates_malformed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """If every existing candidate fails to parse, discover returns []
+    with a summary warning listing the attempts."""
+    if sys.platform != "win32":
+        import pytest
+
+        pytest.skip("LOCALAPPDATA is Windows-only")
+
+    import logging
+
+    appdata = tmp_path / "AppData"
+    (appdata / "Dropbox").mkdir(parents=True)
+    (appdata / "Dropbox" / "info.json").write_text("not valid json", encoding="utf-8")
+    monkeypatch.setenv("APPDATA", str(appdata))
+
+    localappdata = tmp_path / "LocalAppData"
+    (localappdata / "Dropbox").mkdir(parents=True)
+    (localappdata / "Dropbox" / "info.json").write_text("[]", encoding="utf-8")
+    monkeypatch.setenv("LOCALAPPDATA", str(localappdata))
+
+    with caplog.at_level(logging.WARNING, logger="dbxignore.roots"):
+        result = roots.discover()
+
+    assert result == []
+    assert any(
+        "No usable Dropbox info.json after trying" in rec.message for rec in caplog.records
     ), [rec.message for rec in caplog.records]

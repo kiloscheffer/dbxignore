@@ -105,12 +105,18 @@ jobs:
         # `--help` exercises the full import chain (cli → markers →
         # _backends/macos_xattr → xattr → cffi → _cffi_backend) without
         # starting the daemon. Catches the v0.4.0a1 missing-`_cffi_backend`
-        # regression class before the artifact ships. PyInstaller sets +x on
-        # output binaries, so no chmod needed.
+        # regression class before the artifact ships. `--version` additionally
+        # exercises the `copy_metadata("dbxignore")` bundling in the .spec
+        # (RuntimeError: 'dbxignore' is not installed if dist-info is missing),
+        # matching the Windows leg's `--help` + `--version` coverage shape.
+        # PyInstaller sets +x on output binaries, so no chmod needed.
         shell: bash
         run: |
           set -e
           ./dist/dbxignore --help
+          version_out=$(./dist/dbxignore --version 2>&1)
+          echo "$version_out"
+          echo "$version_out" | grep -q "dbxignore, version"
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

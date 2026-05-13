@@ -338,3 +338,71 @@ def test_initial_sweep_worker_no_pad_when_marker_missing(
     assert elapsed < 0.1, (
         f"sweep delayed {elapsed:.3f}s without marker; expected near-zero overhead"
     )
+
+
+def test_initial_sweep_worker_sets_cache_ready_before_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pins the item-1 contract: the worker loads the rule cache and signals
+    `cache_ready` BEFORE calling `_sweep_once`. The order matters — debounced
+    events that arrived during the startup window can dispatch the moment
+    `cache_ready` is set, even though Phase 2 (reconcile sweep) is still
+    running. Without this ordering, gated events would queue until the full
+    sweep completes, an unnecessary ~50s delay on big trees."""
+    monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
+
+    cache_ready_was_set_when_sweep_started: list[bool] = []
+
+    def fake_sweep_once(*_args: object, **_kwargs: object) -> None:
+        cache_ready_was_set_when_sweep_started.append(cache_ready.is_set())
+
+    monkeypatch.setattr(daemon, "_sweep_once", fake_sweep_once)
+
+    stop = threading.Event()
+    cache_ready = threading.Event()
+    daemon._initial_sweep_worker(
+        roots=[],  # empty roots → for-loop is a no-op; we test the set-before-sweep wiring
+        cache=None,  # type: ignore[arg-type]
+        daemon_started=None,  # type: ignore[arg-type]
+        daemon_create_time=None,
+        stop_event=stop,
+        cache_ready=cache_ready,
+    )
+    assert cache_ready_was_set_when_sweep_started == [True], (
+        "cache_ready must be set before _sweep_once is called"
+    )
+
+
+def test_initial_sweep_worker_does_not_set_cache_ready_when_stopped_early(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Symmetric guard: if stop_event fires before the worker finishes
+    loading the cache, `cache_ready` stays unset and gated events never
+    dispatch against a partial cache."""
+    monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
+    _write_marker(tmp_path, "10")  # long pad so we can stop mid-pad
+
+    sweep_called: list[bool] = []
+    monkeypatch.setattr(daemon, "_sweep_once", lambda *a, **kw: sweep_called.append(True))
+
+    stop = threading.Event()
+    cache_ready = threading.Event()
+
+    def _signal_stop() -> None:
+        time.sleep(0.1)
+        stop.set()
+
+    signaller = threading.Thread(target=_signal_stop)
+    signaller.start()
+    daemon._initial_sweep_worker(
+        roots=[],
+        cache=None,  # type: ignore[arg-type]
+        daemon_started=None,  # type: ignore[arg-type]
+        daemon_create_time=None,
+        stop_event=stop,
+        cache_ready=cache_ready,
+    )
+    signaller.join(timeout=1.0)
+
+    assert sweep_called == [], "_sweep_once must not run after stop_event"
+    assert not cache_ready.is_set(), "cache_ready must NOT be set when the worker returns early"

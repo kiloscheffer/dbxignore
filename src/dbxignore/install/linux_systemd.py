@@ -89,17 +89,22 @@ def _quote_exec_start_path(exe_path: Path) -> str:
 
 
 def _run_systemctl(cmd: list[str]) -> None:
-    """Run a systemctl command; convert CalledProcessError → RuntimeError.
+    """Run a systemctl command; convert CalledProcessError / OSError → RuntimeError.
 
     Callers (notably cli.install / cli.uninstall) catch RuntimeError to
     surface failures cleanly. subprocess.CalledProcessError is not a
     RuntimeError, so without this wrapping a failed systemctl call would
-    escape as a raw traceback.
+    escape as a raw traceback. The OSError arm covers the "systemctl
+    binary not on PATH" case (FileNotFoundError, subclass of OSError) —
+    real on minimal containers / chroots without systemd installed —
+    and other invocation-level failures (sandbox EACCES etc.).
     """
     try:
         subprocess.run(cmd, check=True)  # noqa: S603 — hardcoded args, no user data
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(f"{' '.join(cmd)} failed with exit code {exc.returncode}") from exc
+    except OSError as exc:
+        raise RuntimeError(f"{' '.join(cmd)} could not be invoked: {exc}") from exc
 
 
 def build_unit_content(

@@ -1587,6 +1587,47 @@ function Test-Uninstall {
             Write-Fail "6e - verb keys persisted despite --purge"
         }
     }
+
+    # 6f - Codex P2 follow-up on PR #243's BACKLOG #122 Arm A: --purge now
+    # proceeds when state.json is unreadable AND no daemon process holds
+    # daemon.lock. Force the scenario: re-install (daemon starts),
+    # Stop-Process -Force the daemon (Task Scheduler RestartOnFailure
+    # Interval is PT1M = 60s, wide window for our uninstall to run),
+    # corrupt state.json so state.read() returns None, then run
+    # `dbxignore uninstall --purge`. uninstall_service removes the
+    # task registration before any restart fires.
+    Write-Note "6f - --purge recovers from corrupt state.json + dead daemon (BACKLOG #122 Codex P2)"
+    $installOut6f = & dbxignore install 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "6f - re-install failed: $installOut6f"
+        return
+    }
+    Start-Sleep -Seconds 2
+    $statePath6f = Join-Path $stateDir "state.json"
+    $daemonPid6f = $null
+    try {
+        $stateObj6f = Get-Content $statePath6f -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $daemonPid6f = $stateObj6f.daemon_pid
+    } catch {
+        Write-Note "6f - could not read daemon PID from state.json: $_"
+    }
+    if ($null -ne $daemonPid6f) {
+        Stop-Process -Id $daemonPid6f -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 1
+    Set-Content -Path $statePath6f -Value "corrupt {{{ not valid json" -Encoding utf8 -NoNewline
+    $recoveryOut = & dbxignore uninstall --purge 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Pass "6f - uninstall --purge succeeded with corrupt state.json + dead daemon"
+    } else {
+        Write-Fail "6f - uninstall --purge failed; expected exit 0"
+        $recoveryOut | ForEach-Object { Write-Note "    $_" }
+    }
+    if (-not (Test-Path $statePath6f)) {
+        Write-Pass "6f - corrupt state.json cleaned up by recovery purge"
+    } else {
+        Write-Fail "6f - corrupt state.json still present after recovery purge"
+    }
 }
 
 # ---------------------------------------------------------------------------

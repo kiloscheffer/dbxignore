@@ -368,7 +368,16 @@ def _encode(state: State) -> dict[str, Any]:
 
 def _decode(raw: dict[str, Any]) -> State:
     return State(
-        daemon_pid=raw.get("daemon_pid"),
+        # `daemon_pid` is decode-validated for the same reason as
+        # `daemon_create_time` below: a hand-edited or shape-mismatched
+        # state file with e.g. a string `daemon_pid` would otherwise
+        # propagate to `is_daemon_alive`, where `psutil.pid_exists()` /
+        # `os.kill()` raise `TypeError` on a non-int pid — and that arm's
+        # `(OSError, SystemError)` catch does not cover `TypeError`, so it
+        # escapes and breaks status / clear / the daemon startup guard.
+        # Raise ValueError here so `_read_at`'s corrupt-state arm catches
+        # it and `read()` returns None.
+        daemon_pid=_validate_pid(raw.get("daemon_pid")),
         # `daemon_create_time` is decode-tolerant: old state.json files
         # (pre-#79) lack the field and decode to None, which triggers the
         # legacy substring-name fallback in is_daemon_alive. But when the
@@ -406,6 +415,26 @@ def _decode(raw: dict[str, Any]) -> State:
 
 def _parse_dt(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value else None
+
+
+def _validate_pid(value: Any) -> int | None:
+    """Coerce a JSON-decoded ``daemon_pid`` to an int or raise.
+
+    Accepts None (field absent or ``null`` — the documented "pid never
+    written" state) and plain ints. Rejects bool (a Python int subclass —
+    ``isinstance(True, int)`` is True, so explicit exclusion is required),
+    floats, strings, and anything else. ValueError surfaces through
+    ``_read_at``'s corrupt-state arm so ``read()`` returns None on a
+    hand-edited or shape-mismatched record.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"daemon_pid must be an integer, got {type(value).__name__}")
+    # Concrete int() narrows the JSON-decoded Any for the type checker
+    # (mirrors _validate_create_time's float() coercion); value is already
+    # an int here, so this is a no-op at runtime.
+    return int(value)
 
 
 def _validate_create_time(value: Any) -> float | None:

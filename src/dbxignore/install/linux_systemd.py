@@ -173,20 +173,36 @@ def install_unit() -> None:
 
 def uninstall_unit() -> None:
     path = _unit_path()
-    # disable --now: stop and disable. Missing unit → non-zero exit, which we swallow.
-    subprocess.run(  # noqa: S603 — hardcoded args, no user data
-        ["systemctl", "--user", "disable", "--now", UNIT_NAME],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    # disable --now: stop and disable. Missing unit → non-zero exit, which
+    # `check=False` swallows. But `check=False` does NOT suppress OSError —
+    # a `FileNotFoundError` (systemctl absent on a minimal container /
+    # chroot) or sandbox `EACCES` would escape as a raw traceback. Tolerate
+    # it here: the unit-file removal below is the meaningful cleanup, and
+    # the `daemon-reload` call (via `_run_systemctl`) surfaces a genuinely-
+    # missing systemctl as RuntimeError, which cli.uninstall catches.
+    try:
+        subprocess.run(  # noqa: S603 — hardcoded args, no user data
+            ["systemctl", "--user", "disable", "--now", UNIT_NAME],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        logger.warning("systemctl disable --now %s could not be invoked: %s", UNIT_NAME, exc)
     if path.exists():
-        path.unlink()
+        # Convert an unlink OSError (permission denied, etc.) to RuntimeError
+        # so cli.uninstall's `except RuntimeError` handler surfaces it as a
+        # clean "Failed to uninstall daemon service" + exit 2 rather than a
+        # raw traceback after partial cleanup.
+        try:
+            path.unlink()
+        except OSError as exc:
+            raise RuntimeError(f"could not remove systemd unit file {path}: {exc}") from exc
         logger.info("Removed %s", path)
     _run_systemctl(["systemctl", "--user", "daemon-reload"])
 
 
-def remove_dropin_directory() -> Path | None:
+def remove_dropin_directory(errors: list[tuple[Path, str]] | None = None) -> Path | None:
     """Remove the systemd drop-in directory for the unit, if it exists.
 
     Drop-in directories live at ``~/.config/systemd/user/<unit-name>.d/``
@@ -195,8 +211,13 @@ def remove_dropin_directory() -> Path | None:
     uninstall, we clean this up too so no dbxignore-related artifacts
     linger.
 
-    Returns the path that was removed, or ``None`` if HOME is unset or
-    the directory didn't exist.
+    Returns the path that was removed, or ``None`` if HOME is unset, the
+    directory didn't exist, or removal failed. ``--purge`` calls this
+    mid-cleanup, so an ``shutil.rmtree`` OSError must NOT escape as a raw
+    traceback that strands the rest of the purge: when ``errors`` is
+    supplied, a removal failure appends ``(dropin_dir, message)`` to it and
+    returns ``None``; the caller surfaces it through the same exit-2-gated
+    accumulator as the marker / state-file errors.
     """
     home = os.environ.get("HOME")
     if not home:
@@ -204,5 +225,11 @@ def remove_dropin_directory() -> Path | None:
     dropin_dir = Path(home) / ".config" / "systemd" / "user" / f"{UNIT_NAME}.d"
     if not dropin_dir.exists():
         return None
-    shutil.rmtree(dropin_dir)
+    try:
+        shutil.rmtree(dropin_dir)
+    except OSError as exc:
+        logger.warning("Could not remove systemd drop-in directory %s: %s", dropin_dir, exc)
+        if errors is not None:
+            errors.append((dropin_dir, str(exc)))
+        return None
     return dropin_dir

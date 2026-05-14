@@ -71,6 +71,21 @@ phase_extended_cli() {
         fail "4g — init did not write expected header"
     fi
 
+    # 4g — init refuses an unwritable target dir with exit 2 + a clean
+    # "cannot write" message rather than an unhandled OSError traceback (PR #248).
+    note "4g — dbxignore init on an unwritable directory"
+    local ro_dir="$T/init-readonly"
+    mkdir -p "$ro_dir"
+    chmod 000 "$ro_dir"
+    dbxignore init "$ro_dir" >/tmp/dbx-init-ro.out 2>&1 && rc=0 || rc=$?
+    chmod 755 "$ro_dir"
+    if [ "$rc" -eq 2 ]; then
+        pass "4g — init exits 2 on an unwritable dir"
+    else
+        fail "4g — init exited $rc on an unwritable dir (expected 2)"
+    fi
+    assert_grep /tmp/dbx-init-ro.out 'cannot write' "4g — init stderr says 'cannot write'"
+
     # 4h — dbxignore generate translates a .gitignore byte-for-byte
     note "4h — dbxignore generate (byte-for-byte)"
     rm -rf "$T"; mkdir -p "$T"

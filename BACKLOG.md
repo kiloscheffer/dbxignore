@@ -2787,11 +2787,54 @@ Touches: `scripts/manual-test-{windows.ps1,ubuntu-vps.sh,macos.sh}` Phase 6 (fai
 
 ---
 
+## 130. macOS sync-mode detection defaults to legacy when info.json is missing and pluginkit reports the extension as `allowed`
+
+`_backends/macos_xattr.py:_detect()` is path-primary: it reads account paths from `~/.dropbox/info.json` and uses `pluginkit` only to disambiguate. When `info.json` is missing, unreadable, or stale, `_read_dropbox_paths_from_info()` returns `[]` (intentionally — mode detection needs the *configured* sync mode, which lives only in info.json, so it bypasses the `DBXIGNORE_ROOT` override on purpose). With no path signal, `_detect()` branches on `pluginkit` state:
+
+- `disabled` → `[ATTR_LEGACY]` (correct — user opted out of File Provider).
+- `unknown` → `[ATTR_LEGACY, ATTR_FILEPROVIDER]` (the defensive write-both case).
+- `allowed` or `not_registered` → falls through to the confident `[ATTR_LEGACY]` default.
+
+The gap is the `allowed` arm. `allowed` means the File Provider extension is registered and the OS will dispatch events to it — a *weak signal toward* File Provider, not toward legacy. If the user's Dropbox is actually in File Provider mode but `info.json` is missing/stale (a non-stock install, a Dropbox reinstall mid-flight, a `DBXIGNORE_ROOT` override pointing at a `~/Library/CloudStorage/` folder on a host whose `~/.dropbox/info.json` never got written), `_detect()` writes `com.dropbox.ignored` while Dropbox watches `com.apple.fileprovider.ignore#P` and never honors the marker. The failure is silent: the marker write succeeds, Dropbox just ignores it.
+
+This is narrow — a normal Dropbox install always writes `info.json`, which is decisive — so it requires a missing/stale `info.json` *and* `pluginkit` reporting `allowed`.
+
+**Fix candidates:**
+
+1. **Widen the defensive write-both case to cover `allowed` + no decisive path signal.** Today only `unknown` triggers `[ATTR_LEGACY, ATTR_FILEPROVIDER]`; extend it to `allowed`-with-no-path-signal. The inactive stack just carries a stray attribute — the same metadata-cleanliness-vs-correctness trade `_detect()` already documents for the `unknown` case. Smallest change; stays within the module's existing logic. Preferred.
+2. **Use the operational root as a fallback path signal when info.json yields nothing** — consult `roots.discover()` / `DBXIGNORE_ROOT` and apply the same `~/Library/CloudStorage/` and `/Volumes/` path tests. More invasive: it crosses the deliberate info.json-only boundary `_read_dropbox_paths_from_info()`'s docstring describes, and needs care not to reintroduce the system-vs-user-signal conflation the path-primary design fixed.
+3. **Per-path attribute selection** when the reconciled path is itself under `~/Library/CloudStorage/` or `/Volumes/`. Most precise, biggest change — `_detect()`'s result is currently cached process-wide and path-independent.
+
+**Urgency:** low-medium. A silent wrong-attribute write is a real correctness failure, but the trigger (missing/stale info.json + `pluginkit` `allowed`) is uncommon on stock installs. No user report. Bundle with the next `_backends/macos_xattr.py` edit.
+
+Touches: `src/dbxignore/_backends/macos_xattr.py:_detect()` (~5 LOC for fix candidate 1); `tests/test_macos_xattr_unit.py` (new test: empty info.json paths + `pluginkit` `allowed` → asserts both attribute names returned).
+
+---
+
+## 131. `roots.find_containing` returns the first containing root, not the most specific one
+
+`roots.find_containing(path, roots)` (`roots.py`) iterates `roots` and returns the first one that contains `path`. The iteration order is whatever `discover()` produced — for info.json-derived roots that is `data.values()` order from the JSON, which carries no specificity guarantee. If two discovered roots are nested (one Dropbox root inside another), a path under the *inner* root can match the *outer* root: `RuleCache.match` / `explain` and the daemon's event dispatch would then evaluate that path against the outer root's `.dropboxignore` hierarchy instead of the inner root's.
+
+Realistically rare — Dropbox personal and business accounts are normally siblings (`~/Dropbox`, `~/Dropbox (Business)`), not nested — so there is no user-facing report. But the function's contract is "the root that contains `path`," and when two roots both qualify, "first in arbitrary order" is not a defensible answer; "most specific" (longest match) is.
+
+**Fix candidates:**
+
+1. **Sort candidate roots by descending path depth inside `find_containing`, return the first match against the sorted list.** Localized — `find_containing` is the single chokepoint that `rules.RuleCache.match` / `explain` and the daemon all route through. ~3 LOC.
+2. **Return the longest containing root explicitly** — iterate all roots, collect every container, return the deepest. Same result as 1, slightly clearer intent; all call sites pass 1–2 roots so the extra work per call is irrelevant.
+
+Both are cheap and purely defensive.
+
+**Urgency:** low. No observed problem; nested Dropbox roots are an unusual configuration. Bundle with the next `roots.py` edit.
+
+Touches: `src/dbxignore/roots.py:find_containing` (~3 LOC); `tests/test_roots.py` (new test: two nested roots, assert a path under the inner root resolves to the inner root).
+
+---
+
 ## Status
 
 ### Open
 
-Seventeen items (#106 and #107 resolved this PR). Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12). Item #117 surfaced 2026-05-12 during the chore/115 work session (uv venv hygiene); the other two items from that session shipped 2026-05-12: #116 (uv build-cache hygiene) in PR #227, #118 (is_daemon_alive SystemError escalation) in PR #230. Item #126 surfaced 2026-05-13 in a second external-review pass (alongside the same-PR-resolved #123 / #124 and the now-resolved #122 / #125) — a deferred-events startup finding. Items #121, #127, #128, #129 form a four-of-a-kind on the "new exit-2 path, hard to force the underlying failure mode" pattern — #129 surfaced 2026-05-14 during PR #243's work on resolving #122 and triggers the rule-of-four tripwire from #128's body, recommending the next contributor revisit a `DBXIGNORE_TEST_FAIL_*` env-var injection mechanism that would close all four deferrals at once.
+Nineteen items (#130 and #131 filed 2026-05-14 from an external code-review pass). Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer. Item #113 is the remaining open v0.5.0/v0.5.1 release-validation finding (#110, #111, #112 shipped in v0.5.1 on 2026-05-12). Item #117 surfaced 2026-05-12 during the chore/115 work session (uv venv hygiene); the other two items from that session shipped 2026-05-12: #116 (uv build-cache hygiene) in PR #227, #118 (is_daemon_alive SystemError escalation) in PR #230. Item #126 surfaced 2026-05-13 in a second external-review pass (alongside the same-PR-resolved #123 / #124 and the now-resolved #122 / #125) — a deferred-events startup finding. Items #121, #127, #128, #129 form a four-of-a-kind on the "new exit-2 path, hard to force the underlying failure mode" pattern — #129 surfaced 2026-05-14 during PR #243's work on resolving #122 and triggers the rule-of-four tripwire from #128's body, recommending the next contributor revisit a `DBXIGNORE_TEST_FAIL_*` env-var injection mechanism that would close all four deferrals at once.
 
 - **#27** — Intel Mac (x86_64) Mach-O binary build leg. v0.4 ships arm64-only; Intel users install via PyPI. Awaits demand signal.
 - **#28** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #27. Defer until item #27 actually triggers.
@@ -3032,3 +3075,4 @@ How items entered this tracker:
 - **Item 53 reframe note** added 2026-05-08 in PR #157 — the original framing (filed 2026-05-03) proposed a "marker-present + match-still-positive" pruning fix; tracing `reconcile.py:81-85` + `_reconcile_path`'s `return currently_ignored` tail revealed the proposed behavior was already implemented. PR #157 added `tests/test_reconcile_basic.py::test_does_not_descend_into_marked_subtree` to pin the contract and reframed the body around the actual remaining concern: the *initial* sweep on a fresh tree without markers, where pruning can't help by definition. Three new fix candidates filed (ready-before-sweep, persisted hint, finer-grained parallelism). Reframe-in-place rather than close-and-refile because the underlying perf pain is still real and the item-number identity is useful — same shape as item #33's validation-note pattern.
 - **Item 86** added 2026-05-08 in PR #163 — the workflow-retirement PR. PR #162's six Codex P2 findings on the `daemon.run` reorder included (as the seventh, after #6's cancellable rule scan landed) "Keep initial-sweep shutdown bounded": even with `RuleCache.load_root` checking `stop_event` between rglob yields, a tree with many directories but few `.dropboxignore` files has coarse-grained cancellation, and the unbounded outer `worker.join()` (the singleton-invariant guard from PR #162's fix #2) blocks shutdown until rglob completes. Real concern bounded operationally by systemd's TimeoutStopSec=90s default; the architectural fix needed (manual os.walk in load_root, OR different singleton-protection) is too big for an incremental patch — filed as a backlog item rather than blocking the daemon refactor on it. Surfaced via Codex auto-review of PR #162; reply documenting the deferral lives at https://github.com/kiloscheffer/dbxignore/pull/162#discussion_r3210571638.
 - **Items 94-103** added 2026-05-10 from a read-only whole-codebase local review requested explicitly for correctness, cross-platform behavior, filesystem edge cases, races, error handling, tests, and packaging/installation. Ten findings were filed rather than patched in-place per the user's read-only constraint: four user-facing correctness/error-handling gaps (#94, #95, #97, #98), three platform/install edge cases (#96, #99, #100), two rule-cache/rule-write race or filesystem-edge concerns (#101, #102), and one CI command-alignment item (#103). No tests were run; evidence came from static inspection of `src/dbxignore/`, `.github/workflows/test.yml`, and the relevant tests.
+- **Items 130-131** added 2026-05-14 from an external code-review pass over the codebase. The pass produced ten findings; six were triaged out as either deliberate documented decisions (the `apply` / `clear` exit-0-on-write-error contract; the unlocked rule-file read-modify-write deferred in `rules.py`'s docstrings; the lock-free-reader drift accepted in CLAUDE.md) or settled-already work. Four verified-real findings were fixed directly in the same PR rather than filed (info.json root validation, `state.daemon_pid` decode validation, Linux uninstall raw-failure paths, `cli.init` write-error handling). The two filed here are the findings that warranted a fix but had a wider design surface than this PR's scope: #130 (macOS detection's confident-legacy default) and #131 (`find_containing` first-vs-most-specific). Both low / low-medium urgency, bundle with the next touch of their respective module.

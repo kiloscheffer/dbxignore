@@ -131,7 +131,7 @@ jobs:
     # tag or a pre-release tag?". GitHub Actions expressions don't have
     # regex, and PEP 440 doesn't use a hyphen separator (alphas are
     # `0.4.0a1`, not `0.4.0-a1`), so a `contains(github.ref, '-a')` check
-    # is wrong — that's the earlier misfire (root cause).
+    # is wrong — that's the earlier misfire.
     #
     # Recognized pre-release suffixes: `aN`, `bN`, `rcN`, `.devN`.
     # `.postN` (post-release) is NOT a pre-release per PEP 440 and

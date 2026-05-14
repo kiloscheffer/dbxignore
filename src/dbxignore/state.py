@@ -375,8 +375,8 @@ def _decode(raw: dict[str, Any]) -> State:
         # Raise ValueError here so `_read_at`'s corrupt-state arm catches
         # it and `read()` returns None.
         daemon_pid=_validate_pid(raw.get("daemon_pid")),
-        # `daemon_create_time` is decode-tolerant: old state.json files
-        # Older state.json files lack the field and decode to None, which triggers the
+        # `daemon_create_time` is decode-tolerant: older state.json files
+        # lack the field and decode to None, which triggers the
         # legacy substring-name fallback in is_daemon_alive. But when the
         # field IS present, it MUST be a number — a hand-edited or shape-
         # mismatched state file with e.g. a string ``daemon_create_time``

@@ -7,8 +7,7 @@ next to sys.executable (GUI-subsystem binary, silent at logon); on Linux /
 macOS, use sys.executable directly. Non-frozen
 paths prefer shutil.which("dbxignore") on Linux/macOS and pythonw.exe on
 Windows (with python.exe fallback), else `python -m dbxignore`.
-Originally inline in linux_systemd.py; extracted here when macos_launchd.py
-needed the same logic.
+Shared by both linux_systemd.py and macos_launchd.py.
 """
 
 from __future__ import annotations

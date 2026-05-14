@@ -163,9 +163,9 @@ def is_daemon_alive(pid: int | None, create_time: float | None = None) -> bool:
     can't be detected and ``create_time`` is silently ignored — a known
     limitation, not a behavior bug. Used by ``cli.status`` to render the
     "running / not running / state may be stale" UI. The daemon's
-    singleton gate has moved to a process-lifetime OS lock (see
-    ``daemon._acquire_singleton_lock``), so this helper is no longer on
-    that path.
+    singleton gate is a process-lifetime OS lock (see
+    ``daemon._acquire_singleton_lock``); this helper is for external
+    observers, not on the daemon's own startup path.
     """
     if pid is None:
         return False

@@ -78,12 +78,14 @@ def detect_invocation() -> tuple[Path, str]:
     Frozen on Linux / macOS: ``sys.executable`` is the single binary; the
     daemon runs as ``dbxignore daemon``.
 
-    Non-frozen (uv tool install / pip install) on Windows: prefer the
-    ``dbxignorew.exe`` GUI-script trampoline (declared in pyproject.toml
-    ``[project.gui-scripts]``) — as a sibling of ``sys.executable`` first,
-    then on PATH. Fall back to ``pythonw.exe`` only when it is genuinely
-    GUI-subsystem (uv venvs ship a console-subsystem copy under that name),
-    then to ``sys.executable`` with a WARNING.
+    Non-frozen (uv tool install / pip install) on Windows, in order:
+    (1) the ``dbxignorew.exe`` GUI-script trampoline sibling of
+    ``sys.executable`` (declared in pyproject.toml ``[project.gui-scripts]``);
+    (2) the ``pythonw.exe`` sibling, but only when it is genuinely
+    GUI-subsystem (uv venvs ship a console-subsystem copy under that name);
+    (3) ``dbxignorew`` on PATH; (4) ``sys.executable`` with a WARNING. The
+    ``sys.executable``-anchored options rank above the PATH lookup because a
+    PATH entry could resolve to a different dbxignore install.
 
     Non-frozen on Linux / macOS: use the Python interpreter with
     ``-m dbxignore daemon``, or the ``dbxignore`` PATH shim if present.
@@ -107,27 +109,38 @@ def detect_invocation() -> tuple[Path, str]:
 
     # Non-frozen path.
     if sys.platform == "win32":
-        # Prefer the dbxignorew GUI-script trampoline. pip/uv generate it as
-        # a real GUI-subsystem launcher, so the daemon runs windowless — the
-        # non-frozen analogue of the frozen dbxignorew.exe. Sibling of
-        # sys.executable first (uv sync / pip-into-venv layout), then PATH
-        # (uv tool install drops it in a bin dir).
+        # Launcher precedence on Windows non-frozen: prefer launchers tied to
+        # the *current* package over PATH lookups (which could resolve to a
+        # different dbxignore install), and windowless launchers over
+        # console-subsystem ones.
+        #
+        # 1. dbxignorew.exe sibling of sys.executable. pip/uv generate this
+        #    GUI-script trampoline as a real GUI-subsystem launcher — the
+        #    non-frozen analogue of the frozen dbxignorew.exe. Local and
+        #    windowless (uv sync / pip-into-venv layout).
         dbxignorew_sibling = Path(sys.executable).with_name("dbxignorew.exe")
         if dbxignorew_sibling.exists():
             return dbxignorew_sibling, "daemon"
-        dbxignorew_in_path = shutil.which("dbxignorew")
-        if dbxignorew_in_path:
-            return Path(dbxignorew_in_path), "daemon"
-        # No GUI-script trampoline (install predates [project.gui-scripts],
-        # or the venv wasn't re-synced). Fall back to pythonw.exe — but only
-        # if it is genuinely GUI-subsystem. uv-created venvs ship a
-        # console-subsystem pythonw.exe (a byte-identical copy of
-        # python.exe); trusting the name allocates a visible console window
-        # for the daemon's whole lifetime.
+        # 2. pythonw.exe sibling of sys.executable, but only if it is
+        #    genuinely GUI-subsystem. Local and windowless: `-m dbxignore
+        #    daemon` runs in sys.executable's environment, so it cannot be
+        #    the wrong package. uv-created venvs ship a console-subsystem
+        #    pythonw.exe (a byte-identical copy of python.exe) — trusting the
+        #    name there allocates a visible console window for the daemon's
+        #    whole lifetime, so the subsystem check is load-bearing.
         pythonw_path = Path(sys.executable).with_name("pythonw.exe")
         if pythonw_path.exists() and _is_gui_subsystem(pythonw_path):
             return pythonw_path, "-m dbxignore daemon"
-        # Last resort: python.exe (always console-subsystem). The daemon
+        # 3. dbxignorew on PATH. Windowless, but only reached when there is
+        #    no local windowless launcher — a PATH entry could belong to a
+        #    different dbxignore install/version, so it ranks below the
+        #    sys.executable-anchored options above (uv tool install drops the
+        #    trampoline in a bin dir; pip install --user puts it in the user
+        #    scripts dir).
+        dbxignorew_in_path = shutil.which("dbxignorew")
+        if dbxignorew_in_path:
+            return Path(dbxignorew_in_path), "daemon"
+        # 4. Last resort: python.exe (always console-subsystem). The daemon
         # launched at logon will show a console window; warn so the cause
         # is discoverable. The warning + fallback shape originated in PR #229
         # (item #100, pythonw.exe-absent case) and now also covers the

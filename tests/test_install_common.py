@@ -144,6 +144,39 @@ def test_detect_invocation_windows_uses_dbxignorew_on_path(
     assert args == "daemon"
 
 
+def test_detect_invocation_windows_prefers_local_gui_pythonw_over_path_dbxignorew(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Windows non-frozen, no sibling, but a genuine GUI-subsystem
+    ``pythonw.exe`` next to ``sys.executable`` AND a ``dbxignorew`` on PATH:
+    select the local ``pythonw.exe``.
+
+    ``dbxignore install`` runs in ``sys.executable``'s environment, so the
+    local ``pythonw.exe`` + ``-m dbxignore daemon`` is guaranteed tied to the
+    current package. A ``dbxignorew`` on PATH could belong to a different
+    dbxignore install/version, which would run the daemon in a different
+    environment than the one the user just invoked. Both launchers are
+    windowless; the local one wins because it cannot be the wrong package.
+    """
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "platform", "win32")
+    python_exe = tmp_path / "Scripts" / "python.exe"
+    python_exe.parent.mkdir()
+    python_exe.write_text("")
+    pythonw_exe = tmp_path / "Scripts" / "pythonw.exe"
+    _write_fake_pe(pythonw_exe, _IMAGE_SUBSYSTEM_WINDOWS_GUI)
+    monkeypatch.setattr(sys, "executable", str(python_exe))
+    # A dbxignorew.exe exists on PATH — from some other install — but the
+    # local GUI-subsystem pythonw.exe must still win.
+    shim_path = str(tmp_path / "other-install" / "dbxignorew.exe")
+    monkeypatch.setattr("shutil.which", lambda name: shim_path if name == "dbxignorew" else None)
+    from dbxignore.install import _common
+
+    exe, args = _common.detect_invocation()
+    assert exe == pythonw_exe
+    assert args == "-m dbxignore daemon"
+
+
 def test_detect_invocation_windows_accepts_gui_subsystem_pythonw(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

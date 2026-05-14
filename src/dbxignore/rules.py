@@ -49,10 +49,9 @@ def _is_real_dir(path: Path) -> bool:
     result is False for symlinks regardless of target type — `lstat`
     reports the link's own mode (`S_IFLNK`), not the target's. That
     matches the symlinks-are-leaves invariant from PR #191's
-    ``format_literal_rule`` (which still uses the two-call form because
-    its cold-path callers stub ``path.is_dir`` / ``is_symlink`` directly
-    in test mocks). ``cache.match`` / ``cache.explain`` are in the
-    daemon's hot path and use this helper.
+    ``format_literal_rule``. All three call sites use this helper:
+    ``cache.match`` / ``cache.explain`` (daemon hot path) and
+    ``format_literal_rule`` (cold path).
 
     On `OSError` (vanished path, permission denied), returns False.
     """
@@ -141,9 +140,9 @@ def format_literal_rule(target: Path, rule_file: Path) -> str:
        the line as an active pattern instead of a negation or comment.
     4. Re-join segments with ``/`` (gitignore separator, regardless of
        host OS) and prepend a leading ``/``.
-    5. If ``target.is_dir()``, append ``/`` to make the rule directory-only
-       (matches the directory itself, not all paths whose basename equals
-       the directory name).
+    5. If ``target`` is a real directory (not a symlink), append ``/`` to
+       make the rule directory-only (matches the directory itself, not all
+       paths whose basename equals the directory name).
 
     The leading ``/`` anchors the rule to the rule file's directory. Without
     it, a single-segment rule like ``build/`` matches every ``build/``
@@ -182,7 +181,7 @@ def format_literal_rule(target: Path, rule_file: Path) -> str:
     # to the link, not the target" invariant; gitignore's directory-only
     # patterns (with trailing `/`) follow the link and match the target,
     # which is the wrong semantic here.
-    if target.is_dir() and not target.is_symlink():
+    if _is_real_dir(target):
         line += "/"
     return line
 

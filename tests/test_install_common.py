@@ -117,6 +117,41 @@ def test_detect_invocation_windows_prefers_dbxignorew_sibling(
     assert args == "daemon"
 
 
+def test_detect_invocation_windows_rejects_dbxignorew_sibling_with_console_pythonw(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Windows non-frozen, ``dbxignorew.exe`` sibling present but its companion
+    ``pythonw.exe`` is console-subsystem: do NOT return the sibling.
+
+    The non-frozen ``dbxignorew.exe`` is a GUI-script trampoline that re-execs
+    the sibling ``pythonw.exe`` to do the actual work — it is only genuinely
+    windowless when that ``pythonw.exe`` is itself GUI-subsystem. uv project
+    venvs (``uv sync`` / ``uv run``) ship a console-subsystem ``pythonw.exe``,
+    so their ``dbxignorew.exe`` still allocates a console window. Returning it
+    would be a windowed launcher dressed up as a windowless one; fall through
+    to ``python.exe`` with the honest WARNING instead.
+    """
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    python_exe = tmp_path / "Scripts" / "python.exe"
+    python_exe.parent.mkdir()
+    python_exe.write_text("")
+    # dbxignorew.exe sibling exists, but its companion pythonw.exe is
+    # console-subsystem — the uv project-venv layout.
+    (tmp_path / "Scripts" / "dbxignorew.exe").write_text("")
+    _write_fake_pe(tmp_path / "Scripts" / "pythonw.exe", _IMAGE_SUBSYSTEM_WINDOWS_CUI)
+    monkeypatch.setattr(sys, "executable", str(python_exe))
+    from dbxignore.install import _common
+
+    with caplog.at_level("WARNING", logger="dbxignore.install._common"):
+        exe, args = _common.detect_invocation()
+
+    assert exe == python_exe
+    assert args == "-m dbxignore daemon"
+    assert any("console window" in rec.message for rec in caplog.records)
+
+
 def test_detect_invocation_windows_uses_dbxignorew_on_path(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -231,7 +266,7 @@ def test_detect_invocation_windows_rejects_console_subsystem_pythonw(
 
     assert exe == python_exe
     assert args == "-m dbxignore daemon"
-    assert any("GUI-subsystem" in rec.message for rec in caplog.records)
+    assert any("console window" in rec.message for rec in caplog.records)
 
 
 def test_detect_invocation_windows_falls_back_when_no_gui_launcher(
@@ -260,7 +295,7 @@ def test_detect_invocation_windows_falls_back_when_no_gui_launcher(
 
     assert exe == python_exe
     assert args == "-m dbxignore daemon"
-    assert any("GUI-subsystem" in rec.message for rec in caplog.records)
+    assert any("console window" in rec.message for rec in caplog.records)
 
 
 def test_detect_cli_invocation_frozen_uses_sibling_exe(

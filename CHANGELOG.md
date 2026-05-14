@@ -28,15 +28,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
-- Windows: `dbxignore install` no longer leaves an empty console window open for
-  the daemon's lifetime when dbxignore was installed with `uv` (`uv tool install`,
-  or a `uv`-built virtualenv). `install` registers the daemon with Task Scheduler
-  pointing at a windowless launcher; it previously selected `pythonw.exe` by name,
-  but a `uv`-built virtualenv's `pythonw.exe` is a console-subsystem copy of
+- Windows: `dbxignore install` registers the daemon with Task Scheduler pointing
+  at a windowless launcher, so it no longer leaves an empty console window open
+  for the daemon's lifetime. It previously selected `pythonw.exe` by name, but a
+  `uv`-built virtualenv's `pythonw.exe` can be a console-subsystem copy of
   `python.exe`, so the daemon ran with a visible console. dbxignore now ships a
   `dbxignorew` GUI-subsystem entry point (the non-frozen analogue of the bundled
-  `dbxignorew.exe`); `install` prefers it, and falls back to `pythonw.exe` only
-  after verifying its PE subsystem is actually GUI. (#137)
+  `dbxignorew.exe`); `install` prefers it, and verifies the PE subsystem of every
+  candidate launcher — including the `pythonw.exe` that `dbxignorew.exe` itself
+  re-execs — before trusting it to be windowless. `uv tool install`, `pip
+  install`, and the frozen `.exe` produce a windowless daemon. `uv run dbxignore
+  install` from a source checkout still shows a console window — uv project venvs
+  ship console-subsystem trampolines with no windowless launcher — and now logs a
+  WARNING saying so; that is a developer-only path (use `uv tool install` for a
+  real install). (#137, #138)
 
 - `windows_ads._stream_path()` emits the `\\?\UNC\server\share\…` long-path form for UNC paths rather than concatenating `\\?\` with the leading `\\` (which produced the malformed `\\?\\\server\share\…`, undefined to the Win32 object manager). Dropbox roots on network shares, redirected profiles, or other UNC-backed locations now receive ignore markers correctly; drive-letter paths are unchanged. (#96)
 

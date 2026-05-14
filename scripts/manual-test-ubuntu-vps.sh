@@ -863,6 +863,59 @@ phase_uninstall() {
     [ ! -f "$DBXIGNORE_STATE_DIR/state.json" ] \
         && pass "6c — corrupt state.json cleaned up by recovery purge" \
         || fail "6c — corrupt state.json still present after recovery purge"
+
+    # 6d — uninstall --purge exits 2 on injected state-file purge failure (PR #249, item #127)
+    # DBXIGNORE_TEST_FAIL_STATE_PURGE makes _purge_dir's unlink loop raise
+    # OSError, exercising the state_errors exit-2 path. Re-install first so the
+    # daemon writes state.json / daemon.lock — _purge_dir only injects inside
+    # its f.unlink() loop, so with an empty state dir there'd be nothing to
+    # fail on. Markers ARE cleared (the failure is in the later state-dir step);
+    # recovery is a clean --purge re-run.
+    note "6d — uninstall --purge exits 2 on injected state-purge failure"
+    dbxignore install >/dev/null 2>&1 || abort "6d re-install failed"
+    sleep 2
+    local purge_fail_rc
+    if DBXIGNORE_TEST_FAIL_STATE_PURGE=1 dbxignore uninstall --purge \
+        >/tmp/dbx-6d-purge.out 2>&1; then
+        purge_fail_rc=0
+    else
+        purge_fail_rc=$?
+    fi
+    if [ "$purge_fail_rc" -eq 2 ]; then
+        pass "6d — uninstall --purge exits 2 on injected state-purge failure"
+    else
+        fail "6d — uninstall --purge exited $purge_fail_rc instead of 2"
+        sed 's/^/    /' /tmp/dbx-6d-purge.out
+    fi
+    assert_grep /tmp/dbx-6d-purge.out 'Could not fully purge state files' \
+        "6d — purge stderr reports the state-file failure"
+    # Recovery: clean --purge to remove the state files the injected run left.
+    dbxignore uninstall --purge >/dev/null 2>&1 || true
+
+    # 6e — uninstall --purge exits 2 on injected daemon-alive guard (PR #249, item #129)
+    # DBXIGNORE_TEST_FAIL_DAEMON_ALIVE fires the --purge daemon-alive gate as if
+    # a daemon survived service removal. The gate fires BEFORE the purge body,
+    # so nothing is cleared; recovery is a clean --purge re-run.
+    note "6e — uninstall --purge exits 2 on injected daemon-alive guard"
+    dbxignore install >/dev/null 2>&1 || abort "6e re-install failed"
+    sleep 2
+    local alive_fail_rc
+    if DBXIGNORE_TEST_FAIL_DAEMON_ALIVE=1 dbxignore uninstall --purge \
+        >/tmp/dbx-6e-purge.out 2>&1; then
+        alive_fail_rc=0
+    else
+        alive_fail_rc=$?
+    fi
+    if [ "$alive_fail_rc" -eq 2 ]; then
+        pass "6e — uninstall --purge exits 2 on injected daemon-alive guard"
+    else
+        fail "6e — uninstall --purge exited $alive_fail_rc instead of 2"
+        sed 's/^/    /' /tmp/dbx-6e-purge.out
+    fi
+    assert_grep /tmp/dbx-6e-purge.out 'daemon is running' \
+        "6e — purge stderr reports the daemon-alive refusal"
+    # Recovery: clean --purge (the gate fired before any cleanup ran).
+    dbxignore uninstall --purge >/dev/null 2>&1 || true
 }
 
 # ---------------------------------------------------------------------------

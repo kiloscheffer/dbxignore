@@ -838,6 +838,60 @@ function Test-ExtendedCli {
     } else {
         Write-Fail "4u - dbxignore --help did not surface Usage: line in plain invocation"
     }
+
+    # 4v - clear/list exit 2 on injected marker-read failure (PR #249, item #121)
+    # DBXIGNORE_TEST_FAIL_MARKER_READ makes markers.is_ignored raise OSError
+    # inside _walk_marked_paths, exercising the scan_errors exit-2 path that
+    # unit tests pin but a healthy filesystem can't otherwise trigger. PowerShell
+    # has no inline env-var prefix, so the var is set then removed around each
+    # invocation. The injected runs mutate nothing (clear refuses once the scan
+    # fails), so recovery is a plain clear.
+    Write-Note "4v - clear/list exit 2 on injected marker-read failure"
+    Remove-Item -Recurse -Force $T -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $T | Out-Null
+    Set-Content -Path (Join-Path $T ".dropboxignore") -Value "*.tmp" -Encoding utf8 -NoNewline
+    New-Item -ItemType File -Force -Path (Join-Path $T "foo.tmp") | Out-Null
+    dbxignore apply $T --yes *> $null
+
+    $clear4vErr = Join-Path $env:TEMP "dbx-4v-clear.err"
+    $env:DBXIGNORE_TEST_FAIL_MARKER_READ = "1"
+    & dbxignore clear $T --yes *> $clear4vErr
+    $clear4vRc = $LASTEXITCODE
+    Remove-Item Env:\DBXIGNORE_TEST_FAIL_MARKER_READ
+    if ($clear4vRc -eq 2) {
+        Write-Pass "4v - clear exits 2 on injected marker-read failure"
+    } else {
+        Write-Fail "4v - clear exited $clear4vRc instead of 2"
+        if (Test-Path $clear4vErr) { Get-Content $clear4vErr | ForEach-Object { Write-Note "    $_" } }
+    }
+    $clear4vText = if (Test-Path $clear4vErr) { Get-Content $clear4vErr -Raw } else { "" }
+    if ($clear4vText -match 'scan error') {
+        Write-Pass "4v - clear stderr reports scan errors"
+    } else {
+        Write-Fail "4v - clear stderr missing 'scan error'"
+    }
+
+    $list4vErr = Join-Path $env:TEMP "dbx-4v-list.err"
+    $env:DBXIGNORE_TEST_FAIL_MARKER_READ = "1"
+    & dbxignore list $T *> $list4vErr
+    $list4vRc = $LASTEXITCODE
+    Remove-Item Env:\DBXIGNORE_TEST_FAIL_MARKER_READ
+    if ($list4vRc -eq 2) {
+        Write-Pass "4v - list exits 2 on injected marker-read failure"
+    } else {
+        Write-Fail "4v - list exited $list4vRc instead of 2"
+        if (Test-Path $list4vErr) { Get-Content $list4vErr | ForEach-Object { Write-Note "    $_" } }
+    }
+    $list4vText = if (Test-Path $list4vErr) { Get-Content $list4vErr -Raw } else { "" }
+    if ($list4vText -match 'scan error') {
+        Write-Pass "4v - list stderr reports scan errors"
+    } else {
+        Write-Fail "4v - list stderr missing 'scan error'"
+    }
+
+    # Recovery: clear the marker without the fail point so later phases start clean.
+    dbxignore clear $T --yes *> $null
+    Remove-Item -Recurse -Force $T -ErrorAction SilentlyContinue
 }
 
 # ---------------------------------------------------------------------------
@@ -1654,6 +1708,63 @@ function Test-Uninstall {
     } else {
         Write-Fail "6f - corrupt state.json still present after recovery purge"
     }
+
+    # 6g - uninstall --purge exits 2 on injected state-file purge failure (PR #249, item #127)
+    # DBXIGNORE_TEST_FAIL_STATE_PURGE makes _purge_dir's unlink loop raise
+    # OSError, exercising the state_errors exit-2 path. Re-install first so the
+    # daemon writes state.json / daemon.lock. Markers ARE cleared (the failure
+    # is in the later state-dir step); recovery is a clean --purge re-run.
+    Write-Note "6g - uninstall --purge exits 2 on injected state-purge failure"
+    dbxignore install *> $null
+    if ($LASTEXITCODE -ne 0) { Stop-Abort "6g re-install failed" }
+    Start-Sleep -Seconds 2
+    $purge6gOut = Join-Path $env:TEMP "dbx-6g-purge.out"
+    $env:DBXIGNORE_TEST_FAIL_STATE_PURGE = "1"
+    & dbxignore uninstall --purge *> $purge6gOut
+    $purge6gRc = $LASTEXITCODE
+    Remove-Item Env:\DBXIGNORE_TEST_FAIL_STATE_PURGE
+    if ($purge6gRc -eq 2) {
+        Write-Pass "6g - uninstall --purge exits 2 on injected state-purge failure"
+    } else {
+        Write-Fail "6g - uninstall --purge exited $purge6gRc instead of 2"
+        if (Test-Path $purge6gOut) { Get-Content $purge6gOut | ForEach-Object { Write-Note "    $_" } }
+    }
+    $purge6gText = if (Test-Path $purge6gOut) { Get-Content $purge6gOut -Raw } else { "" }
+    if ($purge6gText -match 'Could not fully purge state files') {
+        Write-Pass "6g - purge stderr reports the state-file failure"
+    } else {
+        Write-Fail "6g - purge stderr missing 'Could not fully purge state files'"
+    }
+    # Recovery: clean --purge to remove the state files the injected run left.
+    dbxignore uninstall --purge *> $null
+
+    # 6h - uninstall --purge exits 2 on injected daemon-alive guard (PR #249, item #129)
+    # DBXIGNORE_TEST_FAIL_DAEMON_ALIVE fires the --purge daemon-alive gate as if
+    # a daemon survived service removal. The gate fires BEFORE the purge body,
+    # so nothing is cleared; recovery is a clean --purge re-run.
+    Write-Note "6h - uninstall --purge exits 2 on injected daemon-alive guard"
+    dbxignore install *> $null
+    if ($LASTEXITCODE -ne 0) { Stop-Abort "6h re-install failed" }
+    Start-Sleep -Seconds 2
+    $purge6hOut = Join-Path $env:TEMP "dbx-6h-purge.out"
+    $env:DBXIGNORE_TEST_FAIL_DAEMON_ALIVE = "1"
+    & dbxignore uninstall --purge *> $purge6hOut
+    $purge6hRc = $LASTEXITCODE
+    Remove-Item Env:\DBXIGNORE_TEST_FAIL_DAEMON_ALIVE
+    if ($purge6hRc -eq 2) {
+        Write-Pass "6h - uninstall --purge exits 2 on injected daemon-alive guard"
+    } else {
+        Write-Fail "6h - uninstall --purge exited $purge6hRc instead of 2"
+        if (Test-Path $purge6hOut) { Get-Content $purge6hOut | ForEach-Object { Write-Note "    $_" } }
+    }
+    $purge6hText = if (Test-Path $purge6hOut) { Get-Content $purge6hOut -Raw } else { "" }
+    if ($purge6hText -match 'daemon is running') {
+        Write-Pass "6h - purge stderr reports the daemon-alive refusal"
+    } else {
+        Write-Fail "6h - purge stderr missing 'daemon is running'"
+    }
+    # Recovery: clean --purge (the gate fired before any cleanup ran).
+    dbxignore uninstall --purge *> $null
 }
 
 # ---------------------------------------------------------------------------

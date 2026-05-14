@@ -819,7 +819,7 @@ phase_uninstall() {
         && pass "6d — corrupt state.json cleaned up by recovery purge" \
         || fail "6d — corrupt state.json still present after recovery purge"
 
-    # 6e — uninstall exits 2 on injected launchctl bootout failure (PR #<THIS_PR>, item #128)
+    # 6e — uninstall exits 2 on injected launchctl bootout failure (PR #249, item #128)
     # DBXIGNORE_TEST_FAIL_BOOTOUT makes uninstall_agent treat the bootout result
     # as a confirmed non-zero-rc failure (stderr that _is_service_not_loaded
     # does NOT match), so uninstall_agent raises RuntimeError → cli.uninstall
@@ -847,7 +847,7 @@ phase_uninstall() {
     # Recovery: clean uninstall (the plist + registration survived the injected run).
     dbxignore uninstall >/dev/null 2>&1 || true
 
-    # 6f — uninstall --purge exits 2 on injected state-file purge failure (PR #<THIS_PR>, item #127)
+    # 6f — uninstall --purge exits 2 on injected state-file purge failure (PR #249, item #127)
     # DBXIGNORE_TEST_FAIL_STATE_PURGE makes _purge_dir's unlink loop raise
     # OSError, exercising the state_errors exit-2 path. Re-install first so the
     # daemon writes state.json / daemon.lock — _purge_dir only injects inside
@@ -873,7 +873,7 @@ phase_uninstall() {
         "6f — purge stderr reports the state-file failure"
     dbxignore uninstall --purge >/dev/null 2>&1 || true
 
-    # 6g — uninstall --purge exits 2 on injected daemon-alive guard (PR #<THIS_PR>, item #129)
+    # 6g — uninstall --purge exits 2 on injected daemon-alive guard (PR #249, item #129)
     # DBXIGNORE_TEST_FAIL_DAEMON_ALIVE fires the --purge daemon-alive gate as if
     # a daemon survived service removal. The gate fires BEFORE the purge body,
     # so nothing is cleared; recovery is a clean --purge re-run.

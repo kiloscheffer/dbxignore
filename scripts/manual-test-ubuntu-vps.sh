@@ -864,7 +864,7 @@ phase_uninstall() {
         && pass "6c — corrupt state.json cleaned up by recovery purge" \
         || fail "6c — corrupt state.json still present after recovery purge"
 
-    # 6d — uninstall --purge exits 2 on injected state-file purge failure (PR #<THIS_PR>, item #127)
+    # 6d — uninstall --purge exits 2 on injected state-file purge failure (PR #249, item #127)
     # DBXIGNORE_TEST_FAIL_STATE_PURGE makes _purge_dir's unlink loop raise
     # OSError, exercising the state_errors exit-2 path. Re-install first so the
     # daemon writes state.json / daemon.lock — _purge_dir only injects inside
@@ -892,7 +892,7 @@ phase_uninstall() {
     # Recovery: clean --purge to remove the state files the injected run left.
     dbxignore uninstall --purge >/dev/null 2>&1 || true
 
-    # 6e — uninstall --purge exits 2 on injected daemon-alive guard (PR #<THIS_PR>, item #129)
+    # 6e — uninstall --purge exits 2 on injected daemon-alive guard (PR #249, item #129)
     # DBXIGNORE_TEST_FAIL_DAEMON_ALIVE fires the --purge daemon-alive gate as if
     # a daemon survived service removal. The gate fires BEFORE the purge body,
     # so nothing is cleared; recovery is a clean --purge re-run.

@@ -839,7 +839,7 @@ function Test-ExtendedCli {
         Write-Fail "4u - dbxignore --help did not surface Usage: line in plain invocation"
     }
 
-    # 4v - clear/list exit 2 on injected marker-read failure (PR #<THIS_PR>, item #121)
+    # 4v - clear/list exit 2 on injected marker-read failure (PR #249, item #121)
     # DBXIGNORE_TEST_FAIL_MARKER_READ makes markers.is_ignored raise OSError
     # inside _walk_marked_paths, exercising the scan_errors exit-2 path that
     # unit tests pin but a healthy filesystem can't otherwise trigger. PowerShell
@@ -1709,7 +1709,7 @@ function Test-Uninstall {
         Write-Fail "6f - corrupt state.json still present after recovery purge"
     }
 
-    # 6g - uninstall --purge exits 2 on injected state-file purge failure (PR #<THIS_PR>, item #127)
+    # 6g - uninstall --purge exits 2 on injected state-file purge failure (PR #249, item #127)
     # DBXIGNORE_TEST_FAIL_STATE_PURGE makes _purge_dir's unlink loop raise
     # OSError, exercising the state_errors exit-2 path. Re-install first so the
     # daemon writes state.json / daemon.lock. Markers ARE cleared (the failure
@@ -1738,7 +1738,7 @@ function Test-Uninstall {
     # Recovery: clean --purge to remove the state files the injected run left.
     dbxignore uninstall --purge *> $null
 
-    # 6h - uninstall --purge exits 2 on injected daemon-alive guard (PR #<THIS_PR>, item #129)
+    # 6h - uninstall --purge exits 2 on injected daemon-alive guard (PR #249, item #129)
     # DBXIGNORE_TEST_FAIL_DAEMON_ALIVE fires the --purge daemon-alive gate as if
     # a daemon survived service removal. The gate fires BEFORE the purge body,
     # so nothing is cleared; recovery is a clean --purge re-run.

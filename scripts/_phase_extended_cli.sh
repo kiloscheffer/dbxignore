@@ -385,7 +385,7 @@ phase_extended_cli() {
     assert_grep /tmp/dbx-4t-explain.err 'symlinked component' \
         "4t — explain stderr names 'symlinked component'"
 
-    # 4u — clear/list exit 2 on injected marker-read failure (PR #<THIS_PR>, item #121)
+    # 4u — clear/list exit 2 on injected marker-read failure (PR #249, item #121)
     # DBXIGNORE_TEST_FAIL_MARKER_READ makes markers.is_ignored raise OSError
     # inside _walk_marked_paths, exercising the scan_errors exit-2 path that
     # unit tests pin but a healthy filesystem can't otherwise trigger. The

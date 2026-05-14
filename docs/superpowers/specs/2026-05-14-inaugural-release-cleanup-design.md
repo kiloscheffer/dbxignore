@@ -4,10 +4,12 @@
 
 Make the tracked state of the repository read as if it were the project's
 first public release. No documentation, comment, or test may refer to an
-earlier version, a backlog item, a commit, or a pull request. Standalone
-history files (backlog, changelog, release notes, dated specs and plans,
-historical-gotchas) are permitted to remain — but are listed explicitly so
-the project owner can review them separately.
+earlier version, a backlog item, a commit, a pull request, or the
+development review process (e.g. "Codex" review attribution, "round-N"
+iteration markers, "external review"). Standalone history files (backlog,
+changelog, release notes, dated specs and plans, historical-gotchas) are
+permitted to remain — but are listed explicitly so the project owner can
+review them separately.
 
 ## Scope
 
@@ -56,6 +58,8 @@ guiding principle: preserve the engineering rationale, erase the timeline.
 | Version identifier | `v0.4.0a4 conflated the two` | `an earlier implementation conflated the two` |
 | Version-relative phrasing | `Pre-PR-#108 behavior considered only…` | `Earlier behavior considered only…` |
 | Script case marker | `# 4j — apply --dry-run… (PR #103)` | `# 4j — apply --dry-run…` |
+| Review-process attribution | `Codex P2 regression: a negation rule…` | `Regression: a negation rule…` |
+| Review-process phrasing | `the Codex P2 ingestion race` / `round-9 added…` | `the ingestion race` / `… was added` |
 
 ### Constraints
 

@@ -23,15 +23,23 @@ Sort each reference into one class and transform it. Guiding principle: **preser
 | Version identifier | `v0.4.0a4 conflated the two` | `an earlier implementation conflated the two` |
 | Version-relative phrasing | `Pre-PR-#108 behavior considered only…` | `Earlier behavior considered only…` |
 | Script case marker | `# 4j — apply --dry-run… (PR #103)` | `# 4j — apply --dry-run…` |
+| Review-process attribution | `Codex P2 regression: a negation rule…` | `Regression: a negation rule…` |
+| Review-process phrasing | `the Codex P2 ingestion race` / `round-9 added…` | `the ingestion race` / `… was added` |
+
+Review-process attribution (owner-approved scope addition): strip "Codex" in
+every form, "round-N" iteration markers, "external review", "Bot reproducer",
+and bare "P1"/"P2" severity labels when they are review-process residue. Keep
+the useful signal — `Codex P2 regression:` becomes `Regression:`, not nothing.
 
 **Kept deliberately** (not residue — do not remove):
 - File-level pointers naming `BACKLOG.md` or `CHANGELOG.md` as files.
 - The README link to the Semantic Versioning spec (`semver.org/spec/v2.0.0.html`).
 
-**The reference-detection grep** (used to enumerate and to verify, per area):
+**The reference-detection greps** (used to enumerate and to verify, per area):
 
 ```bash
 git grep -n -E '#[0-9]+|PR #|pull request|BACKLOG|backlog|\bv0\.[0-9]|\bv[0-9]+\.[0-9]+|item #' -- <area paths>
+git grep -n -i -E 'codex|round-?[0-9]|external review|bot reproducer' -- <area paths>
 ```
 
 ---
@@ -311,9 +319,10 @@ git commit -m "docs: rewrite AGENTS.md free of version and PR history"
 
 - [ ] **Step 1: Repo-wide residue grep across the in-scope set**
 
-Run:
+Run both:
 ```bash
 git grep -n -E '#[0-9]+|PR #|pull request|BACKLOG|backlog|\bv0\.[0-9]|\bv[0-9]+\.[0-9]+|item #' -- src tests scripts .github pyinstaller README.md docs/internals/active-gotchas.md AGENTS.md pyproject.toml cchk.toml
+git grep -n -i -E 'codex|round-?[0-9]|external review|bot reproducer' -- src tests scripts .github pyinstaller README.md docs/internals/active-gotchas.md AGENTS.md
 ```
 Expected: only deliberately-kept lines — `BACKLOG.md`/`CHANGELOG.md` file-pointers (README, AGENTS.md), the `semver.org` link (README), and third-party action SHA-pin `# vX.Y.Z` tags (`.github/`). Inspect every surviving line and confirm it is on the keep-list. Anything else is residue: fix it and land it as a new follow-up commit on the appropriate area (the per-task commits are already made — do not amend them).
 

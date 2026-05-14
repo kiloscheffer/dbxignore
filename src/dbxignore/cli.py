@@ -10,7 +10,7 @@ import re
 import sys
 from importlib.resources import files
 from pathlib import Path
-from typing import assert_never
+from typing import NoReturn, assert_never
 
 import rich_click as click
 
@@ -1677,6 +1677,23 @@ def install(no_shell_integration: bool) -> None:
                 assert_never(outcome)
 
 
+def _refuse_purge_daemon_alive(pid_clause: str, kill_hint: str) -> NoReturn:
+    """Print the `--purge` daemon-alive refusal to stderr and exit 2."""
+    click.echo(
+        f"error: dbxignore daemon is running{pid_clause} after service removal. "
+        "Refusing to purge — the next reconcile sweep would re-apply cleared "
+        "markers and the next state-write would recreate state.json.",
+        err=True,
+    )
+    click.echo(
+        f"Stop the daemon manually (e.g. on Windows: `{kill_hint}`), then run "
+        "`dbxignore clear --force` for markers and remove "
+        f"`{state.user_state_dir()}` by hand.",
+        err=True,
+    )
+    sys.exit(2)
+
+
 @main.command()
 @click.option(
     "--purge",
@@ -1717,87 +1734,45 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
         sys.exit(2)
     click.echo("Uninstalled dbxignore daemon service.")
 
-    # Mutually exclusive: --purge ALWAYS runs the dispatcher and accumulates
-    # errors for exit-2 escalation (inside the `if purge:` block below, after
-    # the daemon-alive gate); plain uninstall runs it only if the user didn't
-    # pass --no-shell-integration, and uses WARN-and-continue.
+    # Plain uninstall runs the shell-integration dispatcher only when the user
+    # didn't pass --no-shell-integration (WARN-and-continue). The --purge path
+    # runs it inside the `if purge:` block below — after the daemon-alive gate,
+    # so a gate fire doesn't strand `shell_errors` the dispatcher accumulated.
     shell_errors: list[tuple[str, str]] = []
     state_errors: list[tuple[Path, str]] = []
     if not purge and not no_shell_integration:
         uninstall_shell_integration_if_supported()
 
     if purge:
-        # BACKLOG #122: fail-closed gate against the silent tug-of-war that
-        # happens on Windows when `schtasks /End`'s 30s daemon-exit wait
-        # times out. By this point `uninstall_service` has returned —
-        # service registration is gone — but the daemon process may still
-        # be alive holding `daemon.lock` and running its reconcile loop.
-        # If we proceed: cleared markers get re-applied within a sweep
-        # tick, `_purge_local_state`-removed `state.json` reappears on
-        # the daemon's next state-write, and the user sees "Cleared N
-        # markers" + exit 0 while none of it actually stuck. Mirrors the
-        # two-arm gate `cli.clear` uses for the same race (this file,
-        # `clear()` at the equivalent point). No `--force` here: the
-        # whole reason we're adding the gate is that bypassing it
-        # re-introduces the bug. Linux + macOS reach this point with
-        # a guaranteed-dead daemon (`systemctl --user disable --now`
-        # and `launchctl bootout` are synchronous), so the guard
-        # returns False there and the purge body proceeds normally.
+        # BACKLOG #122: fail-closed gate against a silent tug-of-war. By this
+        # point `uninstall_service` has returned but the daemon process may
+        # still be alive (Windows: `schtasks /End`'s 30s wait can time out;
+        # Linux/macOS service stops are synchronous so the daemon is dead
+        # here). A live daemon's reconcile loop would re-apply cleared markers
+        # and its next state-write would recreate the `state.json` that
+        # `_purge_local_state` removed — the user sees "Cleared N markers" +
+        # exit 0 while nothing stuck. No `--force`: a bypass flag would just
+        # re-introduce the bug. Placed before shell-integration removal so a
+        # gate fire doesn't strand accumulated `shell_errors`.
         #
-        # Placed BEFORE shell-integration removal (not just before the
-        # marker-clear loop) so a gate fire doesn't lose any `shell_errors`
-        # the dispatcher would have accumulated — the gate's `sys.exit(2)`
-        # would happen before the per-error stderr-surfacing block below
-        # at the end of `uninstall`, silently dropping the report.
-        # Unified daemon-alive probe: always check the daemon-singleton lock
-        # (the authoritative "any daemon alive?" signal) plus the standard
-        # PID-anchored check when state.json is readable. Codex's second P2
-        # follow-up on PR #243 surfaced that the prior two-arm shape skipped
-        # the lock probe entirely when state.json was MISSING (e.g. user
-        # manually removed it, or a prior partial purge deleted state.json
-        # but couldn't delete the held daemon.lock), so a live daemon could
-        # race the purge body unprotected. The lock is held for the daemon's
-        # entire lifetime (see `daemon._acquire_singleton_lock`), so probing
-        # it covers all three scenarios uniformly: state.json readable,
-        # unreadable, or absent.
+        # Two probes: the PID-anchored check (precise, gives a pid for the
+        # error message) when `state.json` is readable, plus the lock probe
+        # (`daemon.lock` is held for the daemon's whole lifetime) which works
+        # even when `state.json` is unreadable or absent.
         s_for_guard = state.read()
-        lock_held = state.is_any_daemon_running()
-        pid_alive = s_for_guard is not None and state.daemon_is_running(s_for_guard)
-        if lock_held or pid_alive:
-            if pid_alive:
-                # state.json gave us a PID that the live-process check
-                # confirmed. Surface it for the user's taskkill command.
-                assert s_for_guard is not None  # narrowing for type-checker
-                pid_clause = f" (pid={s_for_guard.daemon_pid})"
-                kill_hint = f"taskkill /F /PID {s_for_guard.daemon_pid}"
-            else:
-                # Lock is held but we have no verified PID (either state.json
-                # is absent / unreadable, or it points at a stale PID whose
-                # process is dead — meaning a different live daemon holds
-                # the lock, an anomaly worth flagging). Tell the user how to
-                # find the PID themselves.
-                pid_clause = " (daemon.lock is held; PID unknown — state.json absent or unreadable)"
-                kill_hint = (
-                    "tasklist | findstr dbxignore  # to find pid, then taskkill /F /PID <pid>"
-                )
-            click.echo(
-                f"error: dbxignore daemon is running{pid_clause} after service "
-                "removal. Refusing to purge — the next reconcile sweep would "
-                "re-apply cleared markers and the next state-write would "
-                "recreate state.json.",
-                err=True,
+        if s_for_guard is not None and state.daemon_is_running(s_for_guard):
+            _refuse_purge_daemon_alive(
+                f" (pid={s_for_guard.daemon_pid})",
+                f"taskkill /F /PID {s_for_guard.daemon_pid}",
             )
-            click.echo(
-                f"Stop the daemon manually (e.g. on Windows: `{kill_hint}`), then "
-                "run `dbxignore clear --force` for markers and remove "
-                f"`{state.user_state_dir()}` by hand.",
-                err=True,
+        if state.is_any_daemon_running():
+            _refuse_purge_daemon_alive(
+                " (daemon.lock is held; PID unknown — state.json absent or unreadable)",
+                "tasklist | findstr dbxignore  # to find pid, then taskkill /F /PID <pid>",
             )
-            sys.exit(2)
-        # Gate passed: daemon is confirmed dead (or never existed). Now safe
-        # to run the destructive purge body. Shell-integration removal runs
-        # FIRST so its errors land in the same exit-2-gated `shell_errors`
-        # bucket the marker/state errors flow through below.
+        # Gate passed: daemon is confirmed dead (or never existed). Shell-
+        # integration removal runs first so its errors land in the same
+        # exit-2-gated `shell_errors` bucket as the marker/state errors below.
         uninstall_shell_integration_if_supported(errors=shell_errors)
         # (1) Clear xattr markers. Read and clear arms are split so each
         # failure can be attributed to the specific operation that failed;

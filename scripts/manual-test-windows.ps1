@@ -949,30 +949,21 @@ function Get-Verb5gState {
 function Test-Daemon {
     Write-Phase "Phase 5 - daemon (Task Scheduler + watchdog)"
 
-    # 5-pre — dbxignorew.exe is the preferred windowless launcher (item #137, PR #252)
-    # Temporarily rename pythonw.exe away in dbxignore's tool venv, then
-    # install. Pre-#137, detect_invocation trusted any pythonw.exe by name,
-    # and a uv venv's pythonw.exe is a console-subsystem copy of python.exe,
-    # so the daemon launched with a visible console window; renaming
-    # pythonw.exe forced a console-flash fallback warning. Post-#137, the
-    # dbxignorew.exe GUI-script trampoline (pyproject.toml [project.gui-scripts])
-    # is preferred over pythonw.exe, so the rename is a no-op: install stays
-    # windowless, emits no GUI-subsystem fallback warning, and the task
-    # targets dbxignorew.exe. Restore in finally; Phase 7 has a defensive
-    # backstop in case the script aborts mid-test.
+    # 5-pre — uv tool venv ships a GUI-subsystem pythonw.exe (item #138, PR #253)
+    # The daemon's Task Scheduler entry is dbxignorew.exe, a GUI-script
+    # trampoline that re-execs the sibling pythonw.exe. The chain is only
+    # windowless when that pythonw.exe is itself GUI-subsystem. uv *project*
+    # venvs (`uv sync` / `uv run`) ship a console-subsystem pythonw.exe — for
+    # those, detect_invocation rejects dbxignorew.exe and emits the honest
+    # fallback WARNING (covered by the _common unit tests; forcing it here
+    # would also need dbxignorew.exe removed from the PATH bin dir). A
+    # `uv tool install` venv — what this script exercises — ships a genuine
+    # GUI-subsystem pythonw.exe; verify that here so a future uv layout
+    # change that silently reintroduces the console window is caught.
     #
-    # (The full python.exe last-resort fallback — every GUI-subsystem
-    # launcher absent — needs dbxignorew.exe removed from both the tool venv
-    # Scripts dir AND the PATH bin dir; that combination is covered by the
-    # _common unit tests rather than forced here.)
-    #
-    # The dbxignore tool venv's pythonw.exe is ONLY consulted by the daemon's
-    # Task Scheduler entry. Renaming it doesn't affect the dbxignore CLI shim
-    # — `dbxignore install` / `uninstall` continue to work under the rename.
-    #
-    # Codex P2 on PR #229: the uv tool dir location varies across uv
-    # versions and respects `UV_TOOL_DIR`, so the base path must come
-    # from `uv tool dir` rather than a hardcoded `%APPDATA%\uv\tools`.
+    # Static PE-header check, so no file manipulation and no restore needed.
+    # Codex P2 on PR #229: the uv tool dir respects UV_TOOL_DIR and varies
+    # across uv versions, so derive it from `uv tool dir`.
     $toolDir = $null
     try {
         $toolDir = (uv tool dir 2>$null | Out-String).Trim()
@@ -980,52 +971,21 @@ function Test-Daemon {
         # uv tool dir failed; skip the test.
     }
     if ([string]::IsNullOrWhiteSpace($toolDir)) {
-        Write-Note "5-pre - uv tool dir failed or empty; skipping launcher-preference test."
-        $pythonwExe = $null
-        $pythonwHide = $null
+        Write-Note "5-pre - uv tool dir failed or empty; skipping pythonw.exe subsystem check."
     } else {
-        $toolVenvScripts = Join-Path $toolDir "dbxignore\Scripts"
-        $pythonwExe = Join-Path $toolVenvScripts "pythonw.exe"
-        $pythonwHide = "$pythonwExe.bak-5pre"
-    }
-    if ($null -eq $pythonwExe) {
-        # Already noted skip above; no further action.
-    } elseif (-not (Test-Path $pythonwExe)) {
-        Write-Note "5-pre - pythonw.exe missing from tool venv at $pythonwExe (unexpected; uv tool install normally creates both). Skipping launcher-preference test."
-    } else {
-        Move-Item -Path $pythonwExe -Destination $pythonwHide -Force
-        try {
-            $fallbackOut = Join-Path $env:TEMP "dbxignore-install-5pre.out"
-            dbxignore install *> $fallbackOut
-            if ($LASTEXITCODE -ne 0) {
-                Write-Fail "5-pre - dbxignore install failed (rc=$LASTEXITCODE)"
-                Get-Content $fallbackOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Note "    $_" }
+        $toolPythonw = Join-Path $toolDir "dbxignore\Scripts\pythonw.exe"
+        if (-not (Test-Path $toolPythonw)) {
+            Write-Note "5-pre - pythonw.exe missing from tool venv at $toolPythonw (unexpected; uv tool install normally creates it). Skipping subsystem check."
+        } else {
+            # PE Subsystem field: MZ -> e_lfanew@0x3C -> PE\0\0 -> +0x5C. 2=GUI, 3=console.
+            $bytes = [System.IO.File]::ReadAllBytes($toolPythonw)
+            $peOff = [BitConverter]::ToInt32($bytes, 0x3C)
+            $subsystem = [BitConverter]::ToUInt16($bytes, $peOff + 0x5C)
+            if ($subsystem -eq 2) {
+                Write-Pass "5-pre - tool venv pythonw.exe is GUI-subsystem (dbxignorew.exe chain is windowless)"
             } else {
-                $content = (Get-Content $fallbackOut -Raw -ErrorAction SilentlyContinue) -as [string]
-                if ($null -ne $content -and $content -match 'GUI-subsystem launcher') {
-                    Write-Note "    install output (unexpected fallback warning):"
-                    ($content -as [string]) -split "`r?`n" | ForEach-Object { Write-Note "    $_" }
-                    Write-Fail "5-pre - install emitted console-flash fallback warning despite dbxignorew.exe present"
-                } else {
-                    Write-Pass "5-pre - install stayed windowless via dbxignorew.exe with pythonw.exe absent"
-                }
-                # The task must target dbxignorew.exe specifically — not
-                # pythonw.exe (renamed) and not python.exe (console flash).
-                $preXml = schtasks /Query /TN dbxignore /XML 2>$null
-                if ($preXml -match "<Command>[^<]*dbxignorew\.exe[^<]*</Command>") {
-                    Write-Pass "5-pre - task <Command> targets dbxignorew.exe"
-                } else {
-                    $m = [regex]::Match($preXml, "<Command>([^<]*)</Command>")
-                    $v = if ($m.Success) { $m.Groups[1].Value } else { "(no <Command> element)" }
-                    Write-Fail "5-pre - task <Command> targets unexpected exe: $v"
-                }
+                Write-Fail "5-pre - tool venv pythonw.exe subsystem=$subsystem (expected 2=GUI); daemon would show a console window"
             }
-            # Clean up the daemon registration before the real Phase 5
-            # install below. Don't fail the test on uninstall errors —
-            # the assertions above are the load-bearing checks.
-            dbxignore uninstall 2>$null | Out-Null
-        } finally {
-            Move-Item -Path $pythonwHide -Destination $pythonwExe -Force -ErrorAction SilentlyContinue
         }
     }
 
@@ -1802,26 +1762,8 @@ function Test-Cleanup {
         Write-Note "test fixtures removed from Dropbox folder"
     }
 
-    # Defensive backstop for the 5-pre pythonw.exe rename (BACKLOG #100).
-    # If phase 5-pre aborted before its finally restored pythonw.exe, the
-    # tool venv would be left missing pythonw.exe — daemon would fall back
-    # to python.exe on every subsequent install. Phase 7 restores it.
-    # Uses `uv tool dir` for the same uv-version + UV_TOOL_DIR robustness
-    # reasons as 5-pre.
-    $toolDir7 = $null
-    try {
-        $toolDir7 = (uv tool dir 2>$null | Out-String).Trim()
-    } catch {
-        # uv tool dir failed; nothing we can clean up.
-    }
-    if (-not [string]::IsNullOrWhiteSpace($toolDir7)) {
-        $pythonwHide5pre = Join-Path $toolDir7 "dbxignore\Scripts\pythonw.exe.bak-5pre"
-        if (Test-Path $pythonwHide5pre) {
-            $pythonwExe5pre = $pythonwHide5pre -replace '\.bak-5pre$', ''
-            Move-Item -Path $pythonwHide5pre -Destination $pythonwExe5pre -Force -ErrorAction SilentlyContinue
-            Write-Note "5-pre pythonw.exe restored (defensive)"
-        }
-    }
+    # (Phase 5-pre is now a static PE-header check — no file manipulation,
+    # so it needs no Phase 7 restore backstop.)
 
     # Defensive backstop for the slow-sweep marker (item #89). Honoring a
     # stale marker on a future install would silently pad every initial

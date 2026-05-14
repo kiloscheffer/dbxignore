@@ -67,6 +67,25 @@ def _is_gui_subsystem(exe: Path) -> bool:
     return bool(subsystem == _IMAGE_SUBSYSTEM_WINDOWS_GUI)
 
 
+def _dbxignorew_launches_windowless(dbxignorew: Path) -> bool:
+    """Return True if the non-frozen ``dbxignorew.exe`` trampoline is windowless.
+
+    A pip/uv-generated ``dbxignorew.exe`` is a GUI-script *trampoline*: it is
+    GUI-subsystem itself, but it re-execs the sibling ``pythonw.exe`` in the
+    same ``Scripts`` directory to do the actual work. The launch is therefore
+    only windowless when that sibling ``pythonw.exe`` is itself GUI-subsystem.
+    uv project venvs (``uv sync`` / ``uv run``) ship a console-subsystem
+    ``pythonw.exe``, so their ``dbxignorew.exe`` still allocates a console
+    window despite being GUI-subsystem — a windowed launcher in disguise.
+
+    This check is sound for a ``dbxignorew.exe`` that sits next to
+    ``sys.executable`` (a venv ``Scripts`` layout, where interpreter and
+    scripts are co-located). It is not used for PATH-resolved launchers,
+    whose interpreter need not be a sibling.
+    """
+    return _is_gui_subsystem(dbxignorew.with_name("pythonw.exe"))
+
+
 def detect_invocation() -> tuple[Path, str]:
     """Return (executable_path, args_string) for the installed daemon entry.
 
@@ -80,12 +99,16 @@ def detect_invocation() -> tuple[Path, str]:
 
     Non-frozen (uv tool install / pip install) on Windows, in order:
     (1) the ``dbxignorew.exe`` GUI-script trampoline sibling of
-    ``sys.executable`` (declared in pyproject.toml ``[project.gui-scripts]``);
-    (2) the ``pythonw.exe`` sibling, but only when it is genuinely
-    GUI-subsystem (uv venvs ship a console-subsystem copy under that name);
-    (3) ``dbxignorew`` on PATH; (4) ``sys.executable`` with a WARNING. The
-    ``sys.executable``-anchored options rank above the PATH lookup because a
-    PATH entry could resolve to a different dbxignore install.
+    ``sys.executable`` (declared in pyproject.toml ``[project.gui-scripts]``),
+    but only when its companion ``pythonw.exe`` is GUI-subsystem — the
+    trampoline re-execs that ``pythonw.exe``, and uv project venvs ship a
+    console-subsystem one; (2) the ``pythonw.exe`` sibling, likewise only when
+    it is genuinely GUI-subsystem; (3) ``dbxignorew`` on PATH; (4)
+    ``sys.executable`` with a WARNING. The ``sys.executable``-anchored options
+    rank above the PATH lookup because a PATH entry could resolve to a
+    different dbxignore install. ``uv run`` from a source checkout reaches (4)
+    — uv project venvs have no windowless launcher; that is a developer-only
+    path, real installs use ``uv tool install`` / ``pip install``.
 
     Non-frozen on Linux / macOS: use the Python interpreter with
     ``-m dbxignore daemon``, or the ``dbxignore`` PATH shim if present.
@@ -115,11 +138,16 @@ def detect_invocation() -> tuple[Path, str]:
         # console-subsystem ones.
         #
         # 1. dbxignorew.exe sibling of sys.executable. pip/uv generate this
-        #    GUI-script trampoline as a real GUI-subsystem launcher — the
-        #    non-frozen analogue of the frozen dbxignorew.exe. Local and
-        #    windowless (uv sync / pip-into-venv layout).
+        #    GUI-script trampoline — the non-frozen analogue of the frozen
+        #    dbxignorew.exe. It is GUI-subsystem itself but re-execs the
+        #    sibling pythonw.exe, so it is only genuinely windowless when that
+        #    pythonw.exe is GUI-subsystem too. uv project venvs (uv sync /
+        #    uv run) ship a console-subsystem pythonw.exe, so their
+        #    dbxignorew.exe still allocates a console — reject it here and
+        #    fall through to the WARNING rather than registering a windowed
+        #    launcher dressed up as a windowless one.
         dbxignorew_sibling = Path(sys.executable).with_name("dbxignorew.exe")
-        if dbxignorew_sibling.exists():
+        if dbxignorew_sibling.exists() and _dbxignorew_launches_windowless(dbxignorew_sibling):
             return dbxignorew_sibling, "daemon"
         # 2. pythonw.exe sibling of sys.executable, but only if it is
         #    genuinely GUI-subsystem. Local and windowless: `-m dbxignore
@@ -144,12 +172,15 @@ def detect_invocation() -> tuple[Path, str]:
         # launched at logon will show a console window; warn so the cause
         # is discoverable. The warning + fallback shape originated in PR #229
         # (item #100, pythonw.exe-absent case) and now also covers the
-        # console-subsystem-pythonw.exe case.
+        # console-subsystem-pythonw.exe / console-delegating-dbxignorew.exe
+        # cases — the common one being `uv run` from a source checkout, whose
+        # uv project venv ships console-subsystem trampolines.
         logger.warning(
-            "no GUI-subsystem launcher found next to %s (dbxignorew.exe absent, "
-            "pythonw.exe absent or console-subsystem); falling back to python.exe. "
-            "The daemon launched at logon will show a console window. Re-run "
-            "`uv sync` / `pip install` and reinstall to pick up the dbxignorew launcher.",
+            "no windowless launcher found for %s: the dbxignorew.exe / pythonw.exe "
+            "next to it are absent or console-subsystem (uv project venvs created by "
+            "`uv sync` / `uv run` ship console-subsystem trampolines). Falling back to "
+            "python.exe; the daemon launched at logon will show a console window. "
+            "Install with `uv tool install` or `pip install` for a windowless daemon.",
             sys.executable,
         )
         return Path(sys.executable), "-m dbxignore daemon"

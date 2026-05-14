@@ -818,6 +818,84 @@ phase_uninstall() {
     [ ! -f "$state_dir/state.json" ] \
         && pass "6d — corrupt state.json cleaned up by recovery purge" \
         || fail "6d — corrupt state.json still present after recovery purge"
+
+    # 6e — uninstall exits 2 on injected launchctl bootout failure (PR #<THIS_PR>, item #128)
+    # DBXIGNORE_TEST_FAIL_BOOTOUT makes uninstall_agent treat the bootout result
+    # as a confirmed non-zero-rc failure (stderr that _is_service_not_loaded
+    # does NOT match), so uninstall_agent raises RuntimeError → cli.uninstall
+    # exits 2. macOS-only: launchctl bootout is the macOS daemon-shutdown step.
+    # The plist is preserved and the daemon stays registered; recovery is a
+    # clean uninstall re-run.
+    note "6e — uninstall exits 2 on injected launchctl bootout failure"
+    dbxignore install >/dev/null 2>&1 || abort "6e re-install failed"
+    sleep 2
+    local bootout_fail_rc
+    if DBXIGNORE_TEST_FAIL_BOOTOUT=1 dbxignore uninstall \
+        >/tmp/dbx-6e-uninstall.out 2>&1; then
+        bootout_fail_rc=0
+    else
+        bootout_fail_rc=$?
+    fi
+    if [ "$bootout_fail_rc" -eq 2 ]; then
+        pass "6e — uninstall exits 2 on injected bootout failure"
+    else
+        fail "6e — uninstall exited $bootout_fail_rc instead of 2"
+        sed 's/^/    /' /tmp/dbx-6e-uninstall.out
+    fi
+    assert_grep /tmp/dbx-6e-uninstall.out 'launchctl bootout returned' \
+        "6e — uninstall stderr reports the bootout failure"
+    # Recovery: clean uninstall (the plist + registration survived the injected run).
+    dbxignore uninstall >/dev/null 2>&1 || true
+
+    # 6f — uninstall --purge exits 2 on injected state-file purge failure (PR #<THIS_PR>, item #127)
+    # DBXIGNORE_TEST_FAIL_STATE_PURGE makes _purge_dir's unlink loop raise
+    # OSError, exercising the state_errors exit-2 path. Re-install first so the
+    # daemon writes state.json / daemon.lock — _purge_dir only injects inside
+    # its f.unlink() loop. Markers ARE cleared (failure is in the later
+    # state-dir step); recovery is a clean --purge re-run.
+    note "6f — uninstall --purge exits 2 on injected state-purge failure"
+    dbxignore install >/dev/null 2>&1 || abort "6f re-install failed"
+    sleep 2
+    local purge_fail_rc
+    if DBXIGNORE_TEST_FAIL_STATE_PURGE=1 dbxignore uninstall --purge \
+        >/tmp/dbx-6f-purge.out 2>&1; then
+        purge_fail_rc=0
+    else
+        purge_fail_rc=$?
+    fi
+    if [ "$purge_fail_rc" -eq 2 ]; then
+        pass "6f — uninstall --purge exits 2 on injected state-purge failure"
+    else
+        fail "6f — uninstall --purge exited $purge_fail_rc instead of 2"
+        sed 's/^/    /' /tmp/dbx-6f-purge.out
+    fi
+    assert_grep /tmp/dbx-6f-purge.out 'Could not fully purge state files' \
+        "6f — purge stderr reports the state-file failure"
+    dbxignore uninstall --purge >/dev/null 2>&1 || true
+
+    # 6g — uninstall --purge exits 2 on injected daemon-alive guard (PR #<THIS_PR>, item #129)
+    # DBXIGNORE_TEST_FAIL_DAEMON_ALIVE fires the --purge daemon-alive gate as if
+    # a daemon survived service removal. The gate fires BEFORE the purge body,
+    # so nothing is cleared; recovery is a clean --purge re-run.
+    note "6g — uninstall --purge exits 2 on injected daemon-alive guard"
+    dbxignore install >/dev/null 2>&1 || abort "6g re-install failed"
+    sleep 2
+    local alive_fail_rc
+    if DBXIGNORE_TEST_FAIL_DAEMON_ALIVE=1 dbxignore uninstall --purge \
+        >/tmp/dbx-6g-purge.out 2>&1; then
+        alive_fail_rc=0
+    else
+        alive_fail_rc=$?
+    fi
+    if [ "$alive_fail_rc" -eq 2 ]; then
+        pass "6g — uninstall --purge exits 2 on injected daemon-alive guard"
+    else
+        fail "6g — uninstall --purge exited $alive_fail_rc instead of 2"
+        sed 's/^/    /' /tmp/dbx-6g-purge.out
+    fi
+    assert_grep /tmp/dbx-6g-purge.out 'daemon is running' \
+        "6g — purge stderr reports the daemon-alive refusal"
+    dbxignore uninstall --purge >/dev/null 2>&1 || true
 }
 
 # ---------------------------------------------------------------------------

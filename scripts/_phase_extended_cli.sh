@@ -384,4 +384,51 @@ phase_extended_cli() {
     fi
     assert_grep /tmp/dbx-4t-explain.err 'symlinked component' \
         "4t — explain stderr names 'symlinked component'"
+
+    # 4u — clear/list exit 2 on injected marker-read failure (PR #<THIS_PR>, item #121)
+    # DBXIGNORE_TEST_FAIL_MARKER_READ makes markers.is_ignored raise OSError
+    # inside _walk_marked_paths, exercising the scan_errors exit-2 path that
+    # unit tests pin but a healthy filesystem can't otherwise trigger. The
+    # injected runs mutate nothing (clear refuses once the scan fails), so the
+    # only recovery needed is a plain clear to leave the tree clean.
+    note "4u — clear/list exit 2 on injected marker-read failure"
+    rm -rf "$T"; mkdir -p "$T"
+    printf '*.tmp\n' > "$T/.dropboxignore"
+    : > "$T/foo.tmp"
+    dbxignore apply "$T" --yes >/dev/null 2>&1
+
+    local clear_fail_rc
+    if DBXIGNORE_TEST_FAIL_MARKER_READ=1 dbxignore clear "$T" --yes \
+        >/tmp/dbx-4u-clear.out 2>/tmp/dbx-4u-clear.err; then
+        clear_fail_rc=0
+    else
+        clear_fail_rc=$?
+    fi
+    if [ "$clear_fail_rc" -eq 2 ]; then
+        pass "4u — clear exits 2 on injected marker-read failure"
+    else
+        fail "4u — clear exited $clear_fail_rc instead of 2"
+        sed 's/^/    /' /tmp/dbx-4u-clear.err
+    fi
+    assert_grep /tmp/dbx-4u-clear.err 'scan error' "4u — clear stderr reports scan errors"
+
+    local list_fail_rc
+    if DBXIGNORE_TEST_FAIL_MARKER_READ=1 dbxignore list "$T" \
+        >/tmp/dbx-4u-list.out 2>/tmp/dbx-4u-list.err; then
+        list_fail_rc=0
+    else
+        list_fail_rc=$?
+    fi
+    if [ "$list_fail_rc" -eq 2 ]; then
+        pass "4u — list exits 2 on injected marker-read failure"
+    else
+        fail "4u — list exited $list_fail_rc instead of 2"
+        sed 's/^/    /' /tmp/dbx-4u-list.err
+    fi
+    assert_grep /tmp/dbx-4u-list.err 'scan error' "4u — list stderr reports scan errors"
+
+    # Recovery: clear the marker without the fail point so later phases start
+    # from a clean tree.
+    dbxignore clear "$T" --yes >/dev/null 2>&1
+    rm -rf "$T"
 }

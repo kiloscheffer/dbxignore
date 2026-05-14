@@ -35,6 +35,13 @@ dev = [
 [project.scripts]
 dbxignore = "dbxignore.__main__:main_entry"
 
+# GUI-subsystem trampoline. pip/uv generate dbxignorew.exe as a real
+# GUI-subsystem launcher on Windows; the daemon registered by `install`
+# runs through it so Task Scheduler does not allocate a console window.
+# No-op name on Linux/macOS. Mirrors the frozen dbxignorew.exe binary.
+[project.gui-scripts]
+dbxignorew = "dbxignore.__main__:main_entry"
+
 [tool.hatch.version]
 source = "vcs"
 

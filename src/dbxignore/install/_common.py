@@ -15,10 +15,17 @@ from __future__ import annotations
 
 import logging
 import shutil
+import struct
 import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# PE\0\0 signature (4 bytes) + COFF header (20 bytes) + offset of the
+# Subsystem field within the optional header (68 bytes). Layout is identical
+# for PE32 and PE32+. Subsystem 2 = Windows GUI, 3 = Windows console.
+_PE_SUBSYSTEM_OFFSET = 4 + 20 + 68
+_IMAGE_SUBSYSTEM_WINDOWS_GUI = 2
 
 
 def _windows_helper_path(exe: Path) -> Path | None:
@@ -29,6 +36,35 @@ def _windows_helper_path(exe: Path) -> Path | None:
     """
     helper = exe.with_name("dbxignorew.exe")
     return helper if helper.exists() else None
+
+
+def _is_gui_subsystem(exe: Path) -> bool:
+    """Return True if ``exe`` is a Windows GUI-subsystem PE image.
+
+    uv-created venvs ship a ``pythonw.exe`` that is a byte-identical copy of
+    the console-subsystem ``python.exe`` trampoline — the name promises a
+    windowless launch the binary doesn't deliver. A Task Scheduler action
+    pointing at such a ``pythonw.exe`` allocates a visible console for the
+    daemon's whole lifetime. Reading the PE Subsystem field is the only
+    reliable capability check; the filename is not load-bearing.
+
+    Any read/parse failure returns False — the caller then falls back to a
+    launcher it can reason about rather than trusting an unverifiable binary.
+    """
+    try:
+        with exe.open("rb") as fh:
+            mz = fh.read(0x40)
+            if mz[:2] != b"MZ":
+                return False
+            (pe_offset,) = struct.unpack_from("<I", mz, 0x3C)
+            fh.seek(pe_offset)
+            pe = fh.read(_PE_SUBSYSTEM_OFFSET + 2)
+            if pe[:4] != b"PE\x00\x00":
+                return False
+            (subsystem,) = struct.unpack_from("<H", pe, _PE_SUBSYSTEM_OFFSET)
+    except (OSError, struct.error):
+        return False
+    return bool(subsystem == _IMAGE_SUBSYSTEM_WINDOWS_GUI)
 
 
 def detect_invocation() -> tuple[Path, str]:
@@ -42,11 +78,15 @@ def detect_invocation() -> tuple[Path, str]:
     Frozen on Linux / macOS: ``sys.executable`` is the single binary; the
     daemon runs as ``dbxignore daemon``.
 
-    Non-frozen (uv tool install / pip install): use the Python interpreter
-    with ``-m dbxignore daemon``. On Windows, prefer ``pythonw.exe`` for
-    the windowless launch (item #100); fall back to ``sys.executable`` if
-    ``pythonw.exe`` doesn't exist (Microsoft Store Python, embedded
-    interpreters).
+    Non-frozen (uv tool install / pip install) on Windows: prefer the
+    ``dbxignorew.exe`` GUI-script trampoline (declared in pyproject.toml
+    ``[project.gui-scripts]``) — as a sibling of ``sys.executable`` first,
+    then on PATH. Fall back to ``pythonw.exe`` only when it is genuinely
+    GUI-subsystem (uv venvs ship a console-subsystem copy under that name),
+    then to ``sys.executable`` with a WARNING.
+
+    Non-frozen on Linux / macOS: use the Python interpreter with
+    ``-m dbxignore daemon``, or the ``dbxignore`` PATH shim if present.
     """
     if getattr(sys, "frozen", False):
         # PyInstaller frozen path. On Windows, prefer the dbxignorew.exe
@@ -67,15 +107,36 @@ def detect_invocation() -> tuple[Path, str]:
 
     # Non-frozen path.
     if sys.platform == "win32":
+        # Prefer the dbxignorew GUI-script trampoline. pip/uv generate it as
+        # a real GUI-subsystem launcher, so the daemon runs windowless — the
+        # non-frozen analogue of the frozen dbxignorew.exe. Sibling of
+        # sys.executable first (uv sync / pip-into-venv layout), then PATH
+        # (uv tool install drops it in a bin dir).
+        dbxignorew_sibling = Path(sys.executable).with_name("dbxignorew.exe")
+        if dbxignorew_sibling.exists():
+            return dbxignorew_sibling, "daemon"
+        dbxignorew_in_path = shutil.which("dbxignorew")
+        if dbxignorew_in_path:
+            return Path(dbxignorew_in_path), "daemon"
+        # No GUI-script trampoline (install predates [project.gui-scripts],
+        # or the venv wasn't re-synced). Fall back to pythonw.exe — but only
+        # if it is genuinely GUI-subsystem. uv-created venvs ship a
+        # console-subsystem pythonw.exe (a byte-identical copy of
+        # python.exe); trusting the name allocates a visible console window
+        # for the daemon's whole lifetime.
         pythonw_path = Path(sys.executable).with_name("pythonw.exe")
-        if pythonw_path.exists():
+        if pythonw_path.exists() and _is_gui_subsystem(pythonw_path):
             return pythonw_path, "-m dbxignore daemon"
-        # Pythonw.exe absent (Store Python etc.) — fall back to python.exe
-        # with a logged warning. The warning + fallback shape was added in
-        # PR #229 (item #100).
+        # Last resort: python.exe (always console-subsystem). The daemon
+        # launched at logon will show a console window; warn so the cause
+        # is discoverable. The warning + fallback shape originated in PR #229
+        # (item #100, pythonw.exe-absent case) and now also covers the
+        # console-subsystem-pythonw.exe case.
         logger.warning(
-            "pythonw.exe not found next to %s; falling back to python.exe. "
-            "The daemon launched at logon may briefly flash a console window.",
+            "no GUI-subsystem launcher found next to %s (dbxignorew.exe absent, "
+            "pythonw.exe absent or console-subsystem); falling back to python.exe. "
+            "The daemon launched at logon will show a console window. Re-run "
+            "`uv sync` / `pip install` and reinstall to pick up the dbxignorew launcher.",
             sys.executable,
         )
         return Path(sys.executable), "-m dbxignore daemon"

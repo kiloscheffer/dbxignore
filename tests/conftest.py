@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import sys
 import time
 from typing import TYPE_CHECKING, Protocol
@@ -213,6 +214,28 @@ def require_case_sensitive_fs(tmp_path: Path) -> None:
     if (tmp_path / "_CASE_PROBE").exists():
         pytest.skip("case-insensitive FS — both names resolve to one file")
     probe.unlink()
+
+
+@pytest.fixture
+def symlink_capable(tmp_path: Path) -> None:
+    """Skip the test if symlink creation isn't permitted (Windows without Dev Mode).
+
+    A runtime probe rather than a static ``skipif(sys.platform == "win32")``:
+    hosts that can create symlinks (Linux, macOS, Windows with Developer
+    Mode — including CI's ``windows-latest`` runner) exercise the test; only
+    hosts that genuinely can't (Windows without Dev Mode, locked-down
+    containers) skip.
+    """
+    probe_target = tmp_path / "_symlink_probe_target"
+    probe_target.touch()
+    probe_link = tmp_path / "_symlink_probe_link"
+    try:
+        os.symlink(probe_target, probe_link)
+    except OSError as exc:
+        pytest.skip(f"symlink creation not permitted on this host: {exc}")
+    finally:
+        probe_link.unlink(missing_ok=True)
+        probe_target.unlink(missing_ok=True)
 
 
 @pytest.fixture

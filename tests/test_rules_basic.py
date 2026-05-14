@@ -597,12 +597,8 @@ def test_reconcile_path_recognizes_mixed_case_dropboxignore(
     assert rule_file.resolve() not in fake_markers._ignored
 
 
-@pytest.mark.skipif(
-    __import__("sys").platform == "win32",
-    reason="Windows symlink creation requires admin/dev-mode privileges",
-)
 def test_match_treats_symlink_to_dir_as_leaf_not_directory(
-    tmp_path: Path, write_file: WriteFile
+    tmp_path: Path, write_file: WriteFile, symlink_capable: None
 ) -> None:
     """match() must treat a symlink-to-directory as a LEAF for matching, not
     as a directory. Mirrors format_literal_rule's invariant (rules.py:161:
@@ -642,12 +638,8 @@ def test_match_treats_symlink_to_dir_as_leaf_not_directory(
     )
 
 
-@pytest.mark.skipif(
-    __import__("sys").platform == "win32",
-    reason="Windows symlink creation requires admin/dev-mode privileges",
-)
 def test_explain_treats_symlink_to_dir_as_leaf_not_directory(
-    tmp_path: Path, write_file: WriteFile
+    tmp_path: Path, write_file: WriteFile, symlink_capable: None
 ) -> None:
     """explain() shares match()'s ``is_dir`` derivation; the same symlink-
     as-leaf invariant applies. A directory-only rule must not show up in

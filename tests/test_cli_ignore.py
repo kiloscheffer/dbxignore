@@ -1016,12 +1016,11 @@ def test_ignore_then_unignore_round_trip_for_trailing_space_filename(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="Windows symlink creation requires admin privileges",
-)
 def test_ignore_rejects_path_under_symlinked_ancestor(
-    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    fake_markers: FakeMarkers,
+    monkeypatch: pytest.MonkeyPatch,
+    symlink_capable: None,
 ) -> None:
     """Codex P2 regression: a symlinked ancestor between target and Dropbox
     root means the daemon (followlinks=False) would never reconcile the path,
@@ -1071,12 +1070,11 @@ def test_ignore_rejects_symlink_target_on_linux(
     assert not fake_markers.is_ignored(inner)
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="Windows symlink creation requires admin privileges",
-)
 def test_ignore_accepts_path_via_outside_dropbox_alias(
-    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    fake_markers: FakeMarkers,
+    monkeypatch: pytest.MonkeyPatch,
+    symlink_capable: None,
 ) -> None:
     """Codex P2 regression: when the user supplies a path through an
     out-of-Dropbox symlink alias to a file that's actually inside Dropbox,
@@ -1294,12 +1292,11 @@ def test_ignore_recognizes_literal_target_rule_in_ancestor_file(
     assert fake_markers.is_ignored(target)
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="Windows symlink creation requires admin privileges",
-)
 def test_unignore_accepts_broken_symlink(
-    tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    fake_markers: FakeMarkers,
+    monkeypatch: pytest.MonkeyPatch,
+    symlink_capable: None,
 ) -> None:
     """Codex P2 regression: a broken symlink (target doesn't exist) is still
     a valid object dbxignore manages — the link itself exists. The verb must

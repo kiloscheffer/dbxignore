@@ -949,7 +949,7 @@ function Get-Verb5gState {
 function Test-Daemon {
     Write-Phase "Phase 5 - daemon (Task Scheduler + watchdog)"
 
-    # 5-pre — uv tool venv ships a GUI-subsystem pythonw.exe (item #138, PR <THIS_PR>)
+    # 5-pre — uv tool venv ships a GUI-subsystem pythonw.exe (item #138, PR #253)
     # The daemon's Task Scheduler entry is dbxignorew.exe, a GUI-script
     # trampoline that re-execs the sibling pythonw.exe. The chain is only
     # windowless when that pythonw.exe is itself GUI-subsystem. uv *project*

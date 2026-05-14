@@ -406,7 +406,7 @@ def test_unignore_filters_dropped_negation_matches(
 def test_unignore_succeeds_when_only_blocker_is_a_negation(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 regression: a negation rule preceding the literal rule that
+    """Regression: a negation rule preceding the literal rule that
     currently ignores the path is NOT a blocker. Removing the literal rule
     leaves the negation, which un-ignores the path."""
     root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
@@ -508,7 +508,7 @@ def test_unignore_default_prompts_then_aborts_on_no(
 def test_ignore_rejects_newline_in_path_component(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 regression: ensure the CLI verb propagates the format_literal_rule
+    """Regression: ensure the CLI verb propagates the format_literal_rule
     rejection to a user-friendly exit-2 error, with no rule file created and no
     marker set."""
     root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
@@ -530,7 +530,7 @@ def test_ignore_rejects_newline_in_path_component(
 def test_ignore_preserves_symlink_path(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 regression: when the target is a symlink, the verb must operate
+    """Regression: when the target is a symlink, the verb must operate
     on the LINK (markers apply to the link per CLAUDE.md's symlink invariant),
     not the symlink's target. Specifically: a symlink under Dropbox pointing
     outside Dropbox must NOT be rejected as "not under any Dropbox root"."""
@@ -600,7 +600,7 @@ def test_ignore_dry_run_does_not_mutate_in_half_state(
 def test_ignore_half_state_prompts_when_yes_omitted(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P1 regression: half-state recovery (rule on disk, marker missing)
+    """Regression: half-state recovery (rule on disk, marker missing)
     must show the destructive-action confirmation when --yes is not passed.
     Setting the marker has the same Dropbox-side consequences as the main
     mutation path; the user must have the same opportunity to abort."""
@@ -747,14 +747,14 @@ def test_unignore_then_synthetic_rules_event_no_spurious_mutation(
 
 
 # ---------------------------------------------------------------------------
-# Fix 1 (Codex P1) regression: anchored rule must not match unrelated subtrees
+# Regression: anchored rule must not match unrelated subtrees
 # ---------------------------------------------------------------------------
 
 
 def test_ignore_rule_does_not_match_unrelated_subtree(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P1 regression: a rule generated for ``root/build`` must NOT match
+    """Regression: a rule generated for ``root/build`` must NOT match
     ``root/proj/build``. Without leading-``/`` anchoring, gitignore treats
     ``build/`` as matching every ``build/`` anywhere under the rule file's
     mount, causing Dropbox to mark unrelated subtrees ignored."""
@@ -777,14 +777,14 @@ def test_ignore_rule_does_not_match_unrelated_subtree(
 
 
 # ---------------------------------------------------------------------------
-# Fix 2 (Codex P2) regression: _select_rule_file must find mixed-case ancestor
+# Regression: _select_rule_file must find mixed-case ancestor
 # ---------------------------------------------------------------------------
 
 
 def test_select_rule_file_finds_mixed_case_ancestor(
     tmp_path: Path, require_case_sensitive_fs: None
 ) -> None:
-    """Codex P2 regression: existing ``.DropboxIgnore`` ancestor must be reused
+    """Regression: existing ``.DropboxIgnore`` ancestor must be reused
     by ``_select_rule_file``, not silently bypassed (creating a duplicate
     canonical-cased file would cause the ancestor's rules to stop applying)."""
     root = tmp_path
@@ -848,7 +848,7 @@ def test_unignore_partial_disappearance_exits_2(
 def test_ignore_refuses_dropbox_root_target(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P1 regression: `dbxignore ignore <root>` would otherwise produce
+    """Regression: `dbxignore ignore <root>` would otherwise produce
     a degenerate `//` rule AND mark the entire Dropbox root as ignored —
     catastrophic since Dropbox would remove the root from cloud and propagate
     the deletion to every linked device."""
@@ -911,14 +911,14 @@ def test_unignore_refuses_dropboxignore_filename(
 
 
 # ---------------------------------------------------------------------------
-# Codex P2 Fix 2 regression: unignore clears orphan markers with no rule
+# Regression: unignore clears orphan markers with no rule
 # ---------------------------------------------------------------------------
 
 
 def test_unignore_clears_orphan_marker_with_no_rule(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 regression: marker set but no matching rule (e.g., user
+    """Regression: marker set but no matching rule (e.g., user
     manually edited .dropboxignore while daemon was stopped). unignore must
     clear the orphan marker, not exit silent — symmetric to ignore's
     half-state recovery for the inverse direction."""
@@ -951,7 +951,7 @@ def test_unignore_dry_run_orphan_marker_does_not_mutate(
 
 
 # ---------------------------------------------------------------------------
-# Codex P2 Fix 1 regression: unignore resolves canonical cache key to disk
+# Regression: unignore resolves canonical cache key to disk
 # ---------------------------------------------------------------------------
 
 
@@ -961,7 +961,7 @@ def test_unignore_handles_mixed_case_rule_file_on_disk(
     monkeypatch: pytest.MonkeyPatch,
     require_case_sensitive_fs: None,
 ) -> None:
-    """Codex P2 regression: on a case-sensitive FS with only ``.DropboxIgnore``
+    """Regression: on a case-sensitive FS with only ``.DropboxIgnore``
     on disk, ``RuleCache`` stores it under the canonical lowercase cache key,
     so ``Match.ignore_file`` refers to a non-existent path.  The verb must
     resolve canonical-to-disk before calling ``remove_rule``, otherwise
@@ -988,7 +988,7 @@ def test_unignore_handles_mixed_case_rule_file_on_disk(
 def test_ignore_then_unignore_round_trip_for_trailing_space_filename(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 regression: a file named `foo ` (trailing space) goes through
+    """Regression: a file named `foo ` (trailing space) goes through
     `format_literal_rule`'s trailing-space escape (commit 88a7cee). The /simplify
     pass (d0ac827) had dropped .rstrip() from the canonical side of the
     comparison, breaking the round-trip — the canonical `/foo\\ ` failed to
@@ -1012,7 +1012,7 @@ def test_ignore_then_unignore_round_trip_for_trailing_space_filename(
 
 
 # ---------------------------------------------------------------------------
-# Codex P2 Fix: symlinked-ancestor rejection + case-insensitive rule match
+# Regression: symlinked-ancestor rejection + case-insensitive rule match
 # ---------------------------------------------------------------------------
 
 
@@ -1022,7 +1022,7 @@ def test_ignore_rejects_path_under_symlinked_ancestor(
     monkeypatch: pytest.MonkeyPatch,
     symlink_capable: None,
 ) -> None:
-    """Codex P2 regression: a symlinked ancestor between target and Dropbox
+    """Regression: a symlinked ancestor between target and Dropbox
     root means the daemon (followlinks=False) would never reconcile the path,
     leaving the marker permanently orphaned. Reject at validation time."""
     root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
@@ -1050,7 +1050,7 @@ def test_ignore_rejects_path_under_symlinked_ancestor(
 def test_ignore_rejects_symlink_target_on_linux(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 regression: on Linux, symlink targets must be rejected at
+    """Regression: on Linux, symlink targets must be rejected at
     validation time. Otherwise the verb would write the rule successfully but
     fail the marker write (EPERM), and the daemon (followlinks=False) would
     never recover the orphan rule."""
@@ -1076,7 +1076,7 @@ def test_ignore_accepts_path_via_outside_dropbox_alias(
     monkeypatch: pytest.MonkeyPatch,
     symlink_capable: None,
 ) -> None:
-    """Codex P2 regression: when the user supplies a path through an
+    """Regression: when the user supplies a path through an
     out-of-Dropbox symlink alias to a file that's actually inside Dropbox,
     the verb must accept and operate on the canonical path. The unresolved
     path fails lexical containment (alias is outside Dropbox); the verb
@@ -1114,7 +1114,7 @@ def test_ignore_accepts_path_via_outside_dropbox_alias(
 def test_ignore_then_unignore_case_insensitive_match(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 regression: on case-insensitive FS, ignore writes a rule with
+    """Regression: on case-insensitive FS, ignore writes a rule with
     the on-disk casing, but a subsequent unignore with different user-typed
     casing must still match the rule (mirrors pathspec's case-insensitive
     matching at the pattern layer). Use string casing only — no symlink or
@@ -1148,8 +1148,8 @@ def test_ignore_then_unignore_case_insensitive_match(
 def test_unignore_accepts_symlink_target_on_linux(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 regression: round-9 added a shared Linux-symlink-target
-    rejection in _validate_target_under_root, but it's only justified for
+    """Regression: a shared Linux-symlink-target rejection was added in
+    _validate_target_under_root, but it's only justified for
     `ignore` (marker-write fails). `unignore` should be allowed to remove a
     stale rule for a symlink target — clear_ignored is a no-op when no xattr
     exists, no orphan-rule risk."""
@@ -1173,7 +1173,7 @@ def test_unignore_accepts_symlink_target_on_linux(
 def test_ignore_does_not_set_child_marker_under_ancestor_rule(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 regression: when cache.match is True only because an ancestor
+    """Regression: when cache.match is True only because an ancestor
     rule covers the subtree (e.g., `parent/` covers `parent/child`), the
     half-state recovery should NOT write a marker on the child. The daemon
     prunes below ignored ancestors and never creates child-level markers,
@@ -1203,16 +1203,16 @@ def test_ignore_does_not_set_child_marker_under_ancestor_rule(
 
 
 # ---------------------------------------------------------------------------
-# Codex P2 regression: direct wildcard match vs ancestor coverage distinction
+# Regression: direct wildcard match vs ancestor coverage distinction
 # ---------------------------------------------------------------------------
 
 
 def test_ignore_sets_marker_for_wildcard_direct_match(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 regression: when a wildcard rule directly matches the target
+    """Regression: when a wildcard rule directly matches the target
     (e.g., `**/build/` matches `proj/build/`), the half-state recovery must
-    set the marker — the daemon would too on next reconcile. Round-12's blanket
+    set the marker — the daemon would too on next reconcile. An earlier blanket
     skip for "already covered by other rule" was over-broad: ancestor coverage
     (subtree pruning) and direct-wildcard-match are distinguishable, and only
     the former should skip."""
@@ -1241,7 +1241,7 @@ def test_ignore_sets_marker_for_wildcard_direct_match(
 def test_ignore_overrides_negation_by_appending_duplicate(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 regression: a .dropboxignore with ``/build/\\n!/build/\\n`` (literal
+    """Regression: a .dropboxignore with ``/build/\\n!/build/\\n`` (literal
     rule then later negation) leaves cache.match=False. ``dbxignore ignore build``
     must append a NEW ``/build/`` rule at the end so it overrides the negation
     via gitignore's last-match-wins. Previously, ``append_rule``'s idempotent
@@ -1268,7 +1268,7 @@ def test_ignore_overrides_negation_by_appending_duplicate(
 def test_ignore_recognizes_literal_target_rule_in_ancestor_file(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 regression: when a literal-target rule lives in an ancestor
+    """Regression: when a literal-target rule lives in an ancestor
     .dropboxignore (not the closest one), via_us_match must still recognize
     it via per-file canonical comparison. Otherwise the half-state recovery
     is skipped and the documented synchronous marker write doesn't happen."""
@@ -1298,7 +1298,7 @@ def test_unignore_accepts_broken_symlink(
     monkeypatch: pytest.MonkeyPatch,
     symlink_capable: None,
 ) -> None:
-    """Codex P2 regression: a broken symlink (target doesn't exist) is still
+    """Regression: a broken symlink (target doesn't exist) is still
     a valid object dbxignore manages — the link itself exists. The verb must
     accept it so users can clean up stale rules referencing broken links.
     `os.path.lexists` checks the link, not its target."""
@@ -1315,7 +1315,7 @@ def test_unignore_accepts_broken_symlink(
     runner = CliRunner()
     result = runner.invoke(cli.main, ["unignore", str(broken_link), "--yes"])
     # On Linux/macOS, unignore should succeed — broken link doesn't trigger
-    # round-9's Linux ignore-side rejection (that's in cli.ignore, not _validate).
+    # the Linux ignore-side rejection (that's in cli.ignore, not _validate).
     assert result.exit_code == 0, result.output
     # Stale rule cleaned up.
     content = (root / IGNORE_FILENAME).read_text(encoding="utf-8")
@@ -1323,14 +1323,14 @@ def test_unignore_accepts_broken_symlink(
 
 
 # ---------------------------------------------------------------------------
-# Codex P2 regression: refuse mutation when rule file has invalid syntax
+# Regression: refuse mutation when rule file has invalid syntax
 # ---------------------------------------------------------------------------
 
 
 def test_ignore_refuses_when_existing_rule_file_invalid(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 regression: an existing `.dropboxignore` with invalid syntax
+    """Regression: an existing `.dropboxignore` with invalid syntax
     is silently dropped from the rule cache, so cache.match returns False and
     the verb would otherwise proceed to append a new rule and set the marker
     — but the daemon will drop the file on reconcile too and clear the marker.

@@ -253,11 +253,11 @@ def test_clear_path_arg_clears_marked_directory_target_without_descending(
 def test_clear_surfaces_scan_errors_and_exits_two(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Item 7 from external review: when the marker-scan walk hits an
-    OSError on a path (e.g. ENOTSUP on a filesystem that doesn't support
-    extended attributes), the count is surfaced via stderr and the command
-    exits 2 — previously the read errors were swallowed silently and the
-    user saw "No markers to clear" while the scan had actually failed."""
+    """When the marker-scan walk hits an OSError on a path (e.g. ENOTSUP on
+    a filesystem that doesn't support extended attributes), the count is
+    surfaced via stderr and the command exits 2 — previously the read errors
+    were swallowed silently and the user saw "No markers to clear" while the
+    scan had actually failed."""
     import errno
 
     root = tmp_path

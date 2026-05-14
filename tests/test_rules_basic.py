@@ -83,9 +83,9 @@ def test_load_root_honors_stop_event_between_directory_visits(
 ) -> None:
     """`RuleCache.load_root` must check stop_event between directory visits
     so SIGTERM during phase 1 of `_sweep_once` is observed without
-    scanning every `.dropboxignore` in a large tree. Surfaced by Codex P2
-    reframed around per-directory granularity when the rglob loop was
-    replaced by `os.walk`."""
+    scanning every `.dropboxignore` in a large tree. Reframed around
+    per-directory granularity when the rglob loop was replaced by
+    `os.walk`."""
     import os
     import threading
 

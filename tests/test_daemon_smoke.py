@@ -58,7 +58,7 @@ def test_daemon_starts_and_responds_to_one_event(
             # and the test should be deleted, not widened further.
             assert _poll_until(lambda: markers.is_ignored(tmp_path / "build"), timeout_s=10.0), (
                 "build/ was not marked ignored within 10s — likely a dropped "
-                "ReadDirectoryChangesW event (see CLAUDE.md gotcha on dropped events)."
+                "ReadDirectoryChangesW event (Windows can drop these under load)."
             )
         except Exception:
             sys.stderr.write("\n=== daemon.log on failure ===\n")

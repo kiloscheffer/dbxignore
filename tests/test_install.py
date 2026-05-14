@@ -83,11 +83,10 @@ def test_build_xml_escapes_ampersand_in_arguments(monkeypatch: pytest.MonkeyPatc
 def test_install_task_wraps_filenotfounderror_from_schtasks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Item 8 from external review: when schtasks.exe isn't on PATH
-    (atypical on Windows but possible in Nano Server / stripped sandboxes),
-    install_task must surface a clean RuntimeError instead of letting the
-    FileNotFoundError traceback escape past cli.install's
-    RuntimeError-only catch."""
+    """When schtasks.exe isn't on PATH (atypical on Windows but possible in
+    Nano Server / stripped sandboxes), install_task must surface a clean
+    RuntimeError instead of letting the FileNotFoundError traceback escape
+    past cli.install's RuntimeError-only catch."""
 
     def fake_run_missing(*_a: object, **_kw: object) -> subprocess.CompletedProcess[str]:
         raise FileNotFoundError(2, "No such file or directory", "schtasks")
@@ -1071,7 +1070,7 @@ def test_purge_refuses_when_state_json_missing_and_daemon_alive(
 
     state_dir = tmp_path / "state_dir"
     state_dir.mkdir()
-    # No state.json written at all — the scenario Codex named.
+    # No state.json written at all — daemon detected only via the lock probe.
 
     monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
     monkeypatch.setattr(cli, "_discover_roots", lambda: [root])

@@ -817,7 +817,7 @@ def test_dispatch_dir_create_event_appended_to_deferred_when_cache_not_ready(
 ) -> None:
     """Same defer semantics for DIR_CREATE: the new dir's marker can be
     set as soon as the cache loads, instead of waiting for the sweep wall-
-    clock to reach it (the Codex P2 ingestion race)."""
+    clock to reach it (the ingestion race)."""
     import threading as threading_mod
 
     root = tmp_path.resolve()

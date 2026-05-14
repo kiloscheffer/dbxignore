@@ -147,10 +147,12 @@ def test_discover_env_override_empty_string_falls_back_to_info_json(
 ) -> None:
     """DBXIGNORE_ROOT="" is indistinguishable from unset in practice
     (shell quirks), so treat it as unset and fall back to info.json."""
-    _stage_info(monkeypatch, tmp_path, "info_personal.json")
+    dbx = tmp_path / "Dropbox"
+    dbx.mkdir()
+    _stage_info(monkeypatch, tmp_path, content=_info_for({"personal": str(dbx)}))
     monkeypatch.setenv("DBXIGNORE_ROOT", "")
 
-    assert roots.discover() == [Path(r"C:\Dropbox")]
+    assert roots.discover() == [dbx]
 
 
 def test_discover_env_override_missing_path_warns_and_returns_empty(

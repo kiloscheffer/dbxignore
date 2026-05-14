@@ -1017,13 +1017,9 @@ def test_purge_refuses_when_daemon_alive(
 def test_purge_refuses_when_state_json_unreadable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
 ) -> None:
-    """BACKLOG #122 Arm A — refusal path: ``state.json`` is unreadable
-    AND ``state.is_any_daemon_running()`` confirms a daemon process is
-    holding daemon.lock. Refuse with exit 2 so the live daemon's reconcile
-    loop doesn't re-apply cleared markers post-purge. Codex's P2 follow-up
-    on PR #243 split the prior single Arm A path into this strict case
-    plus a recovery-flow case where ``--purge`` proceeds when no daemon
-    is actually running (next test below)."""
+    """BACKLOG #122: ``state.json`` is unreadable AND the lock probe
+    confirms a live daemon — ``--purge`` refuses with exit 2 so the
+    daemon's reconcile loop can't re-apply cleared markers."""
     import click.testing
 
     from dbxignore import cli, state
@@ -1060,18 +1056,11 @@ def test_purge_refuses_when_state_json_unreadable(
 def test_purge_refuses_when_state_json_missing_and_daemon_alive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
 ) -> None:
-    """Codex P2 #2 follow-up on PR #243: when ``state.json`` is absent
-    entirely (e.g. a prior partial ``--purge`` deleted state.json but
-    couldn't delete the held daemon.lock, or the user manually removed
-    state.json), ``state.read()`` returns None AND
-    ``state.default_path().exists()`` is False, so the prior two-arm gate
-    skipped the lock probe and fell through to the destructive purge body.
-    A live daemon then re-applied markers and rewrote state.json — the
-    exact tug-of-war the gate was supposed to prevent.
-
-    Unified gate now always probes ``is_any_daemon_running()``. With no
-    state.json on disk but the lock held, refuse with the "PID unknown;
-    daemon.lock is held" message variant."""
+    """BACKLOG #122: ``state.json`` is absent entirely (a prior partial
+    ``--purge`` removed it but couldn't delete the held daemon.lock, or
+    the user removed it manually) — the lock probe still detects the live
+    daemon, so ``--purge`` refuses with the "PID unknown" message variant
+    rather than racing the daemon."""
     import click.testing
 
     from dbxignore import cli, state
@@ -1104,14 +1093,10 @@ def test_purge_refuses_when_state_json_missing_and_daemon_alive(
 def test_purge_proceeds_when_state_unreadable_and_no_daemon(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
 ) -> None:
-    """Codex P2 follow-up on PR #243: the prior Arm A blocked ``--purge``
-    on any unreadable state.json, but on systems where the daemon is
-    actually dead (Linux/macOS synchronous service-stop, or Windows where
-    the daemon stopped normally before state.json got corrupted), refusing
-    leaves the user manually deleting the orphaned bad file that purge is
-    supposed to clean up. New behavior: when ``is_any_daemon_running()``
-    confirms no live daemon, proceed with purge — clean up the corrupt
-    state.json and let the user finish the uninstall in one command."""
+    """BACKLOG #122: ``state.json`` is unreadable but the lock probe
+    confirms no live daemon (the daemon was cleanly stopped, state.json
+    just got corrupted). ``--purge`` proceeds and cleans up the orphaned
+    bad file rather than leaving the user to delete it by hand."""
     import click.testing
 
     from dbxignore import cli, state

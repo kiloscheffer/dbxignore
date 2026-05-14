@@ -8,7 +8,6 @@ macOS: ``~/Library/Application Support/dbxignore/state.json``
 
 from __future__ import annotations
 
-import contextlib
 import errno
 import json
 import logging
@@ -221,45 +220,60 @@ def is_daemon_alive(pid: int | None, create_time: float | None = None) -> bool:
     return bool(abs(live_create_time - create_time) < 0.001)
 
 
+def _probe_lock_contended(fh: Any, lock_path: Path) -> bool:
+    """Try a non-blocking exclusive lock on ``fh``; report whether it's contended.
+
+    ``True`` — a contender holds the lock (errno in ``_LOCK_CONTENTION_ERRNOS``).
+    ``False`` — we acquired it (lock released when the caller closes ``fh``), OR
+    the probe was indeterminate (a non-contention ``OSError`` such as ``ENOLCK``;
+    logged at WARNING, treated as "no daemon" so destructive verbs aren't
+    blocked on opaque errors).
+    """
+    try:
+        if sys.platform == "win32":
+            import msvcrt  # type: ignore[import-not-found, unused-ignore]
+
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl  # type: ignore[import-not-found, unused-ignore]
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        if exc.errno in _LOCK_CONTENTION_ERRNOS:
+            return True
+        logger.warning(
+            "lock probe on %s failed (%s: %s); treating as no daemon",
+            lock_path,
+            type(exc).__name__,
+            exc,
+        )
+    return False
+
+
 def is_any_daemon_running() -> bool:
     """Probe whether any dbxignore daemon is currently running, without a PID.
 
     Unlike ``is_daemon_alive`` (PID-anchored from a readable ``state.json``),
-    this helper works when ``state.json`` is absent, unreadable, or malformed.
-    Uses the daemon-singleton lock at ``user_state_dir()/daemon.lock`` as the
-    liveness signal: the daemon holds an exclusive ``fcntl.flock`` (POSIX) /
-    ``msvcrt.locking`` (Windows) on that file for its entire lifetime (see
-    ``daemon._acquire_singleton_lock``). If we can briefly acquire-then-release
-    the same lock, no daemon currently holds it.
+    this works when ``state.json`` is absent, unreadable, or malformed. Uses
+    the daemon-singleton lock at ``user_state_dir()/daemon.lock``: the daemon
+    holds an exclusive ``fcntl.flock`` / ``msvcrt.locking`` on that file for
+    its entire lifetime (see ``daemon._acquire_singleton_lock``).
 
-    Returns ``False`` when:
-
-    - the lock file doesn't exist (no daemon has ever run, or a prior
-      ``--purge`` cleaned up the state directory), OR
-    - the file exists and we acquired the lock (daemon is dead — OS released
-      the lock on process exit, file lingers).
-
-    Returns ``True`` when the lock acquisition fails with EWOULDBLOCK/EAGAIN
-    (or the Windows ``msvcrt`` equivalent), which means a contender holds it.
-
-    Indeterminate probes (open failure, lock primitive unimportable) log a
-    WARNING and return ``False`` — matches the convention ``is_daemon_alive``
-    follows for its no-psutil ``os.kill`` fallback (item #118): destructive
-    verbs should not block on opaque errors. Used by ``cli.uninstall``'s
-    Arm A (BACKLOG #122 fix, Codex P2 follow-up on PR #243) so that a
-    corrupt ``state.json`` on a system with no live daemon doesn't block
-    ``--purge`` from cleaning up the orphaned file.
-
-    Cross-references the lock-path knowledge with ``daemon._singleton_lock_path``
-    — both compute ``user_state_dir() / "daemon.lock"``. Kept duplicated rather
-    than imported to avoid a ``state``→``daemon`` import cycle (``daemon``
-    already imports ``state``).
+    ``True`` only when a contender holds the lock. ``False`` when the lock
+    file is missing, empty, acquirable, or the probe is indeterminate — the
+    last case matches ``is_daemon_alive``'s item #118 convention (destructive
+    verbs should not block on opaque errors). Called from ``cli.uninstall``'s
+    ``--purge`` daemon-alive gate.
     """
     lock_path = user_state_dir() / "daemon.lock"
-    if not lock_path.exists():
-        return False
+    # "rb+" opens read-write without creating: a missing lock file means no
+    # daemon, and the probe must not side-effect an empty daemon.lock into
+    # existence (which "ab+" would). FileNotFoundError is the no-daemon case;
+    # other OSErrors are indeterminate.
     try:
-        fh = open(lock_path, "ab+")  # noqa: SIM115 — closed in finally below
+        fh = open(lock_path, "rb+")  # noqa: SIM115 — closed in finally below
+    except FileNotFoundError:
+        return False
     except OSError as exc:
         logger.warning(
             "could not open %s for liveness probe (%s: %s); treating as no daemon",
@@ -270,52 +284,16 @@ def is_any_daemon_running() -> bool:
         return False
     try:
         # An empty lock file means the daemon never wrote its placeholder
-        # byte — no daemon has held the lock since the file was created
-        # (the daemon writes the byte BEFORE locking; see
-        # ``daemon._acquire_singleton_lock``). Short-circuit: no daemon.
-        # Also avoids msvcrt.locking's "region must overlap actual bytes"
-        # error on Windows.
+        # byte — it writes that byte BEFORE locking (see
+        # ``daemon._acquire_singleton_lock``), so an empty file means no
+        # daemon has held the lock. Short-circuit also avoids msvcrt.locking's
+        # "region must overlap actual bytes" error on Windows.
         if os.fstat(fh.fileno()).st_size == 0:
             return False
         fh.seek(0)
-        if sys.platform == "win32":
-            import msvcrt  # type: ignore[import-not-found, unused-ignore]
-
-            try:
-                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
-            except OSError as exc:
-                if exc.errno in _LOCK_CONTENTION_ERRNOS:
-                    return True
-                logger.warning(
-                    "msvcrt.locking probe on %s failed (%s: %s); treating as no daemon",
-                    lock_path,
-                    type(exc).__name__,
-                    exc,
-                )
-                return False
-            # Best-effort release; fh.close() in `finally` releases anyway.
-            with contextlib.suppress(OSError):
-                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl  # type: ignore[import-not-found, unused-ignore]
-
-            try:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError as exc:
-                if exc.errno in _LOCK_CONTENTION_ERRNOS:
-                    return True
-                logger.warning(
-                    "fcntl.flock probe on %s failed (%s: %s); treating as no daemon",
-                    lock_path,
-                    type(exc).__name__,
-                    exc,
-                )
-                return False
-            with contextlib.suppress(OSError):
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        return _probe_lock_contended(fh, lock_path)
     finally:
         fh.close()
-    return False
 
 
 def write(state: State, path: Path | None = None) -> None:

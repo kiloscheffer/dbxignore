@@ -506,15 +506,10 @@ def test_is_any_daemon_running_held_lock_returns_true(
 def test_is_any_daemon_running_non_contention_oserror_returns_false(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Codex P2 #3 follow-up on PR #243: when the lock primitive raises
-    an OSError for a reason OTHER than contention (e.g. ``ENOLCK`` on a
-    filesystem without advisory-lock support, ``EINTR``, ``ENOTSUP``),
-    the prior shape blanket-caught it as ``return True`` (lock held →
-    daemon alive). That blocked ``uninstall --purge`` recovery on systems
-    where lock probing isn't actually available. New behavior: distinguish
-    `_LOCK_CONTENTION_ERRNOS` from other errors; log + return False
-    (indeterminate → no daemon) for the non-contention case so destructive
-    verbs can proceed."""
+    """A non-contention OSError from the lock primitive (``ENOLCK`` on a
+    filesystem without advisory-lock support, ``EINTR``, ``ENOTSUP``) is
+    indeterminate, not "lock held" — the helper logs a WARNING and returns
+    False so destructive verbs aren't blocked on opaque errors."""
     import errno as _errno
 
     state_dir = tmp_path / "state_dir"

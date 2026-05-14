@@ -77,7 +77,7 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 # Scratch / non-shipping content lives outside the package layout. Excluded
 # so a developer's local scratch dirs don't surface in the typecheck pass.
-exclude = ["^improvement/", "^pyinstaller/"]
+exclude = ["^pyinstaller/"]
 
 
 [dependency-groups]

@@ -19,6 +19,7 @@ import plistlib
 import subprocess
 from pathlib import Path
 
+from dbxignore import _testing
 from dbxignore import state as state_module
 from dbxignore.install._common import detect_invocation
 
@@ -205,6 +206,16 @@ def uninstall_agent() -> None:
         )
     except OSError as exc:
         raise RuntimeError(f"launchctl bootout could not be invoked: {exc}") from exc
+    if _testing.fail_point_active("BOOTOUT"):
+        # Substitute a confirmed-failure result: non-zero rc with stderr
+        # that `_is_service_not_loaded` does NOT match, so the arm below
+        # raises RuntimeError instead of treating it as idempotent success.
+        result = subprocess.CompletedProcess(
+            result.args,
+            returncode=5,
+            stdout="",
+            stderr="injected bootout failure (DBXIGNORE_TEST_FAIL_BOOTOUT)",
+        )
     if result.returncode != 0:
         stderr = (result.stderr or "").strip()
         if not _is_service_not_loaded(stderr):

@@ -14,7 +14,7 @@ from typing import NoReturn, assert_never
 
 import rich_click as click
 
-from dbxignore import markers, reconcile, roots, rules, state
+from dbxignore import _testing, markers, reconcile, roots, rules, state
 from dbxignore.roots import find_containing
 from dbxignore.rules import IGNORE_FILENAME, RuleCache, is_ignore_filename
 
@@ -69,6 +69,7 @@ def _purge_dir(
     for pattern in patterns:
         for f in dir_path.glob(pattern):
             try:
+                _testing.raise_if_fail_point("STATE_PURGE")
                 f.unlink()
             except FileNotFoundError:
                 pass
@@ -921,6 +922,7 @@ def _walk_marked_paths(target: Path) -> tuple[list[Path], list[tuple[Path, str]]
     found: list[Path] = []
     errors: list[tuple[Path, str]] = []
     try:
+        _testing.raise_if_fail_point("MARKER_READ")
         if markers.is_ignored(target):
             return [target], errors
     except OSError as exc:
@@ -934,6 +936,7 @@ def _walk_marked_paths(target: Path) -> tuple[list[Path], list[tuple[Path, str]]
         for name in dirnames:
             p = current_path / name
             try:
+                _testing.raise_if_fail_point("MARKER_READ")
                 if markers.is_ignored(p):
                     found.append(p)
                 else:
@@ -945,6 +948,7 @@ def _walk_marked_paths(target: Path) -> tuple[list[Path], list[tuple[Path, str]]
         for name in filenames:
             p = current_path / name
             try:
+                _testing.raise_if_fail_point("MARKER_READ")
                 if markers.is_ignored(p):
                     found.append(p)
             except OSError as exc:
@@ -1759,6 +1763,11 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
         # error message) when `state.json` is readable, plus the lock probe
         # (`daemon.lock` is held for the daemon's whole lifetime) which works
         # even when `state.json` is unreadable or absent.
+        if _testing.fail_point_active("DAEMON_ALIVE"):
+            _refuse_purge_daemon_alive(
+                " (DBXIGNORE_TEST_FAIL_DAEMON_ALIVE injected)",
+                "unset DBXIGNORE_TEST_FAIL_DAEMON_ALIVE",
+            )
         s_for_guard = state.read()
         if s_for_guard is not None and state.daemon_is_running(s_for_guard):
             _refuse_purge_daemon_alive(

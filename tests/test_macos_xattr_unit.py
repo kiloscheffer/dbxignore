@@ -419,7 +419,7 @@ def test_detected_attr_names_writes_both_when_pluginkit_unknown_and_no_info_json
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
 ) -> None:
     """pluginkit errored (test host without the binary, e.g. Linux CI) AND
-    info.json is missing → uncertain. Dual-attribute defensive write
+    info.json is missing → uncertain. With a dual-attribute defensive write,
     the active sync stack reads its own attribute, the inactive one ignores
     the stray, and the user-visible "Dropbox stops syncing the marked path"
     outcome holds either way.

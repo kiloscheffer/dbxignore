@@ -51,10 +51,9 @@ def test_status_reports_not_running_when_create_time_mismatch(
     """Human-readable status path must respect daemon_create_time, just like
     --summary and clear do. A recycled PID claimed by an unrelated python
     process passes the substring-name check; create_time disambiguation
-    catches the false positive. Without forwarding create_time the human
-    path would render 'daemon: running'
-    while --summary correctly shows state=not_running — same state.json,
-    inconsistent verdict."""
+    catches the false positive. Without forwarding create_time, the human
+    path would render 'daemon: running' while --summary correctly shows
+    state=not_running — same state.json, inconsistent verdict."""
     s = state.State(
         daemon_pid=12345,
         daemon_create_time=1700000000.0,  # what state.json recorded

@@ -243,9 +243,7 @@ def test_detect_glob_prefix_same_target_override_no_flag(tmp_path: Path) -> None
     The conservative-drop arm must NOT flag this, because dropping the
     negation would leave ``foo/`` directories ignored on disk (``RuleCache.match()``
     filters entries listed in ``_dropped`` before consulting pathspec,
-    so a dropped negation changes marker behavior, not just diagnostics).
-
-    Confirmed by the same-target carve-out regression tests."""
+    so a dropped negation changes marker behavior, not just diagnostics)."""
     root = tmp_path
     sequence = [
         _entry(str(root / ".dropboxignore"), 1, "**/foo/", str(root)),

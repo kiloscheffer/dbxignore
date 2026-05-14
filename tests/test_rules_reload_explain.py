@@ -174,9 +174,8 @@ def test_rulecache_still_flags_directory_rule_negation(tmp_path: Path) -> None:
 def test_rulecache_glob_negation_with_sibling_scope_include_keeps_unignored(
     tmp_path: Path,
 ) -> None:
-    """Reproducer: a directory-
-    marking include in a sibling ``.dropboxignore`` does not apply to
-    paths in the other sibling's scope.
+    """A directory-marking include in a sibling ``.dropboxignore`` does not
+    apply to paths in the other sibling's scope.
 
     Layout:
         ``a/.dropboxignore``: ``foo/``  (scopes to a/)
@@ -295,7 +294,7 @@ def test_rulecache_flags_glob_prefix_negation_under_dir_marking_glob_include(
     made the negation inert wherever the `**` glob landed under the
     earlier ``**/foo/`` directory-marking include.
 
-    Now ``_detect_conflicts`` adds a glob-prefix arm that flags such
+    The current ``_detect_conflicts`` adds a glob-prefix arm that flags such
     negations conservatively — any earlier include whose raw text ends
     in ``/`` triggers the drop. The detector still bypasses the
     literal-prefix ``is_directory_negation`` / strict-ancestor branch

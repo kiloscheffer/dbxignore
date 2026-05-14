@@ -466,7 +466,7 @@ function Test-ExtendedCli {
     }
 
     # 4g — init refuses an unwritable target dir with exit 2 + a clean
-    # "cannot write" message rather than an unhandled OSError traceback (<THIS_PR>).
+    # "cannot write" message rather than an unhandled OSError traceback (PR #248).
     Write-Note "4g - dbxignore init on an unwritable directory"
     $roDir = Join-Path $T "init-readonly"
     New-Item -ItemType Directory -Force -Path $roDir | Out-Null

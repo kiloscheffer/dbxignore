@@ -72,7 +72,7 @@ phase_extended_cli() {
     fi
 
     # 4g — init refuses an unwritable target dir with exit 2 + a clean
-    # "cannot write" message rather than an unhandled OSError traceback (<THIS_PR>).
+    # "cannot write" message rather than an unhandled OSError traceback (PR #248).
     note "4g — dbxignore init on an unwritable directory"
     local ro_dir="$T/init-readonly"
     mkdir -p "$ro_dir"

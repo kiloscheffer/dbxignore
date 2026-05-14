@@ -850,7 +850,7 @@ def status(summary: bool) -> None:
         for r in s.watched_roots:
             click.echo(f"watching: {r}")
 
-    # macOS sync-mode visibility (followup item 37). Returns None on
+    # macOS sync-mode visibility. Returns None on
     # Windows/Linux where there's no detection step to report — those
     # platforms have a single attribute name fixed at module import.
     detection = markers.detection_summary()
@@ -1080,7 +1080,7 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
     click.echo(f"clear: cleared={cleared} errors={len(errors)} scan_errors={len(scan_errors)}")
     for p, msg in errors[:_MAX_REPORTED_ERRORS]:
         click.echo(f"  error: {p} - {msg}", err=True)
-    # Exit 2 only for the scan-error surface (item from external review). Write
+    # Exit 2 only for the scan-error surface. Write
     # errors continue to be reported via `errors=N` with exit 0, preserving the
     # existing contract for scripted callers that parse stdout.
     if scan_errors:

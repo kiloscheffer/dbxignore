@@ -647,7 +647,7 @@ class _WatchdogHandler(FileSystemEventHandler):
             # matching rule was just deleted in a queued-but-not-yet-
             # processed RULES event, the bypass marks a path that the next
             # reconcile_subtree (driven by that RULES event) will clear —
-            # bounded transient false-positive (followup item 57).
+            # bounded transient false-positive.
             if kind is EventKind.DIR_CREATE:
                 matched = self._cache.match(src)
                 logger.debug("fast-path DIR_CREATE: match=%s path=%s", matched, src)
@@ -745,7 +745,7 @@ def run(stop_event: threading.Event | None = None) -> None:
                 return
 
             # Surface the macOS sync-mode detection result so users can self-
-            # diagnose without DBXIGNORE_LOG_LEVEL=DEBUG (followup item 37).
+            # diagnose without DBXIGNORE_LOG_LEVEL=DEBUG.
             # Returns None on Windows/Linux — single-attribute platforms have
             # no detection step to report.
             summary = detection_summary()
@@ -847,7 +847,7 @@ def run(stop_event: threading.Event | None = None) -> None:
                         # (same RuleCache, same xattr values, same paths) so
                         # it isn't a correctness issue, but the wasted work
                         # is bounded by skipping the tick. The next tick
-                        # runs normally once the worker exits. Surfaced by
+                        # runs normally once the worker exits.
                         if worker.is_alive():
                             continue
                         try:

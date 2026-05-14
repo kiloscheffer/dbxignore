@@ -1,6 +1,6 @@
 """Static rule-conflict detection for `.dropboxignore` rule sequences.
 
-Extracts the detection layer from ``rules.py`` per followup item 6. The
+Extracts the detection layer from ``rules.py``. The
 functions here are pure — they take an in-memory rule sequence and a
 root path, and return a list of ``Conflict`` records. They have no
 coupling to ``RuleCache`` internals beyond the duck-typed shape of the
@@ -348,9 +348,8 @@ def _detect_conflicts(sequence: Sequence[_SequenceEntryLike], *, root: Path) -> 
                 # not reach paths under `b/.dropboxignore` (sibling
                 # scope), so its inheritance can't make the negation
                 # inert. The include's scope must be an ancestor of (or
-                # equal to) the negation's scope. Surfaced by Codex on
-                # An earlier shape did a bare suffix-prefix string-compare
-                # and missed cross-scope.
+                # equal to) the negation's scope. An earlier shape did a
+                # bare suffix-prefix string-compare and missed cross-scope.
                 if not entry.ancestor_dir.is_relative_to(earlier.ancestor_dir):
                     continue
                 include_target = _include_directory_target(earlier)

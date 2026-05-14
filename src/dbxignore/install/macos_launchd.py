@@ -163,7 +163,7 @@ def install_agent() -> None:
     # without it, the FNFE would escape before the bootstrap call
     # below has a chance to surface a clean RuntimeError via
     # `_run_launchctl`. Same shape as the equivalent windows_task.py
-    # pre-call (item 8 from external review).
+    # pre-call.
     try:
         subprocess.run(  # noqa: S603 — hardcoded args, no user data
             ["launchctl", "bootout", _service_target()],

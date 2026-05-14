@@ -46,7 +46,7 @@ Any account path under ``~/Library/CloudStorage/``          ``[ATTR_FILEPROVIDER
 Path elsewhere + extension allowed                          ``[ATTR_FILEPROVIDER]``
 (external-drive eligibility-gated)
 Pluginkit unknown + no decisive path signal                 ``[ATTR_LEGACY, ATTR_FILEPROVIDER]``
-(write-both defensive, followup item 58)
+(write-both defensive)
 Otherwise                                                   ``[ATTR_LEGACY]``
 ==========================================================  =========================================
 
@@ -57,9 +57,9 @@ doesn't re-invoke pluginkit + re-parse info.json. Callers:
 ``_detected_attr_names()[0]`` for older tests; ``detection_summary()``
 returns ``_detect()[1]`` — the human-readable ``<mode>: <reason>`` string
 that the daemon logs at INFO startup and ``dbxignore status`` echoes on
-darwin (followup item 37).
+darwin.
 
-Dual-attribute mode behavior (followup item 58): when ``_detected_attr_names()``
+Dual-attribute mode behavior: when ``_detected_attr_names()``
 returns both names, ``is_ignored`` iterates and short-circuits ``True`` on
 the first non-empty hit (so legacy users don't pay two getxattr calls per
 file); ``set_ignored`` writes both names sequentially and, if a write fails
@@ -124,10 +124,10 @@ _NO_ATTR_ERRNO = getattr(errno, "ENOATTR", 93)
 #     (legacy vs. File Provider). Two names ([ATTR_LEGACY, ATTR_FILEPROVIDER])
 #     in the genuinely-uncertain case where pluginkit is unavailable AND
 #     info.json gave no decisive path signal — see `_detect()` below for
-#     the always-write-both rationale (followup item 58).
+#     the always-write-both rationale.
 #   summary: human-readable "<mode>: <reason>" string surfaced via
 #     `detection_summary()` to the daemon's INFO log at startup and to
-#     `dbxignore status` on darwin (followup item 37).
+#     `dbxignore status` on darwin.
 _decision_cache: tuple[list[str], str] | None = None
 
 
@@ -230,7 +230,7 @@ def _detect() -> tuple[list[str], str]:
          CloudStorage or /Volumes.  Write both ``com.dropbox.ignored`` and
          ``com.apple.fileprovider.ignore#P`` so whichever sync stack
          actually reads its own attribute name finds it; the other stack
-         simply ignores the stray attribute (followup item 58).
+         simply ignores the stray attribute.
        - **Otherwise** → legacy.  Confident default when extension is
          not_registered (pure legacy install) or allowed but no path is
          under CloudStorage / /Volumes (legacy install with the extension
@@ -347,7 +347,7 @@ def detection_summary() -> str:
     """Human-readable summary of the sync mode decision: ``<mode>: <reason>``.
 
     Surfaced at INFO log at daemon startup and in ``dbxignore status`` on
-    darwin (followup item 37).  Caches with ``_detect()`` — calling once
+    darwin.  Caches with ``_detect()`` — calling once
     per process is enough.
     """
     return _detect()[1]

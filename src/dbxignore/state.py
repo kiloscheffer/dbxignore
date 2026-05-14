@@ -180,12 +180,9 @@ def is_daemon_alive(pid: int | None, create_time: float | None = None) -> bool:
         except (OSError, SystemError) as exc:
             # SystemError can wrap an OSError when os.kill fires while
             # another exception is still being handled — e.g. a prior
-            # ImportError on psutil left exception state dirty (item
-            # This can happen when os.kill fires while another exception
-            # is being handled (e.g. a partially-initialized psutil import).
-            # Either way the PID probe is
-            # indeterminate; log so the cause surfaces, return False
-            # so callers don't block on an opaque error.
+            # ImportError on psutil left exception state dirty. Either way
+            # the PID probe is indeterminate; log so the cause surfaces,
+            # return False so callers don't block on an opaque error.
             logger.warning(
                 "os.kill(%d, 0) probe failed (%s: %s); treating daemon as not alive",
                 pid,
@@ -304,13 +301,13 @@ def write(state: State, path: Path | None = None) -> None:
     # power loss between truncate and write completion would otherwise leave
     # an empty / partial state.json — _read_at would log WARNING and return
     # None, and daemon.run's singleton check would then proceed and start a
-    # second daemon while the first is still alive (followup item 20).
+    # second daemon while the first is still alive.
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(_encode(state), indent=2), encoding="utf-8")
     # Parse-back guard: a future serializer regression producing malformed JSON
     # would otherwise be committed by os.replace, and _read_at's JSONDecodeError
-    # arm would silently fall through to "no prior daemon" — same singleton-
-    # bypass mode item 20 already defended (followup item 55).
+    # arm would silently fall through to "no prior daemon" — the same singleton-
+    # bypass mode the temp-file-plus-replace shape above defends against.
     try:
         json.loads(tmp.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
@@ -327,7 +324,7 @@ def _read_at(path: Path) -> State | None:
     # OSError (locked / permission-denied / cloud-placeholder) warns and
     # returns None instead of propagating, so CLI verbs that consult state
     # best-effort (`status`, `clear`'s daemon-alive guard, daemon legacy-state
-    # migration) don't crash on a stale-or-broken file. Followup items 24, 97.
+    # migration) don't crash on a stale-or-broken file.
     # The middle arm catches the JSON-syntax + shape errors that `_decode`
     # raises (KeyError on missing last_error sub-key; TypeError on non-dict
     # last_error; ValueError on a stored datetime that no longer parses).

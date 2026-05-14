@@ -30,7 +30,7 @@ class Report:
     # count actual mutations; in dry-run mode they count would-have-been
     # mutations and these lists carry the per-path detail for CLI output.
     # Steady-state daemon sweeps are always dry_run=False, so these stay
-    # empty and the per-sweep memory footprint is unchanged (followup item 64).
+    # empty and the per-sweep memory footprint is unchanged.
     would_mark: list[Path] = field(default_factory=list)
     would_clear: list[Path] = field(default_factory=list)
 
@@ -181,7 +181,7 @@ def _reconcile_path(
         # PermissionError — e.g. EIO on a flaky network drive, or ENOTSUP
         # from getxattr on a filesystem that doesn't support xattrs at all.
         # Without this arm the error would escape `_reconcile_path` and kill
-        # the per-root sweep worker silently (followup item 21). Mirrors the
+        # the per-root sweep worker silently. Mirrors the
         # write-side ENOTSUP/EOPNOTSUPP handling shape.
         logger.warning("I/O error reading marker on %s: errno=%s %s", path, exc.errno, exc)
         report.errors.append((path, f"read: errno={exc.errno} {exc}"))

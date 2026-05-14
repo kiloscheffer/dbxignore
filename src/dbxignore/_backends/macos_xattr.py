@@ -62,13 +62,15 @@ darwin (followup item 37).
 Dual-attribute mode behavior (followup item 58): when ``_detected_attr_names()``
 returns both names, ``is_ignored`` iterates and short-circuits ``True`` on
 the first non-empty hit (so legacy users don't pay two getxattr calls per
-file); ``set_ignored`` writes both names sequentially and a partial-failure
-on the second propagates with the second's exception, mirroring the
-single-attr "either fully successful or raises" contract; ``clear_ignored``
-removes both with per-attribute ENOATTR no-op so a half-marked path that
-only ever had one name written gets cleaned up regardless. The trade is a
-stray attribute on the inactive sync stack (metadata cleanliness) versus
-a silent no-op on the active stack (correctness).
+file); ``set_ignored`` writes both names sequentially and, if a write fails
+partway, rolls back the attributes that call newly created before
+propagating the exception, so the path is left exactly as it was before
+the call rather than half-marked (see ``set_ignored``'s docstring for why
+half-marked state is harmful); ``clear_ignored`` removes both with
+per-attribute ENOATTR no-op so a half-marked path — e.g. one left behind by
+a sync-mode switch — gets cleaned up regardless. The trade is a stray
+attribute on the inactive sync stack (metadata cleanliness) versus a
+silent no-op on the active stack (correctness).
 
 The cross-platform facade ``markers.detection_summary()`` returns this
 module's summary string on darwin and ``None`` on Windows/Linux (where
@@ -377,6 +379,24 @@ def is_ignored(path: Path) -> bool:
     return False
 
 
+def _attr_present(path: Path, name: str) -> bool:
+    """Return True if xattr ``name`` is set to a non-empty value on ``path``.
+
+    Mirrors `is_ignored`'s per-attribute test.  ``ENOATTR`` (attribute
+    simply not set) maps to ``False``; every other ``OSError`` propagates.
+    `set_ignored` uses this to record which attributes pre-existed, so a
+    partial-failure rollback removes only the attributes that call newly
+    created — never one that was already on the inactive sync stack.
+    """
+    try:
+        value = xattr.getxattr(str(path), name, symlink=True)
+    except OSError as exc:
+        if exc.errno == _NO_ATTR_ERRNO:
+            return False
+        raise
+    return bool(value)
+
+
 def set_ignored(path: Path) -> None:
     """Mark ``path`` as ignored by Dropbox.
 
@@ -387,14 +407,38 @@ def set_ignored(path: Path) -> None:
     directly — unlike Linux where the kernel raises ``EPERM``.
 
     In the dual-attr case (pluginkit unavailable + no decisive path
-    signal — see `_detect()`), writes both names; if the first call
-    succeeds and the second raises, the partial state propagates with
-    the second's exception, mirroring the single-attr contract that
-    set_ignored is either fully successful or raises.
+    signal — see `_detect()`), writes both names.  If an earlier write
+    succeeds and a later one raises, the attributes this call newly
+    created are cleared before the exception propagates, so the path is
+    left exactly as it was before the call — never half-marked.  A
+    half-marked path would be masked by `is_ignored`'s first-hit-wins
+    short-circuit and never retried by the next sweep.  Attributes that
+    were already set before the call (e.g. a marker left on the inactive
+    sync stack) are preserved by the rollback — removing them would
+    un-ignore the path on that stack.  A failure during the rollback
+    clear is logged but does not mask the original write exception.
     """
     _require_absolute(path)
-    for name in _detected_attr_names():
-        xattr.setxattr(str(path), name, _MARKER_VALUE, symlink=True)
+    names = _detected_attr_names()
+    pre_existing = {name for name in names if _attr_present(path, name)}
+    created: list[str] = []
+    for name in names:
+        try:
+            xattr.setxattr(str(path), name, _MARKER_VALUE, symlink=True)
+        except OSError:
+            for done in created:
+                try:
+                    xattr.removexattr(str(path), done, symlink=True)
+                except OSError as rollback_exc:
+                    logger.warning(
+                        "set_ignored: rollback clear of xattr %s on %s failed: %s",
+                        done,
+                        path,
+                        rollback_exc,
+                    )
+            raise
+        if name not in pre_existing:
+            created.append(name)
 
 
 def clear_ignored(path: Path) -> None:

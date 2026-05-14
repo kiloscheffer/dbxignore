@@ -171,10 +171,10 @@ def detect_invocation() -> tuple[Path, str]:
         # 4. Last resort: python.exe (always console-subsystem). The daemon
         # launched at logon will show a console window; warn so the cause
         # is discoverable. The warning + fallback covers the pythonw.exe-absent
-        # case and also the
-        # console-subsystem-pythonw.exe / console-delegating-dbxignorew.exe
-        # cases — the common one being `uv run` from a source checkout, whose
-        # uv project venv ships console-subsystem trampolines.
+        # case and the console-subsystem-pythonw.exe /
+        # console-delegating-dbxignorew.exe cases — the common one being
+        # `uv run` from a source checkout, whose uv project venv ships
+        # console-subsystem trampolines.
         logger.warning(
             "no windowless launcher found for %s: the dbxignorew.exe / pythonw.exe "
             "next to it are absent or console-subsystem (uv project venvs created by "

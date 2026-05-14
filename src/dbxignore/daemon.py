@@ -864,8 +864,8 @@ def run(stop_event: threading.Event | None = None) -> None:
                             # AttributeError / KeyError / pathspec edge case
                             # that would otherwise propagate out of the while
                             # loop and force a service-manager restart. The
-                            # initial-sweep worker carries the symmetric wrap
-                            # BaseException (SystemExit / Keyboard
+                            # initial-sweep worker carries the same broad-except
+                            # wrapper. BaseException (SystemExit / Keyboard
                             # Interrupt) still propagates so shutdown stays
                             # responsive.
                             logger.exception("hourly sweep tick failed; continuing")

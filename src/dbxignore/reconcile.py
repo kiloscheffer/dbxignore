@@ -65,8 +65,8 @@ def reconcile_subtree(
 
     When ``descend`` is False, only ``subdir`` itself is reconciled; the
     ``os.walk`` is skipped. Used by ``daemon._sweep_once`` to handle the
-    root-path reconcile separately from the per-top-level-child fan-out
-    — the caller submits one ``descend=False`` call
+    root-path reconcile separately from the per-top-level-child fan-out;
+    the caller submits one ``descend=False`` call
     per root plus one ``descend=True`` call per top-level child to a single
     ``ThreadPoolExecutor``, parallelizing the walk across subdirs.
 

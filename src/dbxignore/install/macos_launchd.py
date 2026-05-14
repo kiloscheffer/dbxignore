@@ -2,8 +2,10 @@
 
 Plist is written to ~/Library/LaunchAgents/com.kiloscheffer.dbxignore.plist
 and bootstrapped into the user's GUI session domain (gui/<uid>) via the
-modern launchctl bootstrap/bootout commands. Legacy `launchctl load -w`/
-`unload -w` is intentionally not used — see the macOS launchd backend notes for rationale.
+launchctl bootstrap/bootout commands. The legacy `launchctl load -w` /
+`unload -w` pair is intentionally not used: bootstrap/bootout target the
+GUI session domain explicitly, whereas `load -w` is domain-ambiguous and
+deprecated on current macOS.
 
 GUI-domain prerequisite: `launchctl bootstrap gui/<uid>` requires the
 user has logged into the macOS GUI at least once since the last reboot.

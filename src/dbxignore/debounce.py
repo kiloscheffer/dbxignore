@@ -36,8 +36,8 @@ class EventKind(enum.Enum):
 # and a created/modified event for `A/.dropboxignore` within the 100ms
 # RULES debounce window both keyed on `str(A/.dropboxignore).lower()`, and
 # the Debouncer's last-wins overwrite would drop one event's dispatch.
-# Without the role discriminator, the previous string-prefix scheme
-# addressed only the moved-out vs moved-into half of the disambiguation.
+# The previous string-prefix (e.g. `"moved-into:"`) scheme addressed only
+# the moved-out vs moved-into half of the disambiguation.
 DebounceRole = Literal["single", "moved-out", "moved-into"]
 DebounceKey = tuple[DebounceRole, str]
 

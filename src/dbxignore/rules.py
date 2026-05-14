@@ -48,7 +48,7 @@ def _is_real_dir(path: Path) -> bool:
     one ``lstat()`` syscall instead of two. ``S_ISDIR`` on an ``lstat()``
     result is False for symlinks regardless of target type — `lstat`
     reports the link's own mode (`S_IFLNK`), not the target's. That
-    matches the symlinks-are-leaves invariant for
+    matches the symlinks-are-leaves invariant from
     ``format_literal_rule``. All three call sites use this helper:
     ``cache.match`` / ``cache.explain`` (daemon hot path) and
     ``format_literal_rule`` (cold path).
@@ -290,8 +290,9 @@ def _atomic_write_rule_file(rule_file: Path, new_content: str) -> None:
     Uses ``tempfile.mkstemp`` to pick a non-colliding name in ``rule_file``'s
     parent directory (same filesystem, so ``os.replace`` is atomic), then
     closes and ``os.replace``s into place. The unique temp name prevents
-    collisions between concurrent CLI mutations, an editor's backup temp
-    file, or a stray user-created ``.dropboxignore.tmp`` with the old fixed name.
+    collisions that the old fixed ``.dropboxignore.tmp`` name caused: two
+    concurrent CLI mutations, an editor's backup, or a stray user-created
+    file could all race it.
 
     ``mkstemp`` creates its temp at mode ``0o600`` on POSIX (a sensible
     default for sensitive temp files), so the write happens, then

@@ -146,12 +146,11 @@ def is_daemon_alive(pid: int | None, create_time: float | None = None) -> bool:
 
     The second stage, gated on a non-None ``create_time``, additionally
     requires the live process's ``psutil.Process.create_time()`` to match
-    the caller-supplied value. The second stage uses the create_time recorded
-    a substring-name match is not enough when the recycled PID's new
-    occupant happens to also be a python process (very common when the
-    test suite or any python tooling runs after a daemon dies). Comparing
-    the create_time disambiguates "still that daemon" from "PID was
-    recycled by another python".
+    the caller-supplied value. A substring-name match is not enough when
+    the recycled PID's new occupant happens to also be a python process
+    (very common when the test suite or any python tooling runs after a
+    daemon dies). Comparing the create_time disambiguates "still that
+    daemon" from "PID was recycled by another python".
 
     Lazy-imports ``psutil``; falls back to ``os.kill(pid, 0)`` for the
     bare-existence check when ``psutil`` isn't installed. The fallback

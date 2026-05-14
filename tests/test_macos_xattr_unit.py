@@ -120,6 +120,7 @@ def test_set_ignored_calls_setxattr_with_correct_args(
     p = tmp_path / "file.txt"
     p.touch()
 
+    monkeypatch.setattr(xattr, "getxattr", MagicMock(side_effect=_oserr(_ENOATTR)))
     mock_setxattr = MagicMock()
     monkeypatch.setattr(xattr, "setxattr", mock_setxattr)
     mod.set_ignored(p)
@@ -134,6 +135,7 @@ def test_set_ignored_propagates_unexpected_oserror(
     p = tmp_path / "file.txt"
     p.touch()
 
+    monkeypatch.setattr(xattr, "getxattr", MagicMock(side_effect=_oserr(_ENOATTR)))
     monkeypatch.setattr(xattr, "setxattr", MagicMock(side_effect=_oserr(errno.EACCES)))
     with pytest.raises(OSError) as exc_info:
         mod.set_ignored(p)
@@ -571,6 +573,7 @@ def test_set_ignored_writes_fileprovider_attr_in_fileprovider_mode(
     p = tmp_path / "file.txt"
     p.touch()
 
+    monkeypatch.setattr(xattr, "getxattr", MagicMock(side_effect=_oserr(_ENOATTR)))
     mock_setxattr = MagicMock()
     monkeypatch.setattr(xattr, "setxattr", mock_setxattr)
     mod.set_ignored(p)
@@ -607,6 +610,7 @@ def test_set_ignored_writes_both_attrs_in_both_mode(
     p = tmp_path / "file.txt"
     p.touch()
 
+    monkeypatch.setattr(xattr, "getxattr", MagicMock(side_effect=_oserr(_ENOATTR)))
     mock_setxattr = MagicMock()
     monkeypatch.setattr(xattr, "setxattr", mock_setxattr)
     mod.set_ignored(p)
@@ -620,14 +624,17 @@ def test_set_ignored_rolls_back_first_attr_on_second_write_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, both_mode: None
 ) -> None:
     """In both-mode, if the first setxattr succeeds and the second raises,
-    set_ignored clears the first attr before propagating — restoring the
-    "both set or neither set" invariant. Without the rollback, is_ignored's
+    set_ignored clears the (newly-created) first attr before propagating —
+    restoring the pre-call state. Without the rollback, is_ignored's
     first-hit-wins short-circuit would see the stale legacy attr and report
     the path as fully ignored, so the missing second attr never gets retried
     (BACKLOG #125)."""
     p = tmp_path / "file.txt"
     p.touch()
 
+    # Neither attr present before the call → the first write is newly
+    # created and therefore rollback-eligible.
+    monkeypatch.setattr(xattr, "getxattr", MagicMock(side_effect=_oserr(_ENOATTR)))
     monkeypatch.setattr(xattr, "setxattr", MagicMock(side_effect=[None, _oserr(errno.EDQUOT)]))
     mock_removexattr = MagicMock()
     monkeypatch.setattr(xattr, "removexattr", mock_removexattr)
@@ -648,6 +655,7 @@ def test_set_ignored_rollback_failure_does_not_mask_original_error(
     p = tmp_path / "file.txt"
     p.touch()
 
+    monkeypatch.setattr(xattr, "getxattr", MagicMock(side_effect=_oserr(_ENOATTR)))
     monkeypatch.setattr(xattr, "setxattr", MagicMock(side_effect=[None, _oserr(errno.EDQUOT)]))
     mock_removexattr = MagicMock(side_effect=_oserr(errno.EACCES))
     monkeypatch.setattr(xattr, "removexattr", mock_removexattr)
@@ -657,6 +665,35 @@ def test_set_ignored_rollback_failure_does_not_mask_original_error(
 
     assert exc_info.value.errno == errno.EDQUOT
     mock_removexattr.assert_called_once()
+
+
+def test_set_ignored_rollback_preserves_preexisting_attr_in_both_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, both_mode: None
+) -> None:
+    """A second-write failure must NOT roll back an attr that was already
+    set before the call. Removing a pre-existing marker would un-ignore the
+    path on that sync stack — the rollback only clears attrs this call
+    newly created, leaving the path exactly as it was before (BACKLOG #125,
+    Codex follow-up on PR #246)."""
+    p = tmp_path / "file.txt"
+    p.touch()
+
+    # ATTR_LEGACY already set before the call; ATTR_FILEPROVIDER absent.
+    def fake_getxattr(target: str, name: str, **kwargs: object) -> bytes:
+        if name == mod.ATTR_LEGACY:
+            return b"1"
+        raise _oserr(_ENOATTR)
+
+    monkeypatch.setattr(xattr, "getxattr", fake_getxattr)
+    monkeypatch.setattr(xattr, "setxattr", MagicMock(side_effect=[None, _oserr(errno.EDQUOT)]))
+    mock_removexattr = MagicMock()
+    monkeypatch.setattr(xattr, "removexattr", mock_removexattr)
+
+    with pytest.raises(OSError) as exc_info:
+        mod.set_ignored(p)
+
+    assert exc_info.value.errno == errno.EDQUOT
+    mock_removexattr.assert_not_called()
 
 
 def test_is_ignored_returns_true_if_first_attr_set_in_both_mode(

@@ -377,6 +377,24 @@ def is_ignored(path: Path) -> bool:
     return False
 
 
+def _attr_present(path: Path, name: str) -> bool:
+    """Return True if xattr ``name`` is set to a non-empty value on ``path``.
+
+    Mirrors `is_ignored`'s per-attribute test.  ``ENOATTR`` (attribute
+    simply not set) maps to ``False``; every other ``OSError`` propagates.
+    `set_ignored` uses this to record which attributes pre-existed, so a
+    partial-failure rollback removes only the attributes that call newly
+    created — never one that was already on the inactive sync stack.
+    """
+    try:
+        value = xattr.getxattr(str(path), name, symlink=True)
+    except OSError as exc:
+        if exc.errno == _NO_ATTR_ERRNO:
+            return False
+        raise
+    return bool(value)
+
+
 def set_ignored(path: Path) -> None:
     """Mark ``path`` as ignored by Dropbox.
 
@@ -388,20 +406,25 @@ def set_ignored(path: Path) -> None:
 
     In the dual-attr case (pluginkit unavailable + no decisive path
     signal — see `_detect()`), writes both names.  If an earlier write
-    succeeds and a later one raises, the already-written attrs are
-    cleared before the exception propagates, so the path is left either
-    fully marked or not marked at all — never half-marked.  A half-marked
-    path would be masked by `is_ignored`'s first-hit-wins short-circuit
-    and never retried by the next sweep.  A failure during that rollback
+    succeeds and a later one raises, the attributes this call newly
+    created are cleared before the exception propagates, so the path is
+    left exactly as it was before the call — never half-marked.  A
+    half-marked path would be masked by `is_ignored`'s first-hit-wins
+    short-circuit and never retried by the next sweep.  Attributes that
+    were already set before the call (e.g. a marker left on the inactive
+    sync stack) are preserved by the rollback — removing them would
+    un-ignore the path on that stack.  A failure during the rollback
     clear is logged but does not mask the original write exception.
     """
     _require_absolute(path)
-    written: list[str] = []
-    for name in _detected_attr_names():
+    names = _detected_attr_names()
+    pre_existing = {name for name in names if _attr_present(path, name)}
+    created: list[str] = []
+    for name in names:
         try:
             xattr.setxattr(str(path), name, _MARKER_VALUE, symlink=True)
         except OSError:
-            for done in written:
+            for done in created:
                 try:
                     xattr.removexattr(str(path), done, symlink=True)
                 except OSError as rollback_exc:
@@ -412,7 +435,8 @@ def set_ignored(path: Path) -> None:
                         rollback_exc,
                     )
             raise
-        written.append(name)
+        if name not in pre_existing:
+            created.append(name)
 
 
 def clear_ignored(path: Path) -> None:

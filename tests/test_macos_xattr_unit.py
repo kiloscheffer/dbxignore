@@ -616,6 +616,49 @@ def test_set_ignored_writes_both_attrs_in_both_mode(
     assert called_names == [mod.ATTR_LEGACY, mod.ATTR_FILEPROVIDER]
 
 
+def test_set_ignored_rolls_back_first_attr_on_second_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, both_mode: None
+) -> None:
+    """In both-mode, if the first setxattr succeeds and the second raises,
+    set_ignored clears the first attr before propagating — restoring the
+    "both set or neither set" invariant. Without the rollback, is_ignored's
+    first-hit-wins short-circuit would see the stale legacy attr and report
+    the path as fully ignored, so the missing second attr never gets retried
+    (BACKLOG #125)."""
+    p = tmp_path / "file.txt"
+    p.touch()
+
+    monkeypatch.setattr(xattr, "setxattr", MagicMock(side_effect=[None, _oserr(errno.EDQUOT)]))
+    mock_removexattr = MagicMock()
+    monkeypatch.setattr(xattr, "removexattr", mock_removexattr)
+
+    with pytest.raises(OSError) as exc_info:
+        mod.set_ignored(p)
+
+    assert exc_info.value.errno == errno.EDQUOT
+    mock_removexattr.assert_called_once_with(str(p), mod.ATTR_LEGACY, symlink=True)
+
+
+def test_set_ignored_rollback_failure_does_not_mask_original_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, both_mode: None
+) -> None:
+    """If the rollback clear itself fails, the original second-write
+    exception still propagates — the rollback error is logged, not raised,
+    so callers see the actionable failure (BACKLOG #125)."""
+    p = tmp_path / "file.txt"
+    p.touch()
+
+    monkeypatch.setattr(xattr, "setxattr", MagicMock(side_effect=[None, _oserr(errno.EDQUOT)]))
+    mock_removexattr = MagicMock(side_effect=_oserr(errno.EACCES))
+    monkeypatch.setattr(xattr, "removexattr", mock_removexattr)
+
+    with pytest.raises(OSError) as exc_info:
+        mod.set_ignored(p)
+
+    assert exc_info.value.errno == errno.EDQUOT
+    mock_removexattr.assert_called_once()
+
+
 def test_is_ignored_returns_true_if_first_attr_set_in_both_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, both_mode: None
 ) -> None:

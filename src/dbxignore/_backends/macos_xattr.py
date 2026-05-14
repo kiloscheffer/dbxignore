@@ -387,14 +387,32 @@ def set_ignored(path: Path) -> None:
     directly — unlike Linux where the kernel raises ``EPERM``.
 
     In the dual-attr case (pluginkit unavailable + no decisive path
-    signal — see `_detect()`), writes both names; if the first call
-    succeeds and the second raises, the partial state propagates with
-    the second's exception, mirroring the single-attr contract that
-    set_ignored is either fully successful or raises.
+    signal — see `_detect()`), writes both names.  If an earlier write
+    succeeds and a later one raises, the already-written attrs are
+    cleared before the exception propagates, so the path is left either
+    fully marked or not marked at all — never half-marked.  A half-marked
+    path would be masked by `is_ignored`'s first-hit-wins short-circuit
+    and never retried by the next sweep.  A failure during that rollback
+    clear is logged but does not mask the original write exception.
     """
     _require_absolute(path)
+    written: list[str] = []
     for name in _detected_attr_names():
-        xattr.setxattr(str(path), name, _MARKER_VALUE, symlink=True)
+        try:
+            xattr.setxattr(str(path), name, _MARKER_VALUE, symlink=True)
+        except OSError:
+            for done in written:
+                try:
+                    xattr.removexattr(str(path), done, symlink=True)
+                except OSError as rollback_exc:
+                    logger.warning(
+                        "set_ignored: rollback clear of xattr %s on %s failed: %s",
+                        done,
+                        path,
+                        rollback_exc,
+                    )
+            raise
+        written.append(name)
 
 
 def clear_ignored(path: Path) -> None:

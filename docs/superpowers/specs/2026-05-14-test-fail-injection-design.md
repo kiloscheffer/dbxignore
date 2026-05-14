@@ -78,7 +78,7 @@ and are already unit-tested — they add no new error-handling logic.
 
 | Item | Fail point name | Env var | Site | Mechanism |
 |---|---|---|---|---|
-| #121 | `MARKER_READ` | `DBXIGNORE_TEST_FAIL_MARKER_READ` | `cli._walk_marked_paths` — before `markers.is_ignored(p)` in the walk loop body | `raise_if_fail_point("MARKER_READ")` → caught by the existing `except OSError` → recorded in the returned `errs` → `clear` / `list` populate `scan_errors` → exit 2 |
+| #121 | `MARKER_READ` | `DBXIGNORE_TEST_FAIL_MARKER_READ` | `cli._walk_marked_paths` — before *every* `markers.is_ignored` read: the `target` read (cli.py:924) and both walk-loop reads (`dirnames` loop, `filenames` loop) | `raise_if_fail_point("MARKER_READ")` → caught by the existing `except OSError` at each read → recorded in the returned `errs` → `clear` / `list` populate `scan_errors` → exit 2 |
 | #127 | `STATE_PURGE` | `DBXIGNORE_TEST_FAIL_STATE_PURGE` | `cli._purge_dir` — in the `f.unlink()` loop | `raise_if_fail_point("STATE_PURGE")` → caught by the existing `except OSError` → recorded in `errors` (when the caller supplied the list) → `uninstall --purge` populates `state_errors` → exit 2 |
 | #128 | `BOOTOUT` | `DBXIGNORE_TEST_FAIL_BOOTOUT` | `install/macos_launchd.uninstall_agent` — after `subprocess.run` | `fail_point_active("BOOTOUT")` → synthesize a non-zero rc + non-"not loaded" stderr → the existing `_is_service_not_loaded` check fails → existing `raise RuntimeError` → `cli.uninstall` exit 2 |
 | #129 | `DAEMON_ALIVE` | `DBXIGNORE_TEST_FAIL_DAEMON_ALIVE` | `cli.uninstall` — the `if purge:` daemon-alive gate | `fail_point_active("DAEMON_ALIVE")` OR'd into the gate condition → `_refuse_purge_daemon_alive` → exit 2 |
@@ -89,7 +89,11 @@ and are already unit-tested — they add no new error-handling logic.
   `_walk_marked_paths` is the single chokepoint both `clear` and `list` route
   through; #121 is specifically about the `clear` / `list` `scan_errors` surface.
   The `uninstall --purge` marker walk is a separate code path (item #98's
-  `errors` accumulator) and is not what #121 tracks.
+  `errors` accumulator) and is not what #121 tracks. The hook fires before
+  *every* `markers.is_ignored` read inside `_walk_marked_paths` — the `target`
+  read at cli.py:924 *and* the two walk-loop reads — so the fail point is a true
+  chokepoint: a `clear <single-marked-file>` (which returns at the `target` read
+  before the walk begins) injects just as reliably as a `clear <dir-tree>`.
 - **#127 → `_purge_dir`**, the shared helper `_purge_local_state` calls for each
   state directory. One site covers every state-file unlink.
 - **#128 → `uninstall_agent`**, after `subprocess.run`. Overriding the result
@@ -124,23 +128,30 @@ reads nothing successfully and mutates nothing.
 
 ### #127, #128, #129 — Phase 6
 
-Land in all three scripts' Phase 6. The two bash scripts' Phase 6 is hand-synced
-(not extracted into the shared helper); `manual-test-windows.ps1` is hand-synced
-as always. Each case runs after the existing happy-path purge guards, as
-inject → assert exit 2 + stderr → recover.
+Land in all three scripts' Phase 6, after the existing happy-path purge guards.
 
-- **#127** — `DBXIGNORE_TEST_FAIL_STATE_PURGE=1 dbxignore uninstall --purge` →
-  exit 2 + "Could not fully purge state files". Markers *are* cleared (the
-  failure is in the state-dir step, which runs after marker clearing), so the
-  leftover is state files. Recovery: re-run `uninstall --purge` clean.
-- **#128** (macOS script only) — `DBXIGNORE_TEST_FAIL_BOOTOUT=1 dbxignore
-  uninstall` → exit 2 + "launchctl bootout returned". The plist is preserved and
-  the daemon is still registered. Recovery: re-run `uninstall` clean. Because the
-  existing Phase 6 flow has already uninstalled by the point this case runs, the
-  case re-installs first.
-- **#129** — `DBXIGNORE_TEST_FAIL_DAEMON_ALIVE=1 dbxignore uninstall --purge` →
-  exit 2 + "daemon is running". The gate fires *before* the purge body, so
-  nothing is cleaned. Recovery: re-run `uninstall --purge` clean.
+**Each case must re-install first.** By the point these cases run, Phase 6 has
+already removed the service and run a clean `--purge` — the state directory is
+empty and nothing is registered. Every injected case below therefore begins with
+`dbxignore install` + a short wait (so the daemon writes `state.json` /
+`daemon.lock` and the service is registered), and the prior case's recovery
+re-run leaves the system uninstalled again for the next. Per-case shape:
+inject → assert exit 2 + stderr → recover with a clean re-run.
+
+- **#127** — re-install (the daemon must have written `state.json` /
+  `daemon.lock` so `_purge_dir`'s `f.unlink()` loop has something to fail on —
+  with an empty state directory there is nothing to inject against), then
+  `DBXIGNORE_TEST_FAIL_STATE_PURGE=1 dbxignore uninstall --purge` → exit 2 +
+  "Could not fully purge state files". Markers *are* cleared (the failure is in
+  the state-dir step, which runs after marker clearing), so the leftover is
+  state files. Recovery: re-run `uninstall --purge` clean.
+- **#128** (macOS script only) — re-install, then
+  `DBXIGNORE_TEST_FAIL_BOOTOUT=1 dbxignore uninstall` → exit 2 + "launchctl
+  bootout returned". The plist is preserved and the daemon is still registered.
+  Recovery: re-run `uninstall` clean.
+- **#129** — re-install, then `DBXIGNORE_TEST_FAIL_DAEMON_ALIVE=1 dbxignore
+  uninstall --purge` → exit 2 + "daemon is running". The gate fires *before* the
+  purge body, so nothing is cleaned. Recovery: re-run `uninstall --purge` clean.
 
 Cross-platform note: #128 is macOS-only (launchd). #127 and #129 apply to all
 three platforms.

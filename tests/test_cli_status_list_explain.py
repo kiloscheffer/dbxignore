@@ -51,8 +51,8 @@ def test_status_reports_not_running_when_create_time_mismatch(
     """Human-readable status path must respect daemon_create_time, just like
     --summary and clear do. A recycled PID claimed by an unrelated python
     process passes the substring-name check; create_time disambiguation
-    catches the false positive (backlog item #79 contract). Without
-    forwarding create_time the human path would render 'daemon: running'
+    catches the false positive. Without forwarding create_time the human
+    path would render 'daemon: running'
     while --summary correctly shows state=not_running — same state.json,
     inconsistent verdict."""
     s = state.State(
@@ -155,7 +155,7 @@ def test_list_does_not_descend_into_ignored_directories(
     assert "file.o" not in result.output
 
 
-# ---- status --summary (followup item 60) ------------------------------------
+# ---- status --summary -------------------------------------------------------
 
 
 def test_format_summary_no_state_returns_minimal_line() -> None:
@@ -203,8 +203,8 @@ def test_format_summary_no_pid_omits_pid_field() -> None:
 
 
 def test_format_summary_starting_token_when_last_sweep_is_none() -> None:
-    # state=starting contract (item #53): when daemon is alive but the
-    # initial sweep hasn't completed (last_sweep is None), --summary emits
+    # state=starting contract: when daemon is alive but the initial sweep
+    # hasn't completed (last_sweep is None), --summary emits
     # only `state=starting` + `pid=<N>` — no marked/cleared/errors/conflicts
     # fields, which would mislead consumers into reading "swept and found
     # nothing." Public API addition; documented in README.
@@ -231,8 +231,8 @@ def test_status_summary_flag_emits_single_line(
     test process's own name matching the dbxignore daemon-name guard:
     pytest entry-point exec'd by `uv run pytest` shows up as `pytest` on
     Linux, which fails the `"python" in name or "dbxignored" in name`
-    check and would land us in not_running. Same shape as #58's
-    legacy_mode pinning lesson — explicit fixture > host-dependent guess.
+    check and would land us in not_running. Explicit fixture >
+    host-dependent guess.
     """
     s = state.State(
         daemon_pid=12345,
@@ -281,8 +281,8 @@ def test_status_summary_reads_conflicts_count_from_state(
     """`status --summary` reports ``conflicts=N`` from ``state.last_sweep_conflicts``
     rather than re-walking the rule cache.
 
-    Item #68: status-bar widgets poll ``--summary`` at high cadence. The
-    pre-fix code ran ``_load_cache(discovered).conflicts()`` per tick, which
+    Status-bar widgets poll ``--summary`` at high cadence. The prior
+    implementation ran ``_load_cache(discovered).conflicts()`` per tick, which
     rglobbed every ``.dropboxignore`` under the watched roots. The fix caches
     the count on the daemon side at sweep time; ``--summary`` reads from
     state.json. Trade-off: the count is from the last sweep, same staleness
@@ -311,7 +311,7 @@ def test_status_summary_reads_conflicts_count_from_state(
 def test_status_summary_skips_load_cache_walk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``--summary`` must not call ``cli._load_cache`` (item #68 perf invariant).
+    """``--summary`` must not call ``cli._load_cache``.
 
     Pinned by patching ``_load_cache`` to raise: if ``--summary`` ever
     regresses to walking the cache, the test fails loudly. The human
@@ -330,7 +330,7 @@ def test_status_summary_skips_load_cache_walk(
     monkeypatch.setattr(state, "is_daemon_alive", lambda pid, create_time=None: True)
 
     def _load_cache_must_not_be_called(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("status --summary must not walk the rule cache (item #68)")
+        raise AssertionError("status --summary must not walk the rule cache")
 
     monkeypatch.setattr(cli, "_load_cache", _load_cache_must_not_be_called)
 
@@ -457,7 +457,7 @@ def test_status_does_not_log_conflict_warning_to_stderr(
     assert "masked by" in result.output
 
 
-# ---- explain verdict-driven exit codes (followup item 70/71/72) --------
+# ---- explain verdict-driven exit codes ------------------------------------
 
 
 def test_explain_exits_0_when_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

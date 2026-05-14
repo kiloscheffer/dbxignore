@@ -171,7 +171,7 @@ def test_handler_bypasses_debouncer_for_matched_dir_create(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """DIR_CREATE for a path that already matches a cached rule fast-paths
-    to reconcile_subtree synchronously, skipping the debouncer queue (item 57)."""
+    to reconcile_subtree synchronously, skipping the debouncer queue."""
     root = tmp_path.resolve()
     cache = MagicMock()
     cache.match.return_value = True
@@ -466,13 +466,14 @@ def test_classify_moved_out_and_single_same_path_have_distinct_roles(tmp_path: P
     and a single-path event (created/modified/deleted on `A/.dropboxignore`)
     both carry the same path but are semantically distinct: the move-out
     wants its dest-side reload of B preserved, while the single event
-    just refreshes A. Pre-#77 both keyed on bare ``str(src).lower()`` and
-    a scripted ``mv A/.dropboxignore B/ && touch A/.dropboxignore`` within
-    the 100ms RULES debounce window collapsed them under last-wins.
+    just refreshes A. An earlier implementation keyed on bare
+    ``str(src).lower()`` and a scripted ``mv A/.dropboxignore B/ && touch
+    A/.dropboxignore`` within the 100ms RULES debounce window collapsed
+    them under last-wins.
 
     The ``DebounceKey`` role discriminator (``"moved-out"`` vs ``"single"``)
     closes that gap: same path, different role tokens, distinct debounce
-    queues. Regression guard for BACKLOG #77."""
+    queues."""
     root = tmp_path.resolve()
     a = root / "A"
     b = root / "B"
@@ -620,9 +621,9 @@ def test_timeouts_from_env_rejects_negative_values(
 
 
 def test_classify_recognizes_mixed_case_rule_file(tmp_path: Path) -> None:
-    """Item #92: a watchdog event for a mixed-case `.DropboxIgnore` must
-    classify as RULES. Prior to #92 the exact-match `src.name ==
-    IGNORE_FILENAME` check filtered out mixed-case events at the daemon
+    """A watchdog event for a mixed-case `.DropboxIgnore` must classify as
+    RULES. An earlier implementation used an exact-match `src.name ==
+    IGNORE_FILENAME` check that filtered out mixed-case events at the daemon
     boundary, so reload_file/remove_file were never called for them and
     the cache stayed stale until the next hourly sweep."""
     root = tmp_path.resolve()
@@ -642,9 +643,9 @@ def test_classify_recognizes_mixed_case_rule_file(tmp_path: Path) -> None:
 def test_classify_moved_into_mixed_case_rule_file(tmp_path: Path) -> None:
     """An atomic save (`.DropboxIgnore.tmp` -> `.DropboxIgnore`) where
     dest has mixed casing must still be recognized via
-    `_moved_dest_under_root`. Prior to #92, the exact-match `dest_path.name
-    != IGNORE_FILENAME` filter dropped these, so atomic saves of mixed-
-    case rule files never triggered cache reloads (item #92)."""
+    `_moved_dest_under_root`. An earlier implementation used an exact-match
+    `dest_path.name != IGNORE_FILENAME` filter that dropped these, so atomic
+    saves of mixed-case rule files never triggered cache reloads."""
     root = tmp_path.resolve()
     proj = root / "proj"
     proj.mkdir()
@@ -661,7 +662,7 @@ def test_classify_moved_into_mixed_case_rule_file(tmp_path: Path) -> None:
     )
 
 
-# ---- Cache-ready gate (external-review item 1) ----------------------------
+# ---- Cache-ready gate ------------------------------------------------------
 # An OTHER event under an already-marked subtree, dispatched during the
 # startup window where the rule cache is empty, used to reconcile with
 # match()=False and transiently clear the existing marker. The gate
@@ -674,7 +675,7 @@ def test_dispatch_other_event_skipped_when_cache_not_ready(
 ) -> None:
     """OTHER event dispatched with an unset `cache_ready` must NOT call
     reconcile — the gate prevents the transient-unmark race during the
-    daemon's startup window (item 1 from external review)."""
+    daemon's startup window."""
     import threading as threading_mod
 
     root = tmp_path.resolve()
@@ -699,7 +700,8 @@ def test_dispatch_dir_create_skipped_when_cache_not_ready(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """DIR_CREATE event dispatched with an unset `cache_ready` must NOT
-    reconcile — same rationale as OTHER (item 1 from external review)."""
+    reconcile — same rationale as OTHER: the gate prevents the transient-unmark
+    race during the daemon's startup window."""
     import threading as threading_mod
 
     root = tmp_path.resolve()
@@ -725,7 +727,7 @@ def test_dispatch_rules_event_runs_when_cache_not_ready(
     """RULES events MUST still dispatch with an unset `cache_ready` —
     they handle their own cache mutations (`reload_file` / `remove_file`)
     and gating them would defeat the daemon's responsiveness to rule
-    edits during startup (item 1 from external review)."""
+    edits during startup."""
     import threading as threading_mod
 
     root = tmp_path.resolve()
@@ -772,11 +774,11 @@ def test_dispatch_other_event_runs_when_cache_ready(
     assert reconcile_calls == [(root, new_file.parent)]
 
 
-# ---- Deferred replay (Codex P2 followup on PR #240) -----------------------
-# Codex pointed out that dropping gated events leaves newly-created ignored
-# directories unmarked until the initial sweep reaches them (~50s on big
-# trees), allowing Dropbox to ingest in the meantime. Production now defers
-# gated events into a `_DeferredEvents` queue and re-dispatches them after
+# ---- Deferred replay -------------------------------------------------------
+# Dropping gated events leaves newly-created ignored directories unmarked
+# until the initial sweep reaches them (~50s on big trees), allowing Dropbox
+# to ingest in the meantime. Production defers gated events into a
+# `_DeferredEvents` queue and re-dispatches them after
 # `cache_ready.set()`, closing both the transient-unmark race AND the
 # symmetric "new ignored dir not marked" race.
 
@@ -929,7 +931,7 @@ def test_dispatch_falls_through_when_cache_ready_set_inside_append_race(
     assert deferred.drain() == []
 
 
-# ---- Symlink-escape via .resolve() (external-review item 2) ---------------
+# ---- Symlink-escape via .resolve() ----------------------------------------
 # `_resolve_under_roots` used to call Path.resolve() unconditionally,
 # which made a symlink inside Dropbox pointing OUTSIDE Dropbox escape
 # the watched root — reconcile_subtree would then raise on its
@@ -979,7 +981,7 @@ def test_resolve_under_roots_falls_back_to_resolved_for_alias(tmp_path: Path) ->
 def test_resolve_under_roots_drops_path_that_escapes_via_symlink(tmp_path: Path) -> None:
     """A symlink inside a watched root whose target is OUTSIDE every
     watched root must NOT be silently routed to the link target. Before
-    item 2 the resolve()-then-no-recheck behavior would escape the root
+    the earlier resolve()-then-no-recheck behavior would escape the root
     and feed reconcile_subtree a path outside Dropbox. With lexical-
     first containment the link path itself is returned (a leaf), and
     reconcile operates on the link object."""

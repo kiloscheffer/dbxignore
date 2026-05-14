@@ -1,4 +1,4 @@
-"""Trap inotify resource exhaustion at observer startup (BACKLOG #52)."""
+"""Trap inotify resource exhaustion at observer startup."""
 
 from __future__ import annotations
 

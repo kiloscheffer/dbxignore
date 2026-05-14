@@ -10,7 +10,7 @@ import pytest
 pytestmark = pytest.mark.linux_only
 
 if not sys.platform.startswith("linux"):
-    pytest.skip("user.* xattrs are Linux-only in v0.2", allow_module_level=True)
+    pytest.skip("user.* xattrs are Linux-only", allow_module_level=True)
 
 from dbxignore._backends import linux_xattr  # noqa: E402, I001  # must come after sys.platform skip guard
 from typing import TYPE_CHECKING  # noqa: E402  # after skip guard

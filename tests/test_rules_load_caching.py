@@ -3,8 +3,8 @@ hash matches the cached digest. The sweep is still the safety net — rglob
 finds new files — but already-cached files stay put.
 
 Previously the gate used ``(mtime_ns, size)`` from stat; the content-hash
-form (item #102) also catches same-size edits with preserved mtimes — a
-real edge case when editors or ``touch -r`` restore the timestamp."""
+form also catches same-size edits with preserved mtimes — a real edge case
+when editors or ``touch -r`` restore the timestamp."""
 
 from __future__ import annotations
 
@@ -92,9 +92,8 @@ def test_load_root_drops_cache_on_non_utf8_overwrite(tmp_path: Path, write_file:
     edit. Keeping stale rules would let reconcile keep marking paths the
     user already changed their mind about.
 
-    Before item #102's switch from ``read_text("utf-8")`` to
-    ``read_bytes() + raw.decode("utf-8")``, the prior code would have
-    raised an uncaught ``UnicodeDecodeError`` and crashed the sweep —
+    An earlier implementation using ``read_text("utf-8")`` directly would
+    have raised an uncaught ``UnicodeDecodeError`` and crashed the sweep —
     strictly worse than either drop-cache or keep-cache."""
     ignore = write_file(tmp_path / ".dropboxignore", "build/\n")
 
@@ -119,9 +118,8 @@ def test_load_root_reloads_when_size_and_mtime_match_but_content_differs(
     tmp_path: Path, write_file: WriteFile
 ) -> None:
     """Same byte count, content swap, AND mtime restored to its original
-    value. The pre-item-#102 ``(mtime_ns, size)`` gate would silently skip
-    the reparse and leave stale rules active; the content-hash gate
-    catches the swap.
+    value. The old ``(mtime_ns, size)`` gate would silently skip the reparse
+    and leave stale rules active; the content-hash gate catches the swap.
 
     This is a real edge case — editors that preserve mtime on save, or
     explicit ``touch -r`` restoring a timestamp after edit. The daemon
@@ -147,7 +145,7 @@ def test_load_root_reloads_when_size_and_mtime_match_but_content_differs(
     assert first is not second, (
         "Cache kept the stale entry despite a content swap with preserved "
         "mtime+size. The content-hash gate must catch this case; "
-        "(mtime_ns, size) alone misses it (item #102)."
+        "The (mtime_ns, size) gate alone would miss this case."
     )
     assert cache.match(tmp_path / "cache") is True
     assert cache.match(tmp_path / "build") is False
@@ -280,8 +278,8 @@ def test_load_root_preserves_cached_entry_on_transient_read_error(
     rule file as empty, and Dropbox would upload previously-ignored paths
     to cloud before the read recovered. Recovery should happen naturally
     on the next sweep when the read succeeds again — convergent design.
-    Codex review on PR #124 caught the original drop-on-OSError as worse
-    than the staleness it was meant to fix."""
+    The original drop-on-OSError shape was found to be worse than the
+    staleness it was meant to fix."""
     import errno
 
     ignore = write_file(tmp_path / ".dropboxignore", "build/\n")

@@ -106,7 +106,7 @@ def legacy_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     pluginkit availability. Without this, Linux test runners (no
     pluginkit binary → `_pluginkit_extension_state()` returns "unknown")
     would land in the dual-attr mode and break ``assert_called_once_with``
-    invariants in tests that pre-date item 58.
+    invariants in tests that predate the dual-attribute mode.
     """
     monkeypatch.setattr(mod, "_decision_cache", ([mod.ATTR_LEGACY], "legacy: test override"))
     yield
@@ -304,11 +304,10 @@ def test_detected_attr_name_legacy_when_path_outside_cloudstorage_and_extension_
 def test_detected_attr_name_legacy_when_extension_installed_but_user_in_legacy_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
 ) -> None:
-    """The bug v0.4.0a4 missed: user has Dropbox.app with FP extension
-    registered (pluginkit allowed) BUT this account is still on legacy mode
-    (info.json path is `~/Dropbox`, NOT under CloudStorage). Pre-fix
-    detection would have wrongly returned File Provider; correct detection
-    follows the path → legacy.
+    """User has Dropbox.app with FP extension registered (pluginkit allowed)
+    BUT this account is still on legacy mode (info.json path is `~/Dropbox`,
+    NOT under CloudStorage). An earlier implementation wrongly returned File
+    Provider; correct detection follows the path → legacy.
     """
     monkeypatch.setenv("HOME", str(tmp_path))
     legacy_dropbox = tmp_path / "Dropbox"
@@ -421,9 +420,9 @@ def test_detected_attr_names_writes_both_when_pluginkit_unknown_and_no_info_json
 ) -> None:
     """pluginkit errored (test host without the binary, e.g. Linux CI) AND
     info.json is missing → uncertain. Dual-attribute defensive write
-    (followup item 58): the active sync stack reads its own attribute,
-    the inactive one ignores the stray, and the user-visible "Dropbox
-    stops syncing the marked path" outcome holds either way.
+    the active sync stack reads its own attribute, the inactive one ignores
+    the stray, and the user-visible "Dropbox stops syncing the marked path"
+    outcome holds either way.
     """
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(
@@ -539,9 +538,9 @@ def fileprovider_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 def both_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Force `_detected_attr_names()` to return both attrs for one test.
 
-    Models the genuinely-uncertain case (followup item 58): pluginkit
-    unavailable AND no decisive info.json signal. The backend writes
-    BOTH com.dropbox.ignored AND com.apple.fileprovider.ignore#P.
+    Models the genuinely-uncertain case: pluginkit unavailable AND no
+    decisive info.json signal. The backend writes BOTH com.dropbox.ignored
+    AND com.apple.fileprovider.ignore#P.
     """
     monkeypatch.setattr(
         mod,
@@ -598,9 +597,9 @@ def test_clear_ignored_removes_fileprovider_attr_in_fileprovider_mode(
 
 
 # ---- Dual-attribute (both-mode) end-to-end ----------------------------------
-# Followup item 58: when pluginkit is unavailable AND info.json gave no
-# decisive path signal, write BOTH attribute names so whichever sync stack
-# is actually active reads its own and the inactive one ignores the stray.
+# When pluginkit is unavailable AND info.json gave no decisive path signal,
+# write BOTH attribute names so whichever sync stack is actually active reads
+# its own and the inactive one ignores the stray.
 
 
 def test_set_ignored_writes_both_attrs_in_both_mode(
@@ -627,8 +626,7 @@ def test_set_ignored_rolls_back_first_attr_on_second_write_failure(
     set_ignored clears the (newly-created) first attr before propagating —
     restoring the pre-call state. Without the rollback, is_ignored's
     first-hit-wins short-circuit would see the stale legacy attr and report
-    the path as fully ignored, so the missing second attr never gets retried
-    (BACKLOG #125)."""
+    the path as fully ignored, so the missing second attr never gets retried."""
     p = tmp_path / "file.txt"
     p.touch()
 
@@ -651,7 +649,7 @@ def test_set_ignored_rollback_failure_does_not_mask_original_error(
 ) -> None:
     """If the rollback clear itself fails, the original second-write
     exception still propagates — the rollback error is logged, not raised,
-    so callers see the actionable failure (BACKLOG #125)."""
+    so callers see the actionable failure."""
     p = tmp_path / "file.txt"
     p.touch()
 
@@ -673,8 +671,7 @@ def test_set_ignored_rollback_preserves_preexisting_attr_in_both_mode(
     """A second-write failure must NOT roll back an attr that was already
     set before the call. Removing a pre-existing marker would un-ignore the
     path on that sync stack — the rollback only clears attrs this call
-    newly created, leaving the path exactly as it was before (BACKLOG #125,
-    Codex follow-up on PR #246)."""
+    newly created, leaving the path exactly as it was before."""
     p = tmp_path / "file.txt"
     p.touch()
 
@@ -760,7 +757,7 @@ def test_clear_ignored_removes_both_attrs_in_both_mode(
     assert called_names == [mod.ATTR_LEGACY, mod.ATTR_FILEPROVIDER]
 
 
-# ---- detection_summary public API (followup item 37) ------------------------
+# ---- detection_summary public API -------------------------------------------
 
 
 def test_detection_summary_starts_with_mode_token_in_legacy_default(

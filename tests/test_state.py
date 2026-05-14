@@ -32,9 +32,8 @@ def test_roundtrip(tmp_path: Path) -> None:
 
 
 def test_decode_tolerates_missing_last_sweep_conflicts(tmp_path: Path) -> None:
-    """state.json files written before #68 lack last_sweep_conflicts. Decode
-    must default to 0 rather than KeyError-ing into the corrupt-state arm.
-    Backwards-compat with the schema as it shipped pre-#68."""
+    """Older state.json files lack last_sweep_conflicts. Decode must default
+    to 0 rather than KeyError-ing into the corrupt-state arm."""
     p = tmp_path / "state.json"
     p.write_text(
         '{"schema": 1, "daemon_pid": 4321, "daemon_create_time": null, '
@@ -49,10 +48,9 @@ def test_decode_tolerates_missing_last_sweep_conflicts(tmp_path: Path) -> None:
 
 
 def test_decode_tolerates_missing_daemon_create_time(tmp_path: Path) -> None:
-    """state.json files written before #79 lack daemon_create_time. Decode
-    must default to None rather than KeyError-ing into the corrupt-state arm
-    (which would silently drop the file's other fields). Backwards-compat
-    with the v0.4.x state schema."""
+    """Older state.json files lack daemon_create_time. Decode must default
+    to None rather than KeyError-ing into the corrupt-state arm (which would
+    silently drop the file's other fields)."""
     p = tmp_path / "state.json"
     p.write_text(
         '{"schema": 1, "daemon_pid": 4321, "daemon_started": null, '
@@ -86,7 +84,7 @@ def test_read_unreadable_returns_none(
     to ``None`` with a WARNING, matching the corrupt-state contract. Without
     catching OSError, ``state.read()`` would propagate the error and crash
     every CLI verb that consults state (``status``, ``clear``'s daemon-alive
-    guard, daemon legacy-state migration). Backlog item #97."""
+    guard, daemon legacy-state migration)."""
     p = tmp_path / "state.json"
     p.write_text("{}", encoding="utf-8")
 
@@ -103,7 +101,7 @@ def test_read_unreadable_returns_none(
 def test_read_missing_does_not_warn(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """Truly-absent state.json (the first-run common case) must not log a
     WARNING. Regression guard against accidentally promoting missing-file
-    to the new ``OSError`` warning arm added in item #97."""
+    to the ``OSError`` warning arm."""
     with caplog.at_level("WARNING", logger="dbxignore.state"):
         assert state.read(tmp_path / "does_not_exist.json") is None
     assert not caplog.records
@@ -238,7 +236,7 @@ def test_read_none_daemon_pid_decodes(tmp_path: Path) -> None:
     assert loaded.daemon_pid is None
 
 
-# ---- is_daemon_alive (followup item 59) -------------------------------------
+# ---- is_daemon_alive --------------------------------------------------------
 
 
 def test_is_daemon_alive_none_pid_returns_false() -> None:
@@ -258,7 +256,7 @@ def test_is_daemon_alive_recycled_pid_returns_false_for_unrelated_process(
     """PID is alive but the process at that PID isn't a dbxignore daemon —
     the PID was reused by something else (firefox, svchost, etc.). The
     bare-existence check would say "alive"; the process-name guard catches
-    the false positive (followup item 59)."""
+    the false positive."""
     fake_psutil_process(name="firefox.exe")
     assert state.is_daemon_alive(12345) is False
 
@@ -275,10 +273,9 @@ def test_is_daemon_alive_python_process_returns_true(
 def test_is_daemon_alive_dbxignored_process_returns_false(
     fake_psutil_process: FakePsutilProcess,
 ) -> None:
-    """Pre-#30 frozen install: process is dbxignored.exe. After #30
-    unification the guard no longer accepts this name — the daemon binary
-    was renamed to dbxignore.exe and 'dbxignored' was dropped from the
-    guard tuple."""
+    """Older frozen install: the process was named dbxignored.exe. The guard
+    no longer accepts this name — the daemon binary was renamed to
+    dbxignore.exe and 'dbxignored' was dropped from the guard tuple."""
     fake_psutil_process(name="dbxignored.exe")
     assert state.is_daemon_alive(12345) is False
 
@@ -286,8 +283,8 @@ def test_is_daemon_alive_dbxignored_process_returns_false(
 def test_is_daemon_alive_recognizes_dbxignore_process_name(
     fake_psutil_process: FakePsutilProcess,
 ) -> None:
-    """After #30 unification, a frozen daemon is named `dbxignore.exe`,
-    not `dbxignored.exe`. The process-name guard tuple must accept it."""
+    """The current frozen daemon is named `dbxignore.exe`. The
+    process-name guard tuple must accept it."""
     fake_psutil_process(name="dbxignore.exe")
     assert state.is_daemon_alive(12345) is True
 
@@ -295,10 +292,9 @@ def test_is_daemon_alive_recognizes_dbxignore_process_name(
 def test_is_daemon_alive_no_longer_recognizes_dbxignored(
     fake_psutil_process: FakePsutilProcess,
 ) -> None:
-    """The pre-#30 `dbxignored` name is intentionally dropped from the
-    guard. A surviving v0.5.x daemon process surfaces as not-alive,
-    prompting the migration. Surfacing stale state is the desired
-    behavior."""
+    """The older `dbxignored` name is intentionally dropped from the guard.
+    A surviving daemon with that name surfaces as not-alive, prompting the
+    migration. Surfacing stale state is the desired behavior."""
     fake_psutil_process(name="dbxignored.exe")
     assert state.is_daemon_alive(12345) is False
 
@@ -329,9 +325,9 @@ def test_is_daemon_alive_create_time_match_returns_true(
     fake_psutil_process: FakePsutilProcess,
 ) -> None:
     """Both pid_exists AND create_time matching → True. The strict-mode
-    contract that backlog item #79 motivates: a recycled PID claimed by an
-    unrelated python process would have a different create_time, so this
-    branch shouldn't fire for the false-positive case."""
+    contract: a recycled PID claimed by an unrelated python process would
+    have a different create_time, so this branch shouldn't fire for the
+    false-positive case."""
     fake_psutil_process(name="python.exe", create_time=1700000000.5)
     assert state.is_daemon_alive(12345, create_time=1700000000.5) is True
 
@@ -339,11 +335,11 @@ def test_is_daemon_alive_create_time_match_returns_true(
 def test_is_daemon_alive_create_time_mismatch_returns_false(
     fake_psutil_process: FakePsutilProcess,
 ) -> None:
-    """pid_exists True but create_time differs → False. This is the
-    backlog item #79 fix: catches PID-reuse where the recycled process
-    happens to have a name-substring match (another python instance).
-    Without create_time disambiguation, the prior is_daemon_alive would
-    return True and incorrectly block destructive verbs."""
+    """pid_exists True but create_time differs → False. Catches PID-reuse
+    where the recycled process happens to have a name-substring match
+    (another python instance). Without create_time disambiguation,
+    is_daemon_alive would return True and incorrectly block destructive
+    verbs."""
     fake_psutil_process(name="python.exe", create_time=1700001000.0)  # mismatched
     assert state.is_daemon_alive(12345, create_time=1700000000.5) is False
 
@@ -351,12 +347,11 @@ def test_is_daemon_alive_create_time_mismatch_returns_false(
 def test_is_daemon_alive_create_time_none_falls_back_to_substring(
     fake_psutil_process: FakePsutilProcess,
 ) -> None:
-    """When create_time is None (state.json predates #79 OR the daemon
+    """When create_time is None (older state.json files or the daemon
     hasn't yet written its create_time), fall back to the substring-name
-    check. Backwards-compat with v0.4.x state.json files. The fixture's
-    default ``create_time=None`` makes ``proc.create_time()`` raise on
-    call, so this also pins that the None-path must not invoke
-    create_time()."""
+    check. The fixture's default ``create_time=None`` makes
+    ``proc.create_time()`` raise on call, so this also pins that the
+    None-path must not invoke create_time()."""
     fake_psutil_process(name="python.exe")
     assert state.is_daemon_alive(12345, create_time=None) is True
 
@@ -368,7 +363,7 @@ def test_is_daemon_alive_psutil_error_returns_false(fake_psutil_process: FakePsu
     assert state.is_daemon_alive(12345) is False
 
 
-# ---- is_daemon_alive psutil-unavailable fallback (item #118) ---------------
+# ---- is_daemon_alive psutil-unavailable fallback ----------------------------
 
 
 def test_is_daemon_alive_psutil_unavailable_os_kill_succeeds_returns_true(
@@ -392,8 +387,8 @@ def test_is_daemon_alive_psutil_unavailable_process_lookup_error_returns_false_s
 
     ProcessLookupError is the expected "no such process" case — the common
     path post-daemon-death. Should not generate log noise on every CLI
-    invocation after the daemon stops. Item #118 split the catch arms to
-    distinguish this routine case from the rare OSError/SystemError ones.
+    invocation after the daemon stops. The catch arms distinguish this
+    routine case from the rare OSError/SystemError ones.
     """
     monkeypatch.setitem(sys.modules, "psutil", None)
 
@@ -415,7 +410,7 @@ def test_is_daemon_alive_psutil_unavailable_oserror_returns_false_with_warning(
     Rare path — Windows PermissionError on the kill probe, EINVAL on a
     non-PID-shaped pid, etc. The WARNING surfaces the underlying error so
     callers can see that probing failed for an unusual reason rather than
-    just "daemon is not running". Item #118.
+    just "daemon is not running".
     """
     monkeypatch.setitem(sys.modules, "psutil", None)
 
@@ -434,14 +429,13 @@ def test_is_daemon_alive_psutil_unavailable_system_error_returns_false_with_warn
 ) -> None:
     """psutil unavailable, os.kill raises SystemError → False + WARNING.
 
-    Item #118: CPython wraps an os.kill OSError as SystemError when called
-    while another exception is still being handled. Surfaced 2026-05-12
-    under the Python 3.14 + psutil partial-init scenario from item #117
-    — `dbxignore uninstall --purge` crashed with an opaque
+    CPython wraps an os.kill OSError as SystemError when called while
+    another exception is still being handled. Without the fix,
+    `dbxignore uninstall --purge` crashed with an opaque
     `SystemError: <built-in function kill> returned a result with an
     exception set` rather than treating the indeterminate PID probe as
-    "not alive". The fix catches SystemError alongside OSError so callers
-    get `False` + a diagnostic WARNING instead of an uncaught exception.
+    "not alive". Catching SystemError alongside OSError gives callers
+    `False` + a diagnostic WARNING instead of an uncaught exception.
     """
     monkeypatch.setitem(sys.modules, "psutil", None)
 

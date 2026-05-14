@@ -179,15 +179,14 @@ def test_install_agent_wraps_filenotfounderror_from_launchctl(
 def test_uninstall_agent_raises_on_launchctl_filenotfound(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 followup on PR #240: ``uninstall_agent`` MUST raise
-    RuntimeError when ``launchctl`` itself can't be invoked. Logging a
-    warning and proceeding to remove the plist would leave an orphaned
-    daemon running while ``dbxignore uninstall`` reported success — and
-    a subsequent ``--purge`` would clear state.json/markers under the
-    live daemon. The asymmetry with ``install_agent``'s bootout
-    pre-call (which DOES swallow OSError) is intentional: install's
-    bootout is idempotent pre-cleanup, uninstall's bootout IS the
-    daemon-shutdown step."""
+    """``uninstall_agent`` MUST raise RuntimeError when ``launchctl`` itself
+    can't be invoked. Logging a warning and proceeding to remove the plist
+    would leave an orphaned daemon running while ``dbxignore uninstall``
+    reported success — and a subsequent ``--purge`` would clear
+    state.json/markers under the live daemon. The asymmetry with
+    ``install_agent``'s bootout pre-call (which DOES swallow OSError) is
+    intentional: install's bootout is idempotent pre-cleanup, uninstall's
+    bootout IS the daemon-shutdown step."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr("os.getuid", lambda: 501, raising=False)
 
@@ -213,12 +212,12 @@ def test_uninstall_agent_raises_on_launchctl_filenotfound(
 def test_uninstall_agent_raises_on_bootout_nonzero_rc(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """BACKLOG #119: bootout returning non-zero rc with a non-'not loaded'
-    stderr signals a real failure (e.g. ``Boot-out failed: 5: Input/output
-    error``). Before this fix, rc and stderr were both discarded — the
-    plist got unlinked unconditionally and ``dbxignore uninstall`` reported
-    success while the daemon survived. Now: surface as RuntimeError and
-    preserve plist so the user can investigate."""
+    """bootout returning non-zero rc with a non-'not loaded' stderr signals
+    a real failure (e.g. ``Boot-out failed: 5: Input/output error``). The
+    prior shape discarded rc and stderr — the plist got unlinked
+    unconditionally and ``dbxignore uninstall`` reported success while the
+    daemon survived. Now: surface as RuntimeError and preserve plist so the
+    user can investigate."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr("os.getuid", lambda: 501, raising=False)
 
@@ -268,12 +267,12 @@ def test_uninstall_agent_raises_on_bootout_nonzero_rc(
 def test_uninstall_agent_tolerates_not_loaded_stderr(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rc: int, stderr: str
 ) -> None:
-    """BACKLOG #119: bootout returning non-zero rc with a 'not loaded'-class
-    stderr is the idempotent-uninstall case — service was already torn down
-    (e.g. user ran ``launchctl bootout`` manually between install and
-    uninstall, or a crash unloaded the service). Treat as success, proceed
-    to plist removal so a second ``dbxignore uninstall`` doesn't leave the
-    plist on disk."""
+    """bootout returning non-zero rc with a 'not loaded'-class stderr is
+    the idempotent-uninstall case — service was already torn down (e.g.
+    user ran ``launchctl bootout`` manually between install and uninstall,
+    or a crash unloaded the service). Treat as success and proceed to plist
+    removal so a second ``dbxignore uninstall`` doesn't leave the plist on
+    disk."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr("os.getuid", lambda: 501, raising=False)
 

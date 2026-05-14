@@ -75,8 +75,8 @@ def test_build_xml_escapes_ampersand_in_arguments(monkeypatch: pytest.MonkeyPatc
 
 
 # detect_invocation tests live in tests/test_install_common.py — windows_task
-# now re-exports the shared helper (item #50 collapse). The non-frozen
-# Windows-specific behavior (pythonw.exe selection) is exercised by
+# re-exports the shared helper. The non-frozen Windows-specific behavior
+# (pythonw.exe selection) is exercised by
 # test_detect_invocation_returns_pythonw_on_windows there.
 
 
@@ -153,8 +153,8 @@ def test_uninstall_task_succeeds_silently_on_zero_exit(monkeypatch: pytest.Monke
 
 
 def test_uninstall_task_ends_task_before_deleting_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Per item #87: uninstall_task must signal the running task to end
-    BEFORE removing the task definition. schtasks /Delete /F is fire-and-
+    """uninstall_task must signal the running task to end BEFORE removing
+    the task definition. schtasks /Delete /F is fire-and-
     forget on the running instance, so the daemon process can outlive
     `dbxignore uninstall` by several seconds — long enough to write
     state.json after _purge_local_state() removes it. /End first lets
@@ -532,11 +532,11 @@ def test_purge_clears_marker_on_discovered_root(
 def test_purge_reports_marker_clear_errors_and_exits_two(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
 ) -> None:
-    """Backlog item #98: when `markers.clear_ignored` raises OSError on one
-    path, --purge collects the error, prints a stderr report listing the
-    failure, still purges every OTHER marker and the local state dir, and
-    exits 2 so scripts can detect incomplete cleanup. The prior shape
-    silently swallowed OSError and reported full success."""
+    """When `markers.clear_ignored` raises OSError on one path, --purge
+    collects the error, prints a stderr report listing the failure, still
+    purges every OTHER marker and the local state dir, and exits 2 so
+    scripts can detect incomplete cleanup. The prior shape silently
+    swallowed OSError and reported full success."""
     import click.testing
 
     from dbxignore import cli, state
@@ -630,9 +630,9 @@ def test_purge_skips_vanished_paths_silently(
 def test_purge_no_stderr_report_when_no_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
 ) -> None:
-    """Regression guard for item #98: happy path stays exit 0 with no
-    "Could not fully clear" stderr report. Pins that the new error accumulator
-    doesn't false-positive on the no-error case (distinct from
+    """Happy path stays exit 0 with no "Could not fully clear" stderr
+    report. Pins that the error accumulator doesn't false-positive on the
+    no-error case (distinct from
     ``test_purge_clears_marker_on_discovered_root``, which doesn't read
     stderr separately or assert the report's absence)."""
     import click.testing
@@ -684,10 +684,10 @@ def test_purge_removes_daemon_log_and_rotations(
 def test_purge_removes_slow_sweep_marker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
 ) -> None:
-    """--purge deletes the ``_test_slow_sweep`` marker (BACKLOG #89).
-    Defends against a manual-test run that crashes mid-Phase-5 before
-    the script's own cleanup arm runs — the next ``uninstall --purge``
-    leaves no stale marker behind to silently re-pad future installs."""
+    """--purge deletes the ``_test_slow_sweep`` marker. Defends against a
+    manual-test run that crashes before the script's own cleanup arm runs —
+    the next ``uninstall --purge`` leaves no stale marker behind to silently
+    re-pad future installs."""
     import click.testing
 
     from dbxignore import cli, daemon, state
@@ -884,8 +884,8 @@ def test_purge_dir_records_errors_when_list_supplied(
     non-vanished-path ``OSError``s as ``(path, message)`` tuples in
     addition to logging the WARNING. This is what feeds the exit-2 gate
     in ``uninstall --purge`` — without it, state-cleanup failures (e.g.
-    Windows daemon.lock cascade per BACKLOG #122) would silently exit 0
-    despite leaving artifacts behind."""
+    Windows daemon.lock cascade) would silently exit 0 despite leaving
+    artifacts behind."""
     from dbxignore import cli
 
     state_dir = tmp_path / "state_dir"
@@ -921,12 +921,11 @@ def test_purge_exits_two_when_state_cleanup_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
 ) -> None:
     """When a file in the state dir can't be removed (typically the
-    Windows daemon-lock cascade described in BACKLOG #122 / #124), the
-    failure must propagate to the CLI exit code so scripts gating on
-    ``$?`` see the partial cleanup. Pre-fix ``_purge_dir`` logged-and-
-    continued but the failure never reached ``uninstall``'s exit-2 gate,
-    so a script could conclude the purge had succeeded while a dbxignore
-    artifact was still on disk."""
+    Windows daemon-lock cascade), the failure must propagate to the CLI
+    exit code so scripts gating on ``$?`` see the partial cleanup. The
+    prior shape logged-and-continued but the failure never reached
+    ``uninstall``'s exit-2 gate, so a script could conclude the purge had
+    succeeded while a dbxignore artifact was still on disk."""
     import click.testing
 
     from dbxignore import cli, state
@@ -962,14 +961,13 @@ def test_purge_exits_two_when_state_cleanup_fails(
 def test_purge_refuses_when_daemon_alive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
 ) -> None:
-    """BACKLOG #122: when the daemon survives ``uninstall_service`` (the
-    Windows 30s ``schtasks /End`` timeout case), ``--purge`` must refuse
-    its destructive cleanup body rather than racing the live daemon. The
-    daemon's reconcile loop re-applies cleared markers within a sweep tick
-    and its next state-write recreates ``state.json`` after
-    ``_purge_local_state`` removed it — silent tug-of-war pre-fix.
-    Service-removal has already succeeded by this point; only the
-    destructive purge body is blocked."""
+    """When the daemon survives ``uninstall_service`` (e.g. the Windows 30s
+    ``schtasks /End`` timeout), ``--purge`` must refuse its destructive
+    cleanup body rather than racing the live daemon. The daemon's reconcile
+    loop re-applies cleared markers within a sweep tick and its next
+    state-write recreates ``state.json`` after ``_purge_local_state`` removed
+    it — silent tug-of-war without the guard. Service-removal has already
+    succeeded by this point; only the destructive purge body is blocked."""
     import click.testing
 
     from dbxignore import cli, state
@@ -1017,9 +1015,9 @@ def test_purge_refuses_when_daemon_alive(
 def test_purge_refuses_when_state_json_unreadable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
 ) -> None:
-    """BACKLOG #122: ``state.json`` is unreadable AND the lock probe
-    confirms a live daemon — ``--purge`` refuses with exit 2 so the
-    daemon's reconcile loop can't re-apply cleared markers."""
+    """``state.json`` is unreadable AND the lock probe confirms a live
+    daemon — ``--purge`` refuses with exit 2 so the daemon's reconcile
+    loop can't re-apply cleared markers."""
     import click.testing
 
     from dbxignore import cli, state
@@ -1056,11 +1054,11 @@ def test_purge_refuses_when_state_json_unreadable(
 def test_purge_refuses_when_state_json_missing_and_daemon_alive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
 ) -> None:
-    """BACKLOG #122: ``state.json`` is absent entirely (a prior partial
-    ``--purge`` removed it but couldn't delete the held daemon.lock, or
-    the user removed it manually) — the lock probe still detects the live
-    daemon, so ``--purge`` refuses with the "PID unknown" message variant
-    rather than racing the daemon."""
+    """``state.json`` is absent entirely (a prior partial ``--purge`` removed
+    it but couldn't delete the held daemon.lock, or the user removed it
+    manually) — the lock probe still detects the live daemon, so ``--purge``
+    refuses with the "PID unknown" message variant rather than racing the
+    daemon."""
     import click.testing
 
     from dbxignore import cli, state
@@ -1093,10 +1091,10 @@ def test_purge_refuses_when_state_json_missing_and_daemon_alive(
 def test_purge_proceeds_when_state_unreadable_and_no_daemon(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
 ) -> None:
-    """BACKLOG #122: ``state.json`` is unreadable but the lock probe
-    confirms no live daemon (the daemon was cleanly stopped, state.json
-    just got corrupted). ``--purge`` proceeds and cleans up the orphaned
-    bad file rather than leaving the user to delete it by hand."""
+    """``state.json`` is unreadable but the lock probe confirms no live
+    daemon (the daemon was cleanly stopped, state.json just got corrupted).
+    ``--purge`` proceeds and cleans up the orphaned bad file rather than
+    leaving the user to delete it by hand."""
     import click.testing
 
     from dbxignore import cli, state
@@ -1127,11 +1125,10 @@ def test_purge_proceeds_when_state_unreadable_and_no_daemon(
 def test_purge_proceeds_when_daemon_dead(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
 ) -> None:
-    """BACKLOG #122 regression guard: the new daemon-alive guard must
-    NOT block the purge body when ``state.json`` exists but the daemon
-    is no longer running (the common case — daemon was cleanly stopped
-    by ``uninstall_service``). Pins the guard fires only on the genuine
-    tug-of-war condition."""
+    """Regression guard: the daemon-alive guard must NOT block the purge
+    body when ``state.json`` exists but the daemon is no longer running
+    (the common case — daemon was cleanly stopped by ``uninstall_service``).
+    Pins the guard fires only on the genuine tug-of-war condition."""
     import click.testing
 
     from dbxignore import cli, state

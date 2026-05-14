@@ -157,9 +157,9 @@ def test_sweep_fans_out_per_top_level_child(
     monkeypatch: pytest.MonkeyPatch,
     write_file: WriteFile,
 ) -> None:
-    """Per-subdir fan-out (item #53 candidate 3): each top-level child of a
-    root becomes its own work item submitted to the ThreadPoolExecutor,
-    plus one descend=False item for the root itself."""
+    """Per-subdir fan-out: each top-level child of a root becomes its own
+    work item submitted to the ThreadPoolExecutor, plus one descend=False
+    item for the root itself."""
     from concurrent.futures import ThreadPoolExecutor
 
     write_file(tmp_path / ".dropboxignore", "build/\n")
@@ -211,7 +211,7 @@ def test_sweep_does_not_descend_into_top_level_symlink(
     only as ``dirnames`` entries, where ``followlinks=False`` did protect
     against descent. The per-subdir fan-out has to recover that protection
     at the work-list build by submitting symlink children with
-    ``descend=False``. Regression for the Codex P1 catch on PR #183.
+    ``descend=False``.
     """
     root = tmp_path / "root"
     root.mkdir()

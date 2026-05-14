@@ -38,7 +38,7 @@ def test_coalesces_repeated_events_for_same_key() -> None:
         # PR adding macOS to the test matrix saw runner contention drift the
         # 20ms sleep past the debounce window — the first submit then fully
         # debounced and emitted before the second arrived (2 emits, expected 1).
-        # Same family as BACKLOG #18 (Windows daemon-smoke poll widening).
+        # Same family as the Windows daemon-smoke poll-widening gotcha.
         for _ in range(5):
             d.submit(EventKind.OTHER, ("single", "samekey"), "last")
             time.sleep(0.002)

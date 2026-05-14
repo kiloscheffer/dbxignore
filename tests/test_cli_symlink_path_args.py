@@ -1,4 +1,4 @@
-"""Cross-cutting symlink-correctness suite for path-taking CLI verbs (item #95).
+"""Cross-cutting symlink-correctness suite for path-taking CLI verbs.
 
 Verifies that ``apply``, ``clear``, ``list``, ``explain`` and ``check-ignore``
 operate on the symlink OBJECT (not the resolved target) when handed a
@@ -78,7 +78,7 @@ def dropbox_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 def external_dir(tmp_path: Path) -> Path:
-    """A directory outside any Dropbox root, for cases #2 and #6b."""
+    """A directory outside any Dropbox root."""
     d = tmp_path / "external"
     d.mkdir()
     return d
@@ -424,8 +424,7 @@ def test_case8_apply_symlink_to_directory_does_not_descend(
     follows the link at the walk root (per the CLAUDE.md gotcha) and apply
     would write markers under paths the daemon's own walk (which starts
     from the Dropbox root with ``followlinks=False``) would never reach,
-    stranding orphan markers. Partial fix for backlog #104 covering the
-    apply mark-write surface.
+    stranding orphan markers.
     """
     # Create a directory and a file in it; the file would be matched by
     # a top-level rule.
@@ -471,7 +470,7 @@ def test_case9_clear_list_symlink_to_directory_does_not_descend(
     ``_walk_marked_paths`` short-circuits when ``target.is_symlink()`` —
     ``os.walk(target, followlinks=False)`` still follows the link at the
     walk root (per the CLAUDE.md gotcha; same shape as apply's walk and
-    the daemon's per-subdir fan-out pre-PR #183). Without the guard,
+    the daemon's per-subdir fan-out). Without the guard,
     `dbxignore clear ~/Dropbox/link-to-external` would enumerate and
     clear markers in the link's external target tree.
     """
@@ -501,7 +500,7 @@ def test_case9_clear_list_symlink_to_directory_does_not_descend(
     )
 
 
-# ---- Case 10: `..` after a symlinked component (item #105) ---------------
+# ---- Case 10: `..` after a symlinked component ----------------------------
 #
 # `os.path.normpath` collapses `link/..` lexically (to nothing), but the
 # filesystem would resolve it to `<target-of-link>/..`. The two interpretations
@@ -620,12 +619,11 @@ def test_case10d_dotdot_after_alias_uses_resolved_fallback(
     filesystem-true and unambiguous. The guard applies only to paths that
     would actually be handled through the lexical in-root branch.
 
-    Without this scoping (PR #205's first commit had the guard at the top),
-    an alias like ``/alias → ~/Dropbox`` would set ``seen_symlink`` on
-    ``alias``, then the trailing ``..`` would trigger a spurious rejection
-    even though resolve() handles the path correctly. Same scenario as
-    ``test_case4_out_of_dropbox_alias_into_dropbox`` but with ``..`` in the
-    tail."""
+    Without this scoping, an alias like ``/alias → ~/Dropbox`` would set
+    ``seen_symlink`` on ``alias``, then the trailing ``..`` would trigger a
+    spurious rejection even though resolve() handles the path correctly.
+    Same scenario as ``test_case4_out_of_dropbox_alias_into_dropbox`` but
+    with ``..`` in the tail."""
     real_dropbox = tmp_path / "real-dropbox"
     real_dropbox.mkdir()
     monkeypatch.setattr(cli, "_discover_roots", lambda: [real_dropbox])

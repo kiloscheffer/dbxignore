@@ -75,8 +75,8 @@ def test_daemon_reacts_to_dropboxignore_add_and_remove(
     with the *old* rule cache, marking the child; the subsequent RULES
     reload then prunes descent at the still-ignored parent and the
     negation never unmarks the child. That prune/negation interaction is
-    a product-behavior question tracked separately in the v0.2 follow-ups
-    plan — out of scope for a pipeline smoke test.
+    a product-behavior question tracked separately — out of scope for a
+    pipeline smoke test.
     """
     from dbxignore import daemon, markers
 

@@ -1,4 +1,4 @@
-"""Unit tests for ``rules.format_literal_rule`` (item #93).
+"""Unit tests for ``rules.format_literal_rule``.
 
 Pure-function tests — no fixtures, no tmp_path needed, no monkeypatching.
 """

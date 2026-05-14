@@ -81,7 +81,7 @@ def test_matches_files_not_just_directories(
 def test_does_not_descend_into_marked_subtree(
     tmp_path: Path, fake_markers: FakeMarkers, write_file: WriteFile
 ) -> None:
-    # Steady-state pruning contract (backlog item #53): when a child directory
+    # Steady-state pruning contract: when a child directory
     # is already marked AND match() still confirms it should be ignored,
     # _reconcile_path returns currently_ignored=True and the dirnames[:] filter
     # drops it from the walk. Descendants are NEVER queried.
@@ -119,7 +119,7 @@ def test_does_not_descend_into_marked_subtree(
 def test_reconcile_subtree_honors_stop_event(
     tmp_path: Path, fake_markers: FakeMarkers, write_file: WriteFile
 ) -> None:
-    # Cooperative cancellation contract (item #53): when stop_event is set
+    # Cooperative cancellation contract: when stop_event is set
     # before reconcile_subtree starts, the walk must break out without
     # processing additional directories. Convergence guarantees the next
     # sweep finishes the rest.
@@ -148,7 +148,7 @@ def test_reconcile_subtree_honors_stop_event(
 def test_reconcile_subtree_descend_false_skips_walk(
     tmp_path: Path, fake_markers: FakeMarkers, write_file: WriteFile
 ) -> None:
-    # descend=False contract (item #53 candidate 3): reconcile only the
+    # descend=False contract: reconcile only the
     # subdir's own marker; do NOT descend. _sweep_once relies on this to
     # split the root-path reconcile from the per-top-level-child fan-out.
     write_file(tmp_path / ".dropboxignore", "build/\n")

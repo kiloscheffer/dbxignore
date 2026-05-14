@@ -275,10 +275,9 @@ def test_detect_invocation_windows_falls_back_when_no_gui_launcher(
     """Windows non-frozen, no ``dbxignorew`` and no ``pythonw.exe`` at all:
     fall back to ``python.exe`` with a WARNING.
 
-    Item #100 — Microsoft Store Python, embedded interpreters, and pruned
-    CPython installs may ship only ``python.exe``. Returning it keeps the
-    daemon startable at logon; the WARNING explains the console-window
-    trade-off.
+    Microsoft Store Python, embedded interpreters, and pruned CPython
+    installs may ship only ``python.exe``. Returning it keeps the daemon
+    startable at logon; the WARNING explains the console-window trade-off.
     """
     monkeypatch.delattr(sys, "frozen", raising=False)
     monkeypatch.setattr(sys, "platform", "win32")

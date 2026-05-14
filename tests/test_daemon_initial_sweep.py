@@ -1,4 +1,4 @@
-"""Tests for the worker-thread initial-sweep design (BACKLOG #53).
+"""Tests for the worker-thread initial-sweep design.
 
 These tests bring up a real daemon thread with a ``BlockingMarkers`` gate
 to deterministically pause the worker mid-sweep and observe behavior in
@@ -30,7 +30,7 @@ def test_state_json_appears_before_sweep_completes(
     write_file: WriteFile,
 ) -> None:
     """state.json must appear with state=starting before the initial sweep
-    completes — that's the user-visible value of item #53. The transition
+    completes. The transition
     to state=running must be observable after the sweep finishes."""
     root = tmp_path / "root"
     write_file(root / ".dropboxignore", "build/\n")
@@ -292,7 +292,7 @@ def test_state_starting_appears_before_rule_scan(
     rule-file scan on a large tree doesn't delay the early
     ``state.json``/``state=starting`` visibility. Verify by blocking
     ``RuleCache.load_root`` and asserting ``state.json`` still appears
-    before the block is released. Surfaced by Codex P2 #5 on PR #162."""
+    before the block is released."""
     from dbxignore.rules import RuleCache
 
     root = tmp_path / "root"
@@ -311,8 +311,8 @@ def test_state_starting_appears_before_rule_scan(
         stop_event: threading.Event | None = None,
     ) -> None:
         # Forward the keyword arguments `_sweep_once` passes (`stop_event`
-        # since PR #162's fix #6, `log_warnings` long-standing). Without
-        # the forward, the worker would TypeError on the unexpected kwarg,
+        # and `log_warnings`). Without the forward, the worker would TypeError
+        # on the unexpected kwarg,
         # `_initial_sweep_worker`'s try/except would catch it, and the
         # test would pass vacuously — the early state.write fires in the
         # main thread before the worker spawns, so the `state.json
@@ -378,8 +378,7 @@ def test_periodic_sweep_skipped_while_initial_worker_alive(
     """Periodic sweep loop must skip ticks while the initial-sweep worker
     is still running. Without this guard, an initial sweep that runs
     longer than ``SWEEP_INTERVAL_S`` would race against a periodic sweep
-    on the same paths — operations are idempotent (Codex P2 #4 on PR #162's
-    escalation reply documents the safety analysis), but skipping the tick
+    on the same paths — operations are idempotent, but skipping the tick
     avoids the wasted concurrent traversal."""
     root = tmp_path / "root"
     write_file(root / ".dropboxignore", "build/\n")
@@ -449,8 +448,8 @@ def test_hourly_tick_recovers_from_sweep_exception(
     the wrapper, an unexpected ``AttributeError`` / ``KeyError`` from a
     rules-edge-case would propagate out of the while loop, the daemon
     thread would exit, and the service manager would have to restart it
-    once an hour. The initial-sweep worker is wrapped (item #91); this
-    pins the symmetric wrap on the hourly tick."""
+    once an hour. The initial-sweep worker is wrapped; this pins the
+    symmetric wrap on the hourly tick."""
     root = tmp_path / "root"
     write_file(root / ".dropboxignore", "")
 

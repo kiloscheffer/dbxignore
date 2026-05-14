@@ -131,8 +131,8 @@ def test_symlinked_walk_root_is_treated_as_leaf(
     symlinks are gated. Without the in-reconcile guard, a DIR_CREATE
     event for a symlink inside a watched root would mutate markers on
     paths under the link target, potentially outside any Dropbox tree
-    (regression surfaced by Codex on PR #240 against the lexical-first
-    containment change in `_resolve_under_roots`)."""
+    (a regression against the lexical-first containment change in
+    `_resolve_under_roots`)."""
     root = tmp_path
     write_file(root / ".dropboxignore", "build/\n")
     (root / "build").mkdir()

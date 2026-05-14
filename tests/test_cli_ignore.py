@@ -1,4 +1,4 @@
-"""CLI integration tests for ``dbxignore ignore`` and ``dbxignore unignore`` (item #93).
+"""CLI integration tests for ``dbxignore ignore`` and ``dbxignore unignore``.
 
 Covers helper unit tests, command happy paths, idempotence + redundancy
 branches, --yes / --dry-run flags, error paths, and daemon-coexistence smoke.
@@ -841,7 +841,7 @@ def test_unignore_partial_disappearance_exits_2(
 
 
 # ---------------------------------------------------------------------------
-# Fix 4 regression: Dropbox root guard in ignore and unignore (item #93)
+# Dropbox root guard in ignore and unignore
 # ---------------------------------------------------------------------------
 
 
@@ -1137,7 +1137,7 @@ def test_ignore_then_unignore_case_insensitive_match(
 
 
 # ---------------------------------------------------------------------------
-# Codex P2 fixes (PR #191): Linux-symlink scope + ancestor-only marker write
+# Linux-symlink scope + ancestor-only marker write
 # ---------------------------------------------------------------------------
 
 
@@ -1234,7 +1234,7 @@ def test_ignore_sets_marker_for_wildcard_direct_match(
 
 
 # ---------------------------------------------------------------------------
-# Codex P2 Fix: append_rule negation-override (item #93)
+# append_rule negation-override
 # ---------------------------------------------------------------------------
 
 
@@ -1525,14 +1525,14 @@ def test_error_or_messagebox_routes_to_click_echo_when_console_attached(
 
 
 # ---------------------------------------------------------------------------
-# Validator GUI-dialog routing (PR #238 fix)
+# Validator GUI-dialog routing
 # ---------------------------------------------------------------------------
 
 
 def test_ignore_validator_error_routes_to_gui_in_no_stdio_context(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 fix (PR #238): validator errors from _normalize_under_root /
+    """Validator errors from _normalize_under_root /
     _validate_target_under_root surface as MessageBox dialogs in the no-stdio
     Explorer shell-verb context.
 
@@ -1581,7 +1581,7 @@ def test_unignore_validator_error_routes_to_gui_in_no_stdio_context(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Same routing check for `unignore` — verifies the fix covers both
-    shell-verb subcommands (PR #238).
+    shell-verb subcommands.
 
     Uses the "does not exist" error path to exercise _normalize_under_root's
     require_exists branch through CliRunner with a simulated no-stdio context

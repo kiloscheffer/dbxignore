@@ -153,7 +153,7 @@ def test_apply_from_gitignore_directory_arg_errors(
     assert "file path, not a directory" in result.output
 
 
-# ---- apply --dry-run (followup item 64) -------------------------------------
+# ---- apply --dry-run --------------------------------------------------------
 
 
 def test_apply_dry_run_does_not_mutate_markers(
@@ -393,8 +393,8 @@ def test_apply_from_gitignore_suppresses_rules_conflict_warnings(
     """Conflict WARNINGs from rules.py must not leak on the --from-gitignore path.
 
     The regular `apply` path routes through `_load_cache`, which passes
-    ``log_warnings=False`` to suppress the per-conflict rules-layer WARNING
-    (PR #92). `_apply_from_gitignore` builds its own RuleCache and calls
+    ``log_warnings=False`` to suppress the per-conflict rules-layer WARNING.
+    `_apply_from_gitignore` builds its own RuleCache and calls
     ``load_external`` directly, so the same kwarg has to be passed there too
     — otherwise scripted runs against a known-conflicting source spam stderr.
     """

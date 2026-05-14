@@ -3,8 +3,8 @@
 These tests use a `_FakePattern` shim that models trailing-slash
 directory-rule semantics and exact non-directory matches. It does NOT
 model gitwildmatch features like `build/*` (children-only). For coverage
-of the children-only patterns and the post-PR-#108 strict-ancestor /
-last-match-wins semantics, see the higher-fidelity tests against real
+of the children-only patterns and the strict-ancestor / last-match-wins
+semantics, see the higher-fidelity tests against real
 pathspec in `tests/test_rules_reload_explain.py` (the
 `test_rulecache_*conflict*` block).
 """
@@ -184,8 +184,8 @@ def test_detect_glob_prefix_negation_under_directory_marking_glob_include(
     negations, so `!**/foo/bar/` is inert wherever the `**` lands under
     a matched parent.
 
-    Pre-#76 this returned `[]` (documented limitation); post-#76 it
-    flags a conflict via ``_find_masking_directory_include``.
+    Earlier behavior returned `[]` (documented limitation); the current
+    implementation flags a conflict via ``_find_masking_directory_include``.
     """
     root = tmp_path
     sequence = [
@@ -204,7 +204,7 @@ def test_detect_glob_prefix_file_negation_still_skipped(tmp_path: Path) -> None:
     Dropbox's ancestor inheritance, so the conflict-or-not call is
     handled by pathspec's last-match-wins regardless of any earlier
     include's directory-marking shape. Lock down the file-vs-directory
-    branching introduced in #76."""
+    branching in the file-vs-directory detection."""
     root = tmp_path
     sequence = [
         _entry(str(root / ".dropboxignore"), 1, "build/", str(root)),
@@ -245,7 +245,7 @@ def test_detect_glob_prefix_same_target_override_no_flag(tmp_path: Path) -> None
     filters entries listed in ``_dropped`` before consulting pathspec,
     so a dropped negation changes marker behavior, not just diagnostics).
 
-    Surfaced by Codex review on PR #149."""
+    Confirmed by the same-target carve-out regression tests."""
     root = tmp_path
     sequence = [
         _entry(str(root / ".dropboxignore"), 1, "**/foo/", str(root)),
@@ -262,8 +262,7 @@ def test_detect_glob_prefix_negation_overridden_by_children_only_include_no_flag
     negation that overlaps a children-only include's match-set is
     overridable via pathspec last-match-wins, not inheritance-inert.
 
-    Bot reproducer (third Codex P1 round on PR #149):
-    ``build/`` + ``foo/*`` + ``!**/bar/``. The negation overrides
+    Example: ``build/`` + ``foo/*`` + ``!**/bar/``. The negation overrides
     ``foo/*``'s match for ``foo/bar/`` via last-match-wins; the
     unrelated ``build/`` directory-marking include is a strict
     ancestor of nothing the negation could land on (literal-suffix
@@ -309,8 +308,7 @@ def test_detect_glob_prefix_literal_suffix_matches_literal_include_no_flag(
     override for ``bar/`` at the root. Dropping the negation would
     leave ``bar/`` ignored on disk because ``_dropped`` filters
     pre-pathspec; the same-target carve-out's literal-prefix-vs-suffix
-    arm prevents that. Surfaced by Codex P1 (second iteration) on PR
-    #149."""
+    arm prevents that."""
     root = tmp_path
     sequence = [
         _entry(str(root / ".dropboxignore"), 1, "bar/", str(root)),

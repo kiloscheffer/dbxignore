@@ -1,14 +1,12 @@
 # Sourced by scripts/manual-test-{ubuntu-vps,macos}.sh.
 #
 # Defines shared helpers for the two bash manual-test scripts:
-# - `phase_extended_cli()`: the Phase 4.5 block exercising the CLI surface
-#   added across PRs #100, #102, #103, #107, #108, #195, #203, #205.
+# - `phase_extended_cli()`: the Phase 4.5 block exercising the CLI surface.
 #   Extracted because the body is byte-near-identical between the two scripts
-#   (~120 LOC each) and was being maintained twice; backlog item #75 is the
-#   trigger.
-# - `clean_uv_cache_for_dbxignore_if_local()`: Phase 2 cache-clean (item #116)
-#   called from each script's `phase_dbxignore_install()` before `uv tool
-#   install`. Shared because the body was an 11-line copy across both scripts.
+#   (~120 LOC each) and was being maintained twice.
+# - `clean_uv_cache_for_dbxignore_if_local()`: Phase 2 cache-clean called
+#   from each script's `phase_dbxignore_install()` before `uv tool install`.
+#   Shared because the body was an 11-line copy across both scripts.
 #
 # Depends on the parent script's shared environment:
 #   - $DROPBOX_DIR, $TEST_SUBDIR — test-tree location
@@ -17,7 +15,7 @@
 #   - assert_grep, assert_xattr_set, assert_xattr_unset — assertion helpers
 #
 # Windows (`scripts/manual-test-windows.ps1`) is PowerShell and does not
-# share this body — see backlog item #75.
+# share this body.
 
 # Recovery hook for case 4s — called from each parent script's EXIT trap
 # (cleanup()) so an abort during the destructive section restores the user's
@@ -38,15 +36,14 @@ _phase_4s_recover_state_json() {
     unset _4S_STATE_JSON _4S_STATE_JSON_EXISTED
 }
 
-# BACKLOG #116: invalidate uv's path-keyed sdist cache for local-source
-# installs. Without this, `uv tool install .` from a directory that's
-# been built before reuses the cached wheel at `sdists-v9/path/<dir-hash>/`
-# — the cache key is the source dir path, not the git SHA, so commits
-# don't invalidate it. Excludes PyPI names and git URLs (which aren't
-# existing directories).
+# Invalidate uv's path-keyed sdist cache for local-source installs. Without
+# this, `uv tool install .` from a directory that's been built before reuses
+# the cached wheel at `sdists-v9/path/<dir-hash>/` — the cache key is the
+# source dir path, not the git SHA, so commits don't invalidate it. Excludes
+# PyPI names and git URLs (which aren't existing directories).
 clean_uv_cache_for_dbxignore_if_local() {
     if [[ -d "$DBXIGNORE_INSTALL_SPEC" ]]; then
-        note "local-source DBXIGNORE_INSTALL_SPEC — cleaning uv cache for dbxignore (item #116)"
+        note "local-source DBXIGNORE_INSTALL_SPEC — cleaning uv cache for dbxignore"
         uv cache clean dbxignore >/dev/null 2>&1 || true
     fi
 }
@@ -72,7 +69,7 @@ phase_extended_cli() {
     fi
 
     # 4g — init refuses an unwritable target dir with exit 2 + a clean
-    # "cannot write" message rather than an unhandled OSError traceback (PR #248).
+    # "cannot write" message rather than an unhandled OSError traceback.
     note "4g — dbxignore init on an unwritable directory"
     local ro_dir="$T/init-readonly"
     mkdir -p "$ro_dir"
@@ -101,7 +98,7 @@ phase_extended_cli() {
         fail "4h — generate output differs from source"
     fi
 
-    # 4i — generate warns on dropped negation (PR #108)
+    # 4i — generate warns on dropped negation
     note "4i — generate emits stderr warning on dropped negation"
     rm -rf "$T"; mkdir -p "$T"
     printf 'build/\n!build/keep/\n' > "$T/source.gitignore"
@@ -119,7 +116,7 @@ phase_extended_cli() {
         fail "4i — file content differs from source despite warning"
     fi
 
-    # 4j — apply --dry-run does not mutate (PR #103)
+    # 4j — apply --dry-run does not mutate
     note "4j — apply --dry-run"
     rm -rf "$T"; mkdir -p "$T"
     printf '*.tmp\n' > "$T/.dropboxignore"
@@ -133,7 +130,7 @@ phase_extended_cli() {
     assert_grep /tmp/dbx-dry.out 'would_mark=1'  "4j — dry-run summary has would_mark=1"
     assert_xattr_unset "$T/foo.tmp" "4j — dry-run did not mutate marker"
 
-    # 4k — apply --yes runs without prompting (PR #107)
+    # 4k — apply --yes runs without prompting
     note "4k — apply --yes skips the prompt"
     if dbxignore apply "$T" --yes >/tmp/dbx-yes.out 2>&1; then
         pass "4k — apply --yes (rc=0)"
@@ -148,7 +145,7 @@ phase_extended_cli() {
         fail "4k — --yes did not skip the prompt"
     fi
 
-    # 4l — apply on already-converged state says "Nothing to apply" (PR #107)
+    # 4l — apply on already-converged state says "Nothing to apply"
     note "4l — apply on no-op state"
     # No input piped: if a prompt fires, the command would block; we stub
     # stdin closed so any prompt would error out — passing means no prompt.
@@ -159,14 +156,14 @@ phase_extended_cli() {
     fi
     assert_grep /tmp/dbx-noop.out 'Nothing to apply' "4l — emits 'Nothing to apply (rules already in sync)'"
 
-    # 4m — detector regression: case4m_target/* + !case4m_target/keep/ no conflict (PR #108)
+    # 4m — detector regression: case4m_target/* + !case4m_target/keep/ no conflict
     # Uses `case4m_target` instead of the generic `build` because testers who
     # have run `dbxignore init` at their Dropbox root carry a `build/` rule
     # at the ancestor `.dropboxignore`. Dropbox's directory-inheritance
     # semantic would then mark the test's `build/` via the ancestor rule and
     # mask the local `!build/keep/` negation — a real but unrelated effect
     # that the case 4m assertion would mis-attribute as "detector fix didn't
-    # apply" (backlog item #111).
+    # apply".
     note "4m — detector fix: case4m_target/* + !case4m_target/keep/ no conflict"
     rm -rf "$T"; mkdir -p "$T/case4m_target/keep"
     printf 'case4m_target/*\n!case4m_target/keep/\n' > "$T/.dropboxignore"
@@ -189,7 +186,7 @@ phase_extended_cli() {
         pass "4m — status reports no conflicts (detector fix applied)"
     fi
 
-    # 4n — dbxignore clear basic (PR #100); daemon-alive guard tested in phase 5
+    # 4n — dbxignore clear basic; daemon-alive guard tested in phase 5
     note "4n — dbxignore clear (basic, daemon not alive)"
     if dbxignore clear "$T" --yes >/tmp/dbx-clear.out 2>&1; then
         pass "4n — clear (rc=0)"
@@ -199,7 +196,7 @@ phase_extended_cli() {
     fi
     assert_xattr_unset "$T/case4m_target/foo.tmp" "4n — clear removed case4m_target/foo.tmp marker"
 
-    # 4o — dbxignore ignore <path> happy path (PR #191)
+    # 4o — dbxignore ignore <path> happy path
     note "4o — dbxignore ignore (basic)"
     local target_4o="$DROPBOX_DIR/dbxignore_test_4o"
     rm -rf "$target_4o"; mkdir -p "$target_4o"
@@ -216,7 +213,7 @@ phase_extended_cli() {
     fi
     assert_xattr_set "$target_4o" "4o — marker set on target"
 
-    # 4p — dbxignore unignore <path> happy path (PR #191)
+    # 4p — dbxignore unignore <path> happy path
     note "4p — dbxignore unignore (basic)"
     if dbxignore unignore "$target_4o" --yes >/tmp/dbx-unignore.out 2>&1; then
         pass "4p — unignore (rc=0)"
@@ -232,7 +229,7 @@ phase_extended_cli() {
     assert_xattr_unset "$target_4o" "4p — marker cleared on target"
     rm -rf "$target_4o"
 
-    # 4q — dbxignore unignore wildcard collision (PR #191)
+    # 4q — dbxignore unignore wildcard collision
     note "4q — dbxignore unignore refuses wildcard blocker"
     local target_4q="$DROPBOX_DIR/dbxignore_test_4q"
     rm -rf "$target_4q"; mkdir -p "$target_4q"
@@ -252,7 +249,7 @@ phase_extended_cli() {
     fi
     rm -rf "$target_4q"
 
-    # 4r — clear/list exit 2 on nonexistent path (PR #195, item #95)
+    # 4r — clear/list exit 2 on nonexistent path
     note "4r — clear/list error on nonexistent path"
     local nonexist="$DROPBOX_DIR/dbxignore-test-nonexistent-$$"
 
@@ -282,7 +279,7 @@ phase_extended_cli() {
     fi
     assert_grep /tmp/dbx-4r-list.err 'does not exist' "4r — list stderr says 'does not exist'"
 
-    # 4s — clear fail-closed on unreadable state.json (PR #203, item #97 Codex P2 followup)
+    # 4s — clear fail-closed on unreadable state.json
     # state.json exists but `state.read()` returns None (chmod 000 → PermissionError
     # → _read_at returns None). cli.clear refuses to proceed because daemon liveness
     # is unknown; --force overrides.
@@ -360,7 +357,7 @@ phase_extended_cli() {
     fi
     unset _4S_STATE_JSON _4S_STATE_JSON_EXISTED
 
-    # 4t — path-taking verbs refuse `..` after a symlinked component (PR #205, item #105)
+    # 4t — path-taking verbs refuse `..` after a symlinked component
     # Lexical normalization of `link/..` differs from filesystem-true resolution;
     # `_normalize_under_root` rejects the path up-front. Test one verb (explain)
     # — the guard is in the shared validator and unit tests cover all 5 verbs.
@@ -385,7 +382,7 @@ phase_extended_cli() {
     assert_grep /tmp/dbx-4t-explain.err 'symlinked component' \
         "4t — explain stderr names 'symlinked component'"
 
-    # 4u — clear/list exit 2 on injected marker-read failure (PR #249, item #121)
+    # 4u — clear/list exit 2 on injected marker-read failure
     # DBXIGNORE_TEST_FAIL_MARKER_READ makes markers.is_ignored raise OSError
     # inside _walk_marked_paths, exercising the scan_errors exit-2 path that
     # unit tests pin but a healthy filesystem can't otherwise trigger. The

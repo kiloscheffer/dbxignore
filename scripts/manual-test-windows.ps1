@@ -949,16 +949,26 @@ function Get-Verb5gState {
 function Test-Daemon {
     Write-Phase "Phase 5 - daemon (Task Scheduler + watchdog)"
 
-    # 5-pre — pythonw.exe fallback warning (BACKLOG #100, PR #229)
-    # Temporarily rename pythonw.exe in dbxignore's tool venv to exercise
-    # the install-time fallback path. Restore in finally; Phase 7 has a
-    # defensive backstop in case the script aborts mid-test.
+    # 5-pre — dbxignorew.exe is the preferred windowless launcher (item #137, PR #252)
+    # Temporarily rename pythonw.exe away in dbxignore's tool venv, then
+    # install. Pre-#137, detect_invocation trusted any pythonw.exe by name,
+    # and a uv venv's pythonw.exe is a console-subsystem copy of python.exe,
+    # so the daemon launched with a visible console window; renaming
+    # pythonw.exe forced a console-flash fallback warning. Post-#137, the
+    # dbxignorew.exe GUI-script trampoline (pyproject.toml [project.gui-scripts])
+    # is preferred over pythonw.exe, so the rename is a no-op: install stays
+    # windowless, emits no GUI-subsystem fallback warning, and the task
+    # targets dbxignorew.exe. Restore in finally; Phase 7 has a defensive
+    # backstop in case the script aborts mid-test.
     #
-    # The dbxignore tool venv's pythonw.exe is ONLY used by the daemon's
-    # Task Scheduler entry (windowless launch). Renaming it doesn't
-    # affect the dbxignore or dbxignored CLI shims, which are python.exe-
-    # based — `dbxignore install` and `dbxignore uninstall` continue to
-    # work normally under the rename.
+    # (The full python.exe last-resort fallback — every GUI-subsystem
+    # launcher absent — needs dbxignorew.exe removed from both the tool venv
+    # Scripts dir AND the PATH bin dir; that combination is covered by the
+    # _common unit tests rather than forced here.)
+    #
+    # The dbxignore tool venv's pythonw.exe is ONLY consulted by the daemon's
+    # Task Scheduler entry. Renaming it doesn't affect the dbxignore CLI shim
+    # — `dbxignore install` / `uninstall` continue to work under the rename.
     #
     # Codex P2 on PR #229: the uv tool dir location varies across uv
     # versions and respects `UV_TOOL_DIR`, so the base path must come
@@ -970,7 +980,7 @@ function Test-Daemon {
         # uv tool dir failed; skip the test.
     }
     if ([string]::IsNullOrWhiteSpace($toolDir)) {
-        Write-Note "5-pre - uv tool dir failed or empty; skipping pythonw.exe fallback test."
+        Write-Note "5-pre - uv tool dir failed or empty; skipping launcher-preference test."
         $pythonwExe = $null
         $pythonwHide = $null
     } else {
@@ -981,7 +991,7 @@ function Test-Daemon {
     if ($null -eq $pythonwExe) {
         # Already noted skip above; no further action.
     } elseif (-not (Test-Path $pythonwExe)) {
-        Write-Note "5-pre - pythonw.exe missing from tool venv at $pythonwExe (unexpected; uv tool install normally creates both). Skipping fallback test."
+        Write-Note "5-pre - pythonw.exe missing from tool venv at $pythonwExe (unexpected; uv tool install normally creates both). Skipping launcher-preference test."
     } else {
         Move-Item -Path $pythonwExe -Destination $pythonwHide -Force
         try {
@@ -992,17 +1002,27 @@ function Test-Daemon {
                 Get-Content $fallbackOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Note "    $_" }
             } else {
                 $content = (Get-Content $fallbackOut -Raw -ErrorAction SilentlyContinue) -as [string]
-                if ($null -ne $content -and $content -match 'pythonw\.exe not found') {
-                    Write-Pass "5-pre - install emitted pythonw.exe fallback warning"
-                } else {
-                    Write-Note "    install output (no fallback warning found):"
+                if ($null -ne $content -and $content -match 'GUI-subsystem launcher') {
+                    Write-Note "    install output (unexpected fallback warning):"
                     ($content -as [string]) -split "`r?`n" | ForEach-Object { Write-Note "    $_" }
-                    Write-Fail "5-pre - install did not emit pythonw.exe fallback warning"
+                    Write-Fail "5-pre - install emitted console-flash fallback warning despite dbxignorew.exe present"
+                } else {
+                    Write-Pass "5-pre - install stayed windowless via dbxignorew.exe with pythonw.exe absent"
+                }
+                # The task must target dbxignorew.exe specifically — not
+                # pythonw.exe (renamed) and not python.exe (console flash).
+                $preXml = schtasks /Query /TN dbxignore /XML 2>$null
+                if ($preXml -match "<Command>[^<]*dbxignorew\.exe[^<]*</Command>") {
+                    Write-Pass "5-pre - task <Command> targets dbxignorew.exe"
+                } else {
+                    $m = [regex]::Match($preXml, "<Command>([^<]*)</Command>")
+                    $v = if ($m.Success) { $m.Groups[1].Value } else { "(no <Command> element)" }
+                    Write-Fail "5-pre - task <Command> targets unexpected exe: $v"
                 }
             }
             # Clean up the daemon registration before the real Phase 5
             # install below. Don't fail the test on uninstall errors —
-            # the warning assertion above is the load-bearing check.
+            # the assertions above are the load-bearing checks.
             dbxignore uninstall 2>$null | Out-Null
         } finally {
             Move-Item -Path $pythonwHide -Destination $pythonwExe -Force -ErrorAction SilentlyContinue
@@ -1065,19 +1085,21 @@ function Test-Daemon {
         return
     }
 
-    # Task XML <Command> element targets the dual-binary daemon entry:
-    # - frozen install: dbxignorew.exe (GUI subsystem, silent at logon)
-    # - non-frozen (uv tool install): pythonw.exe -m dbxignore daemon
-    # Both forms include "daemon" as an argument and the Command element
-    # references one of the two expected executables.
+    # Task XML <Command> element targets the windowless daemon launcher.
+    # Both install paths resolve to dbxignorew.exe: the frozen install
+    # ships it as a GUI-subsystem PyInstaller binary; the non-frozen
+    # `uv tool install` path gets it as the [project.gui-scripts]
+    # trampoline pip/uv generate (item #137). pythonw.exe is no longer a
+    # daemon launcher — a uv venv's pythonw.exe is a console-subsystem copy
+    # of python.exe and would allocate a visible console at logon.
     $xml = schtasks /Query /TN dbxignore /XML 2>$null
     if ($xml -match "<Arguments>.*daemon.*</Arguments>") {
         Write-Pass "Task scheduled with 'daemon' argument"
     } else {
         Write-Fail "Task scheduled command does not include 'daemon' argument"
     }
-    if ($xml -match "<Command>[^<]*\b(dbxignorew\.exe|pythonw\.exe)\b[^<]*</Command>") {
-        Write-Pass "Task <Command> targets dual-binary daemon entry (dbxignorew.exe or pythonw.exe)"
+    if ($xml -match "<Command>[^<]*dbxignorew\.exe[^<]*</Command>") {
+        Write-Pass "Task <Command> targets the windowless dbxignorew.exe launcher"
     } else {
         # Extract just the Command line for a clearer FAIL note.
         $cmdMatch = [regex]::Match($xml, "<Command>([^<]*)</Command>")

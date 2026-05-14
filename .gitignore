@@ -14,4 +14,3 @@ dist/
 mypy.ini
 src/dbxignore/_version.py
 venv/
-web/

@@ -344,11 +344,10 @@ def test_discover_warns_with_both_candidates_when_neither_exists(
 def test_discover_falls_back_when_first_candidate_malformed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Item 5 from external review: a stale APPDATA\\Dropbox\\info.json
-    from an uninstalled per-user install used to mask a valid
-    LOCALAPPDATA\\Dropbox\\info.json. Now, if the first existing
-    candidate fails to parse, discover falls through to the next
-    candidate, logs a warning per failed candidate, and returns the
+    """A stale APPDATA\\Dropbox\\info.json from an uninstalled per-user
+    install used to mask a valid LOCALAPPDATA\\Dropbox\\info.json. Now, if
+    the first existing candidate fails to parse, discover falls through to
+    the next candidate, logs a warning per failed candidate, and returns the
     first usable result."""
     if sys.platform != "win32":
         import pytest
@@ -391,12 +390,12 @@ def test_discover_falls_back_when_first_candidate_malformed(
 def test_discover_falls_back_when_first_candidate_parses_to_empty_accounts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Codex P2 followup on PR #240: an info.json that parses cleanly but
-    contains no usable account paths (e.g. ``{}`` or ``{"personal": {}}``
-    from a Dropbox-uninstall residue) used to short-circuit ``discover()``
-    with the same empty result as if the per-machine candidate didn't
-    exist. Now an empty ``account_paths`` falls through to the next
-    candidate, log includes a WARNING naming the empty-but-existing file."""
+    """An info.json that parses cleanly but contains no usable account paths
+    (e.g. ``{}`` or ``{"personal": {}}`` from a Dropbox-uninstall residue)
+    used to short-circuit ``discover()`` with the same empty result as if the
+    per-machine candidate didn't exist. Now an empty ``account_paths`` falls
+    through to the next candidate, and the log includes a WARNING naming the
+    empty-but-existing file."""
     if sys.platform != "win32":
         import pytest
 

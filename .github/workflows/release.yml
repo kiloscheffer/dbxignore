@@ -39,8 +39,8 @@ jobs:
           uv run --with pyinstaller pyinstaller pyinstaller/dbxignorew.spec
 
       - name: Smoke test Windows binaries
-        # --help fails-fast on missing-bundled-module regressions (the
-        # v0.4.0a1 macOS _cffi_backend shape). --version fails-fast on
+        # --help fails-fast on missing-bundled-module regressions (an
+        # earlier macOS _cffi_backend shape). --version fails-fast on
         # missing dist-info metadata regressions (PyInstaller surfaces this
         # as "RuntimeError: <pkg> is not installed" when importlib.metadata
         # can't find the wheel inside the frozen bundle).
@@ -104,7 +104,7 @@ jobs:
       - name: Smoke test macOS binaries
         # `--help` exercises the full import chain (cli → markers →
         # _backends/macos_xattr → xattr → cffi → _cffi_backend) without
-        # starting the daemon. Catches the v0.4.0a1 missing-`_cffi_backend`
+        # starting the daemon. Catches an earlier missing-`_cffi_backend`
         # regression class before the artifact ships. `--version` additionally
         # exercises the `copy_metadata("dbxignore")` bundling in the .spec
         # (RuntimeError: 'dbxignore' is not installed if dist-info is missing),
@@ -131,7 +131,7 @@ jobs:
     # tag or a pre-release tag?". GitHub Actions expressions don't have
     # regex, and PEP 440 doesn't use a hyphen separator (alphas are
     # `0.4.0a1`, not `0.4.0-a1`), so a `contains(github.ref, '-a')` check
-    # is wrong — that's the v0.4.0a1 misfire (PR #62 root cause).
+    # is wrong — that's the earlier misfire.
     #
     # Recognized pre-release suffixes: `aN`, `bN`, `rcN`, `.devN`.
     # `.postN` (post-release) is NOT a pre-release per PEP 440 and

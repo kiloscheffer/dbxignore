@@ -64,7 +64,8 @@ def stub_event(
     ``_dispatch`` consume. Lets dispatch tests fire synthetic events at the
     daemon's classification + reconcile chain without bringing up a real
     ``Observer`` (whose ``ReadDirectoryChangesW`` events are unreliable on
-    Windows CI runners — see backlog item #34).
+    Windows CI runners — silently dropped on some CI configurations, not
+    merely delayed).
     """
     e = MagicMock()
     e.event_type = kind

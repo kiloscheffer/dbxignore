@@ -1,4 +1,4 @@
-"""Tests for the slow-sweep marker hook (BACKLOG #89).
+"""Tests for the slow-sweep marker hook.
 
 The marker file at ``state.user_state_dir() / "_test_slow_sweep"`` lets
 manual-test scripts deterministically pad the daemon's initial sweep so
@@ -127,7 +127,7 @@ def test_pad_warns_and_returns_zero_on_inf(
     """``inf`` → returns 0.0, WARNING names non-finite. Without this
     check ``stop_event.wait(inf)`` raises OverflowError, the worker
     thread dies before the sweep, and the daemon stays in
-    ``state=starting`` forever (Codex P2 catch on PR #175)."""
+    ``state=starting`` forever."""
     monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
     _write_marker(tmp_path, "inf")
     caplog.set_level(logging.WARNING, logger="dbxignore.daemon")
@@ -158,7 +158,7 @@ def test_pad_warns_and_returns_zero_on_undecodable_bytes(
     (which derives from ``ValueError``, not ``OSError``), so it needs
     its own catch arm. Surfaces when a stale marker was written in a
     different encoding — Windows PS 5.1 ``Set-Content`` defaults to
-    UTF-16, corrupt/binary edits, etc. (Codex P2 catch on PR #175)."""
+    UTF-16, corrupt/binary edits, etc."""
     monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
     marker = tmp_path / daemon.SLOW_SWEEP_MARKER_NAME
     # UTF-16 LE BOM + "15" — 0xff is not a valid UTF-8 start byte.
@@ -274,13 +274,11 @@ def test_initial_sweep_worker_routes_helper_exception_to_shutdown(
     surrounding `stop_event.wait` call) must NOT escape the worker thread
     — it must route through the same try/except arm `_sweep_once`
     failures use, setting `stop_event` so the daemon shuts down cleanly
-    instead of stranding in `state=starting` (item #91).
+    instead of stranding in `state=starting`.
 
     Defense-in-depth against future helper additions that introduce an
-    exception type the helper's parser doesn't catch. Codex caught two
-    such bugs on PR #175 — at the parser level — but a third class
-    would otherwise need a third parser-level fix; this test pins the
-    structural fallback."""
+    exception type the helper's parser doesn't catch. This test pins the
+    structural fallback at the worker level."""
     monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
 
     def boom() -> float:
@@ -353,9 +351,8 @@ def test_sweep_once_sets_cache_ready_between_phase1_and_phase2(
     full sweep completes, an unnecessary ~50s delay on big trees.
 
     Logic was relocated from ``_initial_sweep_worker`` into ``_sweep_once``
-    in the double-walk fix (Codex P2 followup on PR #240) so that initial
-    sweep walks the tree exactly once; this test now exercises the new
-    ``_sweep_once`` cache_ready / deferred params directly."""
+    so that initial sweep walks the tree exactly once; this test exercises
+    the ``_sweep_once`` cache_ready / deferred params directly."""
     monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
 
     # Track when cache_ready was set relative to reconcile_subtree calls.
@@ -425,15 +422,13 @@ def test_initial_sweep_worker_does_not_set_cache_ready_when_stopped_early(
 def test_sweep_once_does_not_set_cache_ready_when_load_root_returned_partial(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 followup on PR #240: if ``stop_event`` fires mid-walk
-    during the FINAL ``cache.load_root``, the top-of-loop stop check
-    inside ``_sweep_once`` doesn't catch it (loop has exited), and
-    ``cache_ready.set()`` used to fire against a partial cache. The
-    post-loop re-check refuses to signal ready in that state.
+    """If ``stop_event`` fires mid-walk during the FINAL ``cache.load_root``,
+    the top-of-loop stop check inside ``_sweep_once`` doesn't catch it (loop
+    has exited), and ``cache_ready.set()`` used to fire against a partial
+    cache. The post-loop re-check refuses to signal ready in that state.
 
-    Logic moved from ``_initial_sweep_worker`` into ``_sweep_once`` so
-    initial sweep walks the tree exactly once; this test targets
-    ``_sweep_once`` directly."""
+    Logic lives in ``_sweep_once`` so the initial sweep walks the tree
+    exactly once; this test targets ``_sweep_once`` directly."""
     reconcile_calls: list[Path] = []
 
     def fake_reconcile(_root: Path, sub: Path, _cache: object, **_kw: object) -> reconcile.Report:
@@ -477,10 +472,10 @@ def test_sweep_once_does_not_set_cache_ready_when_load_root_returned_partial(
 def test_sweep_once_drains_deferred_between_phases(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 followup on PR #240: events that arrived during the
-    startup window MUST be re-dispatched after Phase 1 finishes so a
-    newly-created ignored directory is marked within ~cache-load-time
-    rather than waiting for Phase 2's wall-clock to reach it.
+    """Events that arrived during the startup window MUST be re-dispatched
+    after Phase 1 finishes so a newly-created ignored directory is marked
+    within ~cache-load-time rather than waiting for Phase 2's wall-clock
+    to reach it.
 
     The drain runs AFTER ``cache_ready.set()`` (so any concurrent
     append falls through to direct dispatch via the atomic-check) and

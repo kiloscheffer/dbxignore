@@ -31,13 +31,12 @@ def test_generate_file_arg_writes_sibling(tmp_path: Path) -> None:
 
 def test_generate_preserves_bytes_lf_on_every_platform(tmp_path: Path) -> None:
     """`generate`'s documented byte-for-byte invariant requires LF line
-    endings on every platform — backlog item #110. Pre-PR #214,
-    `cli.generate` wrote via `target.write_text(..., encoding="utf-8")`
-    without `newline=""`, so Python's default text-mode write translated
-    `\\n` → `\\r\\n` on Windows; source `.gitignore` files with pure-LF
-    bytes (which is canonical for gitignore-style files) produced
-    CRLF-converted `.dropboxignore` and the read_bytes() comparison
-    diverged.
+    endings on every platform. An earlier implementation wrote via
+    `target.write_text(..., encoding="utf-8")` without `newline=""`, so
+    Python's default text-mode write translated `\\n` → `\\r\\n` on Windows;
+    source `.gitignore` files with pure-LF bytes (which is canonical for
+    gitignore-style files) produced CRLF-converted `.dropboxignore` and
+    the read_bytes() comparison diverged.
 
     Pin the LF invariant at the byte level so the test is platform-
     sensitive: `read_bytes()` doesn't do universal-newlines translation

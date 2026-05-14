@@ -137,7 +137,7 @@ def test_unit_content_escapes_percent_in_environment_value() -> None:
     (per ``systemd.exec(5)`` "specifier expansion is possible"). A literal
     ``%`` in a forwarded var (e.g. ``XDG_STATE_HOME=/home/me/100%state``)
     must be doubled to ``%%`` so the daemon receives the path the user
-    actually set. Codex P3 catch on PR #177."""
+    actually set."""
     from dbxignore.install import linux_systemd
 
     content = linux_systemd.build_unit_content(
@@ -232,7 +232,7 @@ def test_install_propagates_dbxignore_root_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """When DBXIGNORE_ROOT is set in the install process's env, the
-    generated unit must carry it forward — that's the fix for item 9."""
+    generated unit must carry it forward."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("DBXIGNORE_ROOT", "/home/kilo/dbx-smoke")
     monkeypatch.delenv("XDG_STATE_HOME", raising=False)
@@ -264,7 +264,7 @@ def test_install_propagates_xdg_state_home_env(
     `state.user_state_dir()` falls back to `~/.local/state/dbxignore`
     while the user's shell tools (running with the override) probe
     `$XDG_STATE_HOME/dbxignore`, leaving them disagreeing about where
-    state lives. Surfaced by Codex on PR #177."""
+    state lives."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("XDG_STATE_HOME", "/tmp/state-override")
     monkeypatch.delenv("DBXIGNORE_ROOT", raising=False)
@@ -456,10 +456,10 @@ def test_install_wraps_calledprocesserror_from_systemctl(
 def test_install_wraps_filenotfounderror_from_systemctl(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Item 8 from external review: when systemctl isn't on PATH (minimal
-    container / chroot without systemd), the subprocess.run call raises
-    FileNotFoundError instead of CalledProcessError. Without the OSError
-    arm, the traceback escapes; cli.install only catches RuntimeError."""
+    """When systemctl isn't on PATH (minimal container / chroot without
+    systemd), the subprocess.run call raises FileNotFoundError instead of
+    CalledProcessError. Without the OSError arm, the traceback escapes;
+    cli.install only catches RuntimeError."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(
         "dbxignore.install.linux_systemd.detect_invocation",

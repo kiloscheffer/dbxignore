@@ -159,7 +159,7 @@ def uninstall_task() -> None:
     when this function returns, the daemon is gone (or the timeout fired
     and we logged a WARNING). Without /End first, the running task instance
     survives /Delete, and the orphaned daemon can write state.json after
-    `_purge_local_state()` removes it (item #87).
+    `_purge_local_state()` removes it.
     """
     # Lazy import: state imports psutil lazily inside is_daemon_alive,
     # which keeps this module's import surface small.

@@ -5,9 +5,8 @@ stub watchdog events directly into ``daemon._dispatch``, with a real
 ``RuleCache`` against an in-memory ``FakeMarkers`` backend. They are the
 deterministic counterpart to ``tests/test_daemon_smoke.py``: that test
 brings up a real daemon thread + ``Observer`` and is Windows-only and
-flake-prone (PR #135 instrumentation in PR #136 captured a trace showing
-``ReadDirectoryChangesW`` events silently dropped on CI runners — see
-backlog item #34). Bypassing the watchdog event loop here removes the
+flake-prone (a trace showed ``ReadDirectoryChangesW`` events silently
+dropped on CI runners). Bypassing the watchdog event loop here removes the
 kernel-event-delivery dependency while preserving coverage of every layer
 the smoke test was uniquely covering: rule-cache reload, conflict
 detection, reconcile traversal, and the ``set_ignored`` / ``clear_ignored``
@@ -55,13 +54,13 @@ def test_rule_modify_event_dropping_negation_emits_warning_and_keeps_parent(
 ) -> None:
     """Append a negation the conflict detector drops at rule-load time.
 
-    Under PR #33's negation-conflict semantics, ``!build/keep/`` underneath
-    an earlier ``build/`` include is masked at rule-load time, dropped from
-    the active rule set, and a WARNING emits. After the rule-modify event
-    flows through ``_dispatch``: the parent ``build/`` stays marked (the
-    re-walk doesn't clear it), the cache's match for the negated path still
-    reports ``True`` (the dropped negation is silenced), and the conflict
-    WARNING reaches ``dbxignore.rules`` at WARNING level.
+    ``!build/keep/`` underneath an earlier ``build/`` include is masked at
+    rule-load time, dropped from the active rule set, and a WARNING emits.
+    After the rule-modify event flows through ``_dispatch``: the parent
+    ``build/`` stays marked (the re-walk doesn't clear it), the cache's match
+    for the negated path still reports ``True`` (the dropped negation is
+    silenced), and the conflict WARNING reaches ``dbxignore.rules`` at
+    WARNING level.
     """
     root = tmp_path.resolve()
     (root / "build" / "keep").mkdir(parents=True)
@@ -123,10 +122,10 @@ def test_dir_create_under_dropped_negation_marks_path_via_dispatch(
     """A directory under a dropped-negation pattern still gets marked.
 
     With rule ``build/\\n!build/keep/\\n``, the conflict detector drops
-    the negation at rule-load time (PR #33 — Dropbox inherits ignored
-    state from ancestors, so the negation can't take effect). The
-    cache's ``match`` therefore reports the negated path as ignored, and
-    a DIR_CREATE event for that path reconciles to a marker write.
+    the negation at rule-load time (Dropbox inherits ignored state from
+    ancestors, so the negation can't take effect). The cache's ``match``
+    therefore reports the negated path as ignored, and a DIR_CREATE event
+    for that path reconciles to a marker write.
 
     This is the dispatch-level half of the coverage that the prior
     Windows smoke test uniquely exercised (its

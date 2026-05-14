@@ -19,16 +19,16 @@
 .PARAMETER InstallSpec
     The dbxignore package spec to install via `uv tool install`. Defaults
     to "dbxignore" (latest from PyPI). Accepts version pins
-    ("dbxignore==0.4.1"), git refs ("git+https://github.com/.../@v0.4.1"),
+    ("dbxignore==<version>"), git refs ("git+https://github.com/.../@<tag>"),
     or a local directory ("." for current checkout). When InstallSpec is
     a local directory, Phase 2 also runs `uv cache clean dbxignore` first
-    to force a fresh build (item #116 — uv's path-keyed sdist cache
-    doesn't change-detect against git state).
+    to force a fresh build (uv's path-keyed sdist cache doesn't
+    change-detect against git state).
     Equivalent to DBXIGNORE_INSTALL_SPEC in the bash scripts.
 
 .EXAMPLE
     .\manual-test-windows.ps1
-    .\manual-test-windows.ps1 -InstallSpec "dbxignore==0.4.1"
+    .\manual-test-windows.ps1 -InstallSpec "dbxignore==<version>"
     .\manual-test-windows.ps1 -InstallSpec "git+https://github.com/kiloscheffer/dbxignore.git@main"
 
 .NOTES
@@ -36,8 +36,8 @@
     refuse to operate as Administrator (the per-user Task Scheduler entry
     targets the interactive user, not SYSTEM).
 
-    Manual visual verification (post-#238 dual-binary): after all phases
-    pass, manually double-click `dbxignorew.exe` (the GUI helper, NOT the
+    Manual visual verification (dual-binary): after all phases pass,
+    manually double-click `dbxignorew.exe` (the GUI helper, NOT the
     `dbxignore.exe` CLI) from File Explorer; expect a MessageBox dialog
     with title "dbxignore" and body containing "dbxignore is a
     command-line tool". Click OK to dismiss. This verifies the GUI-subsystem
@@ -46,7 +46,7 @@
     will briefly flash a console window and exit — that's expected for the
     CLI binary.)
 
-    Manual visual verification for shell-verb GUI dialogs (post-#238):
+    Manual visual verification for shell-verb GUI dialogs:
     After Phase 7 cleanup, manually:
     1. Re-install dbxignore (`dbxignore install`) so the shell verbs register.
     2. In Explorer, right-click any test file in your Dropbox folder.
@@ -291,14 +291,14 @@ function Test-InstallDbxignore {
         uv tool uninstall dbxignore 2>$null | Out-Null
     }
 
-    # BACKLOG #116: invalidate uv's path-keyed sdist cache for local-source
-    # installs. Without this, `uv tool install .` from a directory that's
-    # been built before reuses the cached wheel at `sdists-v9/path/<dir-hash>/`
-    # — the cache key is the source dir path, not the git SHA, so commits
-    # don't invalidate it. Excludes PyPI names and git URLs (which aren't
-    # existing directories).
+    # Invalidate uv's path-keyed sdist cache for local-source installs.
+    # Without this, `uv tool install .` from a directory that's been built
+    # before reuses the cached wheel at `sdists-v9/path/<dir-hash>/` — the
+    # cache key is the source dir path, not the git SHA, so commits don't
+    # invalidate it. Excludes PyPI names and git URLs (which aren't existing
+    # directories).
     if (Test-Path -PathType Container $InstallSpec -ErrorAction SilentlyContinue) {
-        Write-Note "local-source InstallSpec - cleaning uv cache for dbxignore (item #116)"
+        Write-Note "local-source InstallSpec - cleaning uv cache for dbxignore"
         uv cache clean dbxignore 2>$null | Out-Null
     }
 
@@ -323,8 +323,7 @@ function Test-CliSurface {
     # tests/test_cli_entrypoints.py: "daemon" + "[OPTIONS]" present,
     # "COMMAND" / "[ARGS]" absent (a regression that accidentally adds
     # subcommands to the daemon subcommand surfaces here).
-    # Before BACKLOG #30 this tested `dbxignored --help`; post-#30 the daemon
-    # is reached via `dbxignore daemon`.
+    # The daemon is reached via `dbxignore daemon`.
     $rawHelp   = (dbxignore daemon --help 2>&1) -join "`n"
     $plainHelp = $rawHelp -replace "`e\[[0-9;]*m", ""
     $usageLine = ($plainHelp -split "`r?`n" | Where-Object { $_ -match 'Usage:' } | Select-Object -First 1)
@@ -466,7 +465,7 @@ function Test-ExtendedCli {
     }
 
     # 4g — init refuses an unwritable target dir with exit 2 + a clean
-    # "cannot write" message rather than an unhandled OSError traceback (PR #248).
+    # "cannot write" message rather than an unhandled OSError traceback.
     Write-Note "4g - dbxignore init on an unwritable directory"
     $roDir = Join-Path $T "init-readonly"
     New-Item -ItemType Directory -Force -Path $roDir | Out-Null
@@ -495,7 +494,7 @@ function Test-ExtendedCli {
     # `-NoNewline` + explicit trailing `` `n `` writes pure LF (matches the
     # bash version's `printf 'X\n' >` output). Without `-NoNewline`,
     # Set-Content appends a trailing CRLF that breaks the byte-for-byte
-    # assertion even after the cli.generate LF-pin (item #110).
+    # assertion even with the cli.generate LF-pin in place.
     Write-Note "4h - dbxignore generate (byte-for-byte)"
     Reset-TestDir -Path $T
     Set-Content -Path "$T\source.gitignore" -Value "node_modules/`n*.log`n" -Encoding utf8 -NoNewline
@@ -508,10 +507,10 @@ function Test-ExtendedCli {
         Write-Fail "4h - generate output differs from source"
     }
 
-    # 4i — generate warns on dropped negation (PR #108)
+    # 4i — generate warns on dropped negation
     # `-NoNewline` + explicit trailing `` `n `` writes pure LF (matches the bash
-    # version's `printf 'X\n' >` output). The LF-pin in cli.generate (item
-    # #110) preserves the byte-for-byte invariant despite the conflict warning.
+    # version's `printf 'X\n' >` output). The LF-pin in cli.generate preserves
+    # the byte-for-byte invariant despite the conflict warning.
     Write-Note "4i - generate emits stderr warning on dropped negation"
     Reset-TestDir -Path $T
     Set-Content -Path "$T\source.gitignore" -Value "build/`n!build/keep/`n" -Encoding utf8 -NoNewline
@@ -531,7 +530,7 @@ function Test-ExtendedCli {
         Write-Fail "4i - file content differs from source despite warning"
     }
 
-    # 4j — apply --dry-run does not mutate (PR #103)
+    # 4j — apply --dry-run does not mutate
     Write-Note "4j - apply --dry-run"
     Reset-TestDir -Path $T -DropboxignoreContent "*.tmp"
     New-Item -ItemType File -Path "$T\foo.tmp" -Force | Out-Null
@@ -547,7 +546,7 @@ function Test-ExtendedCli {
     }
     Assert-AdsUnset -Path "$T\foo.tmp" -Name "4j - dry-run did not mutate marker"
 
-    # 4k — apply --yes runs without prompting (PR #107)
+    # 4k — apply --yes runs without prompting
     Write-Note "4k - apply --yes skips the prompt"
     $yesOut = "$env:TEMP\dbxignore-yes.out"
     dbxignore apply "$T" --yes *> $yesOut
@@ -561,7 +560,7 @@ function Test-ExtendedCli {
         Write-Fail "4k - --yes did not skip the prompt"
     }
 
-    # 4l — apply on already-converged state says "Nothing to apply" (PR #107)
+    # 4l — apply on already-converged state says "Nothing to apply"
     Write-Note "4l - apply on no-op state"
     $noopOut = "$env:TEMP\dbxignore-noop.out"
     # PowerShell can't redirect stdin from a file like bash's `< /dev/null`,
@@ -583,14 +582,14 @@ function Test-ExtendedCli {
         Write-Fail "4l - did not emit 'Nothing to apply'"
     }
 
-    # 4m — detector regression: case4m_target/* + !case4m_target/keep/ no conflict (PR #108)
+    # 4m — detector regression: case4m_target/* + !case4m_target/keep/ no conflict
     # Uses `case4m_target` instead of the generic `build` because testers who
     # have run `dbxignore init` at their Dropbox root carry a `build/` rule
     # at the ancestor `.dropboxignore`. Dropbox's directory-inheritance
     # semantic would then mark the test's `build/` via the ancestor rule and
     # mask the local `!build/keep/` negation — a real but unrelated effect
     # that the case 4m assertion would mis-attribute as "detector fix didn't
-    # apply" (backlog item #111).
+    # apply".
     Write-Note "4m - detector fix: case4m_target/* + !case4m_target/keep/ no conflict"
     Remove-Item -Path $T -Recurse -Force
     New-Item -ItemType Directory -Path "$T\case4m_target\keep" -Force | Out-Null
@@ -610,14 +609,14 @@ function Test-ExtendedCli {
         Write-Pass "4m - status reports no conflicts (detector fix applied)"
     }
 
-    # 4n — dbxignore clear basic (PR #100); daemon-alive guard tested in phase 5
+    # 4n — dbxignore clear basic; daemon-alive guard tested in phase 5
     Write-Note "4n - dbxignore clear (basic, daemon not alive)"
     $clearOut = "$env:TEMP\dbxignore-clear.out"
     dbxignore clear "$T" --yes *> $clearOut
     if ($LASTEXITCODE -eq 0) { Write-Pass "4n - clear (rc=0)" } else { Write-Fail "4n - clear"; Get-Content $clearOut | ForEach-Object { Write-Note "    $_" } }
     Assert-AdsUnset -Path "$T\case4m_target\foo.tmp" -Name "4n - clear removed case4m_target/foo.tmp marker"
 
-    # 4o — dbxignore ignore <path> happy path (PR #191)
+    # 4o — dbxignore ignore <path> happy path
     Write-Note "4o - dbxignore ignore (basic)"
     $target4o = Join-Path $script:DropboxDir "dbxignore_test_4o"
     if (Test-Path $target4o) { Remove-Item -Path $target4o -Recurse -Force }
@@ -633,7 +632,7 @@ function Test-ExtendedCli {
     }
     Assert-AdsSet -Path $target4o -Name "4o - marker set on target"
 
-    # 4p — dbxignore unignore <path> happy path (PR #191)
+    # 4p — dbxignore unignore <path> happy path
     Write-Note "4p - dbxignore unignore (basic)"
     $unignoreOut = "$env:TEMP\dbxignore-unignore.out"
     dbxignore unignore $target4o --yes *> $unignoreOut
@@ -646,7 +645,7 @@ function Test-ExtendedCli {
     Assert-AdsUnset -Path $target4o -Name "4p - marker cleared on target"
     Remove-Item -Path $target4o -Recurse -Force
 
-    # 4q — dbxignore unignore wildcard collision (PR #191)
+    # 4q — dbxignore unignore wildcard collision
     Write-Note "4q - dbxignore unignore refuses wildcard blocker"
     $target4q = Join-Path $script:DropboxDir "dbxignore_test_4q"
     if (Test-Path $target4q) { Remove-Item -Path $target4q -Recurse -Force }
@@ -672,7 +671,7 @@ function Test-ExtendedCli {
     }
     Remove-Item -Path $target4q -Recurse -Force
 
-    # 4r — clear/list exit 2 on nonexistent path (PR #195, item #95)
+    # 4r — clear/list exit 2 on nonexistent path
     Write-Note "4r - clear/list error on nonexistent path"
     $nonexist = Join-Path $script:DropboxDir "dbxignore-test-nonexistent-$PID"
 
@@ -710,7 +709,7 @@ function Test-ExtendedCli {
         Write-Fail "4r - list stderr missing 'does not exist'"
     }
 
-    # 4s — clear fail-closed on unreadable state.json (PR #203, item #97 Codex P2 followup)
+    # 4s — clear fail-closed on unreadable state.json
     # state.json exists but `state.read()` returns None (deny ACL → PermissionError
     # → _read_at returns None). cli.clear refuses to proceed because daemon
     # liveness is unknown; --force overrides.
@@ -790,7 +789,7 @@ function Test-ExtendedCli {
         }
     }
 
-    # 4t — path-taking verbs refuse `..` after a symlinked component (PR #205, item #105)
+    # 4t — path-taking verbs refuse `..` after a symlinked component
     # Lexical normalization of `link\..` differs from filesystem-true resolution;
     # `_normalize_under_root` rejects the path up-front. One verb (explain) suffices —
     # the guard lives in the shared validator and unit tests cover all 5 verbs.
@@ -827,11 +826,9 @@ function Test-ExtendedCli {
         }
     }
 
-    # 4u — dbxignore --help prints synchronously to PowerShell (post-#238 dual-binary)
-    # The dual-binary design replaces the GUI-subsystem dbxignore.exe from
-    # #30 with a console-subsystem CLI binary. PowerShell now waits
-    # synchronously on it like any normal console program — no pipe or
-    # capture trick needed to see the output.
+    # 4u — dbxignore --help prints synchronously to PowerShell
+    # The console-subsystem CLI binary lets PowerShell wait synchronously —
+    # no pipe or capture trick needed to see the output.
     $helpOut = (dbxignore --help 2>&1) -join "`n"
     if ($helpOut -match "Usage:") {
         Write-Pass "4u - dbxignore --help prints synchronously (Usage: line visible)"
@@ -839,7 +836,7 @@ function Test-ExtendedCli {
         Write-Fail "4u - dbxignore --help did not surface Usage: line in plain invocation"
     }
 
-    # 4v - clear/list exit 2 on injected marker-read failure (PR #249, item #121)
+    # 4v - clear/list exit 2 on injected marker-read failure
     # DBXIGNORE_TEST_FAIL_MARKER_READ makes markers.is_ignored raise OSError
     # inside _walk_marked_paths, exercising the scan_errors exit-2 path that
     # unit tests pin but a healthy filesystem can't otherwise trigger. PowerShell
@@ -949,7 +946,7 @@ function Get-Verb5gState {
 function Test-Daemon {
     Write-Phase "Phase 5 - daemon (Task Scheduler + watchdog)"
 
-    # 5-pre — uv tool venv ships a GUI-subsystem pythonw.exe (item #138, PR #253)
+    # 5-pre — uv tool venv ships a GUI-subsystem pythonw.exe
     # The daemon's Task Scheduler entry is dbxignorew.exe, a GUI-script
     # trampoline that re-execs the sibling pythonw.exe. The chain is only
     # windowless when that pythonw.exe is itself GUI-subsystem. uv *project*
@@ -962,8 +959,8 @@ function Test-Daemon {
     # change that silently reintroduces the console window is caught.
     #
     # Static PE-header check, so no file manipulation and no restore needed.
-    # Codex P2 on PR #229: the uv tool dir respects UV_TOOL_DIR and varies
-    # across uv versions, so derive it from `uv tool dir`.
+    # The uv tool dir respects UV_TOOL_DIR and varies across uv versions,
+    # so derive it from `uv tool dir`.
     $toolDir = $null
     try {
         $toolDir = (uv tool dir 2>$null | Out-String).Trim()
@@ -995,8 +992,8 @@ function Test-Daemon {
     $T = Join-Path $script:DropboxDir $TestSubdir
     Reset-TestDir -Path $T -DropboxignoreContent "*.tmp"
 
-    # Slow-sweep determinism (BACKLOG #89). Seed a 15s pad so 5a's 5-iteration
-    # state=starting poll deterministically catches the transient state and
+    # Slow-sweep determinism. Seed a 15s pad so 5a's 5-iteration state=starting
+    # poll deterministically catches the transient state and
     # 5f's 180s poll deterministically observes the transition to running,
     # regardless of the watched-tree size. The daemon logs WARNING when it
     # honors this; cleanup at the end of phase 5 removes it before phase 6.
@@ -1006,7 +1003,7 @@ function Test-Daemon {
         New-Item -ItemType Directory -Path $slowSweepDir -Force | Out-Null
     }
     Set-Content -Path $slowSweepMarker -Value "15" -Encoding ascii -NoNewline
-    Write-Note "5 - slow-sweep marker seeded: 15s pad on initial sweep (item #89)"
+    Write-Note "5 - slow-sweep marker seeded: 15s pad on initial sweep"
 
     $installOut = "$env:TEMP\dbxignore-install.out"
     dbxignore install *> $installOut
@@ -1018,7 +1015,7 @@ function Test-Daemon {
         return
     }
 
-    # install verbosity defaults (PR #234) - default WARNING quiets install-backend
+    # install verbosity defaults - default WARNING quiets install-backend
     # INFO chatter; the click.echo summary line still surfaces.
     $installContents = Get-Content $installOut -Raw
     if ($installContents -match "Installed dbxignore daemon service") {
@@ -1048,10 +1045,10 @@ function Test-Daemon {
     # Task XML <Command> element targets the windowless daemon launcher.
     # Both install paths resolve to dbxignorew.exe: the frozen install
     # ships it as a GUI-subsystem PyInstaller binary; the non-frozen
-    # `uv tool install` path gets it as the [project.gui-scripts]
-    # trampoline pip/uv generate (item #137). pythonw.exe is no longer a
-    # daemon launcher — a uv venv's pythonw.exe is a console-subsystem copy
-    # of python.exe and would allocate a visible console at logon.
+    # `uv tool install` path gets it as the [project.gui-scripts] trampoline
+    # pip/uv generate. pythonw.exe is not a daemon launcher — a uv venv's
+    # pythonw.exe is a console-subsystem copy of python.exe and would
+    # allocate a visible console at logon.
     $xml = schtasks /Query /TN dbxignore /XML 2>$null
     if ($xml -match "<Arguments>.*daemon.*</Arguments>") {
         Write-Pass "Task scheduled with 'daemon' argument"
@@ -1087,14 +1084,14 @@ function Test-Daemon {
         return
     }
 
-    # 5a - opportunistic state=starting capture (PR #162). Probed AFTER
-    # the watching-roots break: daemon.run logs 'watching roots' BEFORE
-    # writing the early state.json (daemon.py:663 then :678), so an
-    # in-loop probe races state.write and almost always misses. Post-
-    # readiness, state.json appears within microseconds; on a real
-    # Dropbox tree state=starting is observable for the ~50s sweep
-    # window. On a small test tree the worker can finish before we
-    # probe - that's the small-tree caveat the note path covers.
+    # 5a - opportunistic state=starting capture. Probed AFTER the
+    # watching-roots break: daemon.run logs 'watching roots' BEFORE writing
+    # the early state.json (daemon.py:663 then :678), so an in-loop probe
+    # races state.write and almost always misses. Post-readiness, state.json
+    # appears within microseconds; on a real Dropbox tree state=starting is
+    # observable for the ~50s sweep window. On a small test tree the worker
+    # can finish before we probe - that's the small-tree caveat the note
+    # path covers.
     $sawStarting = $false
     for ($i = 0; $i -lt 5; $i++) {
         $probe = (dbxignore status --summary 2>$null | Select-Object -First 1)
@@ -1104,20 +1101,20 @@ function Test-Daemon {
         Start-Sleep -Seconds 1
     }
     if ($sawStarting) {
-        Write-Pass "5a - observed state=starting via --summary post-readiness (PR #162)"
+        Write-Pass "5a - observed state=starting via --summary post-readiness"
     } else {
         Write-Note "5a - state=starting not observed within 5s post-readiness (small tree where sweep finished, or state.json not yet written); 5f still pins state=running"
     }
 
     # 5a-post - gate watchdog tests on state=running (cache populated).
     # cache.load_root runs in _initial_sweep_worker, NOT the main thread
-    # (item #53 + daemon.py:638). When the slow-sweep marker pads the
-    # worker, RuleCache stays empty until the pad expires AND load_root
-    # finishes - watchdog events arriving during that window dispatch
-    # against match()=False, so 5b would observe an unmarked file even
-    # though the rule applies. Even without the marker, a slow sweep on
-    # a real Dropbox tree could race 5b's 8-second create-and-check
-    # window - this gate makes the test deterministic in both cases.
+    # (daemon.py:638). When the slow-sweep marker pads the worker, RuleCache
+    # stays empty until the pad expires AND load_root finishes - watchdog
+    # events arriving during that window dispatch against match()=False, so
+    # 5b would observe an unmarked file even though the rule applies. Even
+    # without the marker, a slow sweep on a real Dropbox tree could race
+    # 5b's 8-second create-and-check window - this gate makes the test
+    # deterministic in both cases.
     Write-Note "5a-post - waiting up to 180s for state=running (cache populated)"
     $cacheReady = $false
     for ($i = 0; $i -lt 180; $i++) {
@@ -1161,9 +1158,9 @@ function Test-Daemon {
         _Dump-DaemonDiagnostics -T $T
     }
 
-    # 5d — DIR_CREATE bypass (item 57) — newly created dir matching a rule
+    # 5d — DIR_CREATE bypass — newly created dir matching a rule
     # should be marked synchronously without waiting the OTHER debounce.
-    Write-Note "5d - DIR_CREATE bypass for matched directory (item 57)"
+    Write-Note "5d - DIR_CREATE bypass for matched directory"
     Set-Content -Path "$T\.dropboxignore" -Value "*.tmp`n*.dat`nbuild_*/" -Encoding utf8
     Start-Sleep -Seconds 6                            # let the rule reload settle
     New-Item -ItemType Directory -Path "$T\build_x" -Force | Out-Null
@@ -1176,7 +1173,7 @@ function Test-Daemon {
         _Dump-DaemonDiagnostics -T $T
     }
 
-    # 5e — clear refuses while daemon alive (PR #100); --force overrides.
+    # 5e — clear refuses while daemon alive; --force overrides.
     Write-Note "5e - clear refuses while daemon alive"
     $clearAliveOut = "$env:TEMP\dbxignore-clear-alive.out"
     dbxignore clear "$T" --yes *> $clearAliveOut
@@ -1199,7 +1196,7 @@ function Test-Daemon {
     # watch-me.tmp's marker, and Phase 6's "uninstall — markers retained on
     # watch-me.tmp" assertion would then fail vacuously (the marker is gone
     # before uninstall even runs). The override behavior is demonstrated
-    # identically on a single-file target. Item #112.
+    # identically on a single-file target.
     dbxignore clear "$T\freshrule.dat" --force --yes 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) {
         Write-Pass "5e - clear --force overrides daemon-alive guard"
@@ -1207,22 +1204,20 @@ function Test-Daemon {
         Write-Fail "5e - clear --force did not override the guard"
     }
 
-    # 5f - post-sweep status surface (PR #162). --summary returns the full
-    # state=running field set; human path emits the 'daemon: running' line
-    # distinct from the new 'daemon: starting (initial sweep in progress)'
-    # branch.
+    # 5f - post-sweep status surface. --summary returns the full state=running
+    # field set; human path emits the 'daemon: running' line distinct from
+    # the 'daemon: starting (initial sweep in progress)' branch.
     #
-    # PR #162 marks the daemon ready (and logs 'watching roots') BEFORE
-    # the initial sweep completes - so the watching-roots poll above is
-    # NOT a sweep-complete sentinel post-#162. On a real Dropbox tree
-    # the sweep can still be running when 5f probes, in which case
-    # --summary correctly emits 'state=starting pid=N' (truncated form).
-    # Poll for state=running for up to 180s to absorb the transition -
-    # matches the watching-roots-wait headroom above. Each iteration also
-    # spawns dbxignore.exe (~300-500ms shim startup on Windows), so the
-    # actual wall-clock window can extend past 180s; acceptable for a
-    # manual smoke test.
-    Write-Note "5f - status --summary post-sweep + human 'daemon: running' line (PR #162)"
+    # The daemon marks itself ready (and logs 'watching roots') BEFORE the
+    # initial sweep completes - so the watching-roots poll above is NOT a
+    # sweep-complete sentinel. On a real Dropbox tree the sweep can still be
+    # running when 5f probes, in which case --summary correctly emits
+    # 'state=starting pid=N' (truncated form). Poll for state=running for up
+    # to 180s to absorb the transition - matches the watching-roots-wait
+    # headroom above. Each iteration also spawns dbxignore.exe (~300-500ms
+    # shim startup on Windows), so the actual wall-clock window can extend
+    # past 180s; acceptable for a manual smoke test.
+    Write-Note "5f - status --summary post-sweep + human 'daemon: running' line"
     $sumLate = ""
     $sumPattern = '^state=running pid=\d+ marked=\d+ cleared=\d+ errors=\d+ conflicts=\d+$'
     for ($i = 0; $i -lt 180; $i++) {
@@ -1247,7 +1242,7 @@ function Test-Daemon {
         Write-Fail "5f - human status did not report 'daemon: running'"
     }
 
-    # 5g — registry keys after default install (PR #222)
+    # 5g — registry keys after default install
     # Read-only: doesn't mutate state. Phase 5 ends in installed-daemon
     # state, exactly as today, so Phase 6's `dbxignore uninstall` precondition
     # is preserved.
@@ -1259,9 +1254,8 @@ function Test-Daemon {
     # Dependent registry-property assertions are guarded on Test-Path —
     # `$ErrorActionPreference = "Stop"` (script line 44) would otherwise
     # cause `Get-ItemProperty` against a missing key to hard-crash and
-    # abort the rest of Phase 5g (and Phases 6 + 7 cleanup). Surfaced
-    # when running with the default `-InstallSpec dbxignore` against
-    # PyPI 0.5.1, which pre-dates PR #222's shell-integration.
+    # abort the rest of Phase 5g (and Phases 6 + 7 cleanup). Applies when
+    # running against a version that pre-dates shell-integration.
     if ((Test-Path $ignoreKey) -and (Test-Path $restoreKey)) {
         Write-Pass "5g - both verb keys present"
 
@@ -1300,17 +1294,14 @@ function Test-Daemon {
         Write-Fail "5g - verb keys missing after default install (skipping registry-property assertions)"
     }
 
-    # 5g - Explorer-verb fidelity probes (BACKLOG #115)
+    # 5g - Explorer-verb fidelity probes
     # The registry-string assertions above check what we wrote but not
-    # whether Windows Explorer's AQS evaluator agrees. PR #224 fixed a
-    # backslash-doubling regression that passed every existing 5g check
-    # because the stored AppliesTo parsed fine but matched no real path —
-    # the verbs registered, then were invisible in Explorer. These two
-    # sub-cases drive Shell.Application (the same COM surface Explorer
-    # uses) against real files: one inside the Dropbox root (verb must
-    # surface) and one in a sibling folder whose name starts with the
-    # Dropbox basename (verb must NOT surface — exercises the trailing-`\`
-    # invariant in the `:~<` prefix clause).
+    # whether Windows Explorer's AQS evaluator agrees. These two sub-cases
+    # drive Shell.Application (the same COM surface Explorer uses) against
+    # real files: one inside the Dropbox root (verb must surface) and one in
+    # a sibling folder whose name starts with the Dropbox basename (verb must
+    # NOT surface — exercises the trailing-`\` invariant in the `:~<` prefix
+    # clause).
     Write-Note "5g - Shell.Application surfaces 'Ignore from Dropbox' inside Dropbox root"
     $probeFile = Join-Path $T "_5g_probe.tmp"
     Set-Content -Path $probeFile -Value "probe" -Encoding ascii -NoNewline
@@ -1336,11 +1327,11 @@ function Test-Daemon {
     # make the prefix `C:\Dropbox` match `C:\Dropbox-dbxignore-5g-sibling`
     # too, surfacing the verb here.
     #
-    # Codex P2 (PR #225): the sibling-dir name is fixed and lives outside
-    # `$T`. A tester with a pre-existing directory at that path would have
-    # their data wiped by the `finally` block. Refuse to proceed when the
-    # path already exists so the tester can rename/remove it manually,
-    # rather than silently overwriting user data.
+    # The sibling-dir name is fixed and lives outside `$T`. A tester with a
+    # pre-existing directory at that path would have their data wiped by the
+    # `finally` block. Refuse to proceed when the path already exists so the
+    # tester can rename/remove it manually, rather than silently overwriting
+    # user data.
     Write-Note "5g - Shell.Application does NOT surface 'Ignore from Dropbox' outside Dropbox root"
     $siblingDir = "$($script:DropboxDir)-dbxignore-5g-sibling"
     if (Test-Path $siblingDir) {
@@ -1368,11 +1359,11 @@ function Test-Daemon {
     }
 
     # Remove slow-sweep marker so phase 6's re-install + uninstall cycles
-    # run with normal sweep timing (item #89). Phase 7 also removes it as
-    # a defensive backstop if this point is never reached.
+    # run with normal sweep timing. Phase 7 also removes it as a defensive
+    # backstop if this point is never reached.
     if (Test-Path $slowSweepMarker) {
         Remove-Item $slowSweepMarker -Force -ErrorAction SilentlyContinue
-        Write-Note "5 - slow-sweep marker removed before phase 6 (item #89)"
+        Write-Note "5 - slow-sweep marker removed before phase 6"
     }
 }
 
@@ -1388,21 +1379,19 @@ function Test-Uninstall {
     $stateFile = Join-Path $stateDir "state.json"
 
     # plain uninstall: scheduled task removed, markers retained.
-    # Post-#87, install/windows_task.py:uninstall_task runs schtasks
-    # /End + waits for the daemon to exit + schtasks /Delete /F. By
-    # the time `dbxignore uninstall` returns, the daemon process is
-    # gone — same synchronous-shutdown contract as Linux's
-    # `systemctl --user disable --now` and macOS's `launchctl bootout`.
-    # The PR #169 Wait-Process workarounds previously here are no
-    # longer needed; single-shot probes for 6a/6b are sufficient.
+    # install/windows_task.py:uninstall_task runs schtasks /End + waits for
+    # the daemon to exit + schtasks /Delete /F. By the time `dbxignore
+    # uninstall` returns, the daemon process is gone — same
+    # synchronous-shutdown contract as Linux's `systemctl --user disable
+    # --now` and macOS's `launchctl bootout`. Single-shot probes for
+    # 6a/6b are sufficient.
     #
-    # Capture the pre-uninstall daemon_pid so the post-reinstall poll
-    # below can wait for state.json to advance to the NEW daemon's pid
-    # before --purge fires. Without that gate, --purge reads the stale
-    # daemon_pid from state.json (retained by plain uninstall), routes
-    # uninstall_task's synchronous wait at the long-dead pid, and
-    # /Delete reverts to fire-and-forget against the live re-installed
-    # daemon — exactly the race #87 was meant to close.
+    # Capture the pre-uninstall daemon_pid so the post-reinstall poll below
+    # can wait for state.json to advance to the NEW daemon's pid before
+    # --purge fires. Without that gate, --purge reads the stale daemon_pid
+    # from state.json (retained by plain uninstall), routes
+    # uninstall_task's synchronous wait at the long-dead pid, and /Delete
+    # reverts to fire-and-forget against the live re-installed daemon.
     $oldPid = $null
     if (Test-Path $stateFile) {
         try {
@@ -1413,7 +1402,7 @@ function Test-Uninstall {
     }
 
     # -v added to verify the verbosity flag surfaces install-backend INFO
-    # chatter end-to-end (PR #234). Default-quiet side is verified in Phase 5.
+    # chatter end-to-end. Default-quiet side is verified in Phase 5.
     $uninstOut = "$env:TEMP\dbxignore-uninst.out"
     dbxignore -v uninstall *> $uninstOut
     if ($LASTEXITCODE -eq 0) {
@@ -1441,11 +1430,11 @@ function Test-Uninstall {
         Assert-AdsSet -Path "$T\watch-me.tmp" -Name "uninstall - markers retained on watch-me.tmp"
     }
 
-    # 6a - status --summary returns state=not_running post-uninstall (PR #162).
-    # state.json is retained by plain uninstall; the daemon process is
-    # gone (synchronous teardown per #87), so daemon_is_running(s) is
-    # False on the first probe. Single-shot.
-    Write-Note "6a - status --summary post-uninstall (PR #162, simplified post-#87)"
+    # 6a - status --summary returns state=not_running post-uninstall.
+    # state.json is retained by plain uninstall; the daemon process is gone
+    # (synchronous teardown), so daemon_is_running(s) is False on the first
+    # probe. Single-shot.
+    Write-Note "6a - status --summary post-uninstall"
     $sumUninst = (dbxignore status --summary 2>&1 | Select-Object -First 1)
     if ($sumUninst -match '^state=not_running pid=\d+ marked=\d+ cleared=\d+ errors=\d+ conflicts=\d+$') {
         Write-Pass "6a - --summary post-uninstall: $sumUninst"
@@ -1453,7 +1442,7 @@ function Test-Uninstall {
         Write-Fail "6a - --summary post-uninstall did not match expected pattern: $sumUninst"
     }
 
-    # 6c — registry keys gone after plain uninstall (PR #222)
+    # 6c — registry keys gone after plain uninstall
     Write-Note "6c - HKCU verb keys removed by default uninstall"
     $regBase = "HKCU:\Software\Classes\AllFilesystemObjects\shell"
     if (-not (Test-Path "$regBase\DbxignoreIgnore") -and -not (Test-Path "$regBase\DbxignoreRestore")) {
@@ -1472,11 +1461,10 @@ function Test-Uninstall {
     # uninstall, so a Test-Path-only check passes on the stale file
     # immediately and --purge ends up reading the dead pre-uninstall
     # daemon_pid — uninstall_task's synchronous wait would then target a
-    # long-dead pid and /Delete would revert to fire-and-forget against
-    # the actually-live re-installed daemon. Polling for daemon_pid !=
-    # $oldPid pins the test to the realistic "purge against a running
-    # daemon" race that #87 closes. PID reuse in a 10s window is
-    # vanishingly rare on Windows.
+    # long-dead pid and /Delete would revert to fire-and-forget against the
+    # actually-live re-installed daemon. Polling for daemon_pid != $oldPid
+    # pins the test to the realistic "purge against a running daemon" race.
+    # PID reuse in a 10s window is vanishingly rare on Windows.
     $reinstallPid = $null
     for ($i = 0; $i -lt 10; $i++) {
         if (Test-Path $stateFile) {
@@ -1506,39 +1494,37 @@ function Test-Uninstall {
         Write-Fail "dbxignore uninstall --purge"
         Get-Content $purgeOut | ForEach-Object { Write-Note "    $_" }
     }
-    # PR #204 regression guard: happy-path purge emits the "Cleared N" line but
+    # Happy-path purge regression guard: purge emits the "Cleared N" line but
     # must NOT emit the partial-failure error report. Forcing a real marker
     # OSError requires platform-specific FS contortions; the unit tests cover
     # the partial-failure assertion tightly. This guard pins the happy path.
     $purgeText = if (Test-Path $purgeOut) { Get-Content $purgeOut -Raw } else { "" }
     if ($purgeText -notmatch 'Could not fully clear') {
-        Write-Pass "purge - no spurious 'Could not fully clear' on happy path (PR #204)"
+        Write-Pass "purge - no spurious 'Could not fully clear' on happy path"
     } else {
         Write-Fail "purge - emitted 'Could not fully clear' on happy path"
         Get-Content $purgeOut | ForEach-Object { Write-Note "    $_" }
     }
-    # PR #241 parallel guard for the new state-files partial-failure report.
-    # Same trade-off as the marker guard above: forcing a state-dir OSError
-    # end-to-end needs platform-specific FS contortions (BACKLOG #127 — the
-    # Windows daemon.lock cascade requires manufacturing a hung daemon),
-    # and the unit tests pin the partial-failure assertion tightly. This
-    # guard pins the happy path against an accidental regression that would
-    # emit the report on every clean uninstall.
+    # Happy-path state-files partial-failure guard. Same trade-off as the
+    # marker guard above: forcing a state-dir OSError end-to-end needs
+    # platform-specific FS contortions (the Windows daemon.lock cascade
+    # requires manufacturing a hung daemon), and the unit tests pin the
+    # partial-failure assertion tightly. This guard pins the happy path
+    # against an accidental regression that would emit the report on every
+    # clean uninstall.
     if ($purgeText -notmatch 'Could not fully purge state files') {
-        Write-Pass "purge - no spurious 'Could not fully purge state files' on happy path (PR #241)"
+        Write-Pass "purge - no spurious 'Could not fully purge state files' on happy path"
     } else {
         Write-Fail "purge - emitted 'Could not fully purge state files' on happy path"
         Get-Content $purgeOut | ForEach-Object { Write-Note "    $_" }
     }
-    # PR #243 daemon-alive purge-refusal guard (BACKLOG #122). On a
-    # clean uninstall the guard returns False - the two stderr phrases
-    # below must not appear. Failure-path coverage deferred per BACKLOG
-    # #129 - forcing a daemon to survive uninstall_service requires
-    # platform-specific stuck-process simulation, and on Windows
-    # specifically the schtasks /End 30s-timeout case can't be reproduced
-    # without a stuck filesystem operation.
+    # Daemon-alive purge-refusal guard. On a clean uninstall the guard
+    # returns False - the two stderr phrases below must not appear.
+    # Failure-path coverage requires platform-specific stuck-process
+    # simulation; on Windows the schtasks /End 30s-timeout case can't be
+    # reproduced without a stuck filesystem operation.
     if ($purgeText -notmatch 'daemon is running' -and $purgeText -notmatch 'liveness is unknown') {
-        Write-Pass "purge - no spurious daemon-alive guard fire on happy path (PR #243)"
+        Write-Pass "purge - no spurious daemon-alive guard fire on happy path"
     } else {
         Write-Fail "purge - daemon-alive guard fired on happy path"
         Get-Content $purgeOut | ForEach-Object { Write-Note "    $_" }
@@ -1557,9 +1543,9 @@ function Test-Uninstall {
         }
     }
 
-    # 6b - status --summary returns state=no_state post-purge (PR #162).
+    # 6b - status --summary returns state=no_state post-purge.
     # Truncated form: 'state=no_state conflicts=N' with no pid/marked/etc.
-    Write-Note "6b - status --summary post-purge (PR #162)"
+    Write-Note "6b - status --summary post-purge"
     $sumPurge = (dbxignore status --summary 2>&1 | Select-Object -First 1)
     if ($sumPurge -match '^state=no_state conflicts=\d+$') {
         Write-Pass "6b - --summary post-purge: $sumPurge"
@@ -1567,7 +1553,7 @@ function Test-Uninstall {
         Write-Fail "6b - --summary post-purge did not match expected pattern: $sumPurge"
     }
 
-    # 6d / 6e — --no-shell-integration preservation + --purge override (PR #222)
+    # 6d / 6e — --no-shell-integration preservation + --purge override
     # Phase 6's existing flow ended with `dbxignore uninstall --purge` →
     # daemon gone, state gone, registry gone. We now exercise the
     # --no-shell-integration contrast cycle: re-install, plain uninstall
@@ -1602,7 +1588,7 @@ function Test-Uninstall {
     # retains it, leaving the stale pid in place). 6e's `--purge` must wait
     # until the *new* daemon's pid lands in state.json — otherwise `/Delete`
     # fires against the live re-installed daemon without the synchronous
-    # shutdown wait. Same race PR #87 / #172 closed for the main 6b purge.
+    # shutdown wait.
     $sixDpid = $null
     if (Test-Path $stateFile) {
         try {
@@ -1633,7 +1619,7 @@ function Test-Uninstall {
     if ($sixEpid) {
         Write-Pass "6e setup - state.json advanced to new daemon pid=$sixEpid (was $sixDpid)"
     } else {
-        Write-Fail "6e setup - state.json daemon_pid did not advance from old=$sixDpid within 10s; --purge below would test against stale state and miss the race PR #87 closes"
+        Write-Fail "6e setup - state.json daemon_pid did not advance from old=$sixDpid within 10s; --purge below would test against stale state"
     }
 
     # 6e - --purge --no-shell-integration: --purge overrides the preserve flag.
@@ -1650,15 +1636,14 @@ function Test-Uninstall {
         }
     }
 
-    # 6f - Codex P2 follow-up on PR #243's BACKLOG #122 Arm A: --purge now
-    # proceeds when state.json is unreadable AND no daemon process holds
-    # daemon.lock. Force the scenario: re-install (daemon starts),
-    # Stop-Process -Force the daemon (Task Scheduler RestartOnFailure
-    # Interval is PT1M = 60s, wide window for our uninstall to run),
-    # corrupt state.json so state.read() returns None, then run
-    # `dbxignore uninstall --purge`. uninstall_service removes the
-    # task registration before any restart fires.
-    Write-Note "6f - --purge recovers from corrupt state.json + dead daemon (BACKLOG #122 Codex P2)"
+    # 6f - --purge proceeds when state.json is unreadable AND no daemon
+    # process holds daemon.lock. Force the scenario: re-install (daemon
+    # starts), Stop-Process -Force the daemon (Task Scheduler
+    # RestartOnFailure Interval is PT1M = 60s, wide window for our uninstall
+    # to run), corrupt state.json so state.read() returns None, then run
+    # `dbxignore uninstall --purge`. uninstall_service removes the task
+    # registration before any restart fires.
+    Write-Note "6f - --purge recovers from corrupt state.json + dead daemon"
     $installOut6f = & dbxignore install 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "6f - re-install failed: $installOut6f"
@@ -1691,7 +1676,7 @@ function Test-Uninstall {
         Write-Fail "6f - corrupt state.json still present after recovery purge"
     }
 
-    # 6g - uninstall --purge exits 2 on injected state-file purge failure (PR #249, item #127)
+    # 6g - uninstall --purge exits 2 on injected state-file purge failure
     # DBXIGNORE_TEST_FAIL_STATE_PURGE makes _purge_dir's unlink loop raise
     # OSError, exercising the state_errors exit-2 path. Re-install first so the
     # daemon writes state.json / daemon.lock. Markers ARE cleared (the failure
@@ -1720,7 +1705,7 @@ function Test-Uninstall {
     # Recovery: clean --purge to remove the state files the injected run left.
     dbxignore uninstall --purge *> $null
 
-    # 6h - uninstall --purge exits 2 on injected daemon-alive guard (PR #249, item #129)
+    # 6h - uninstall --purge exits 2 on injected daemon-alive guard
     # DBXIGNORE_TEST_FAIL_DAEMON_ALIVE fires the --purge daemon-alive gate as if
     # a daemon survived service removal. The gate fires BEFORE the purge body,
     # so nothing is cleared; recovery is a clean --purge re-run.
@@ -1765,24 +1750,23 @@ function Test-Cleanup {
     # (Phase 5-pre is now a static PE-header check — no file manipulation,
     # so it needs no Phase 7 restore backstop.)
 
-    # Defensive backstop for the slow-sweep marker (item #89). Honoring a
-    # stale marker on a future install would silently pad every initial
-    # sweep, so make sure phase 7 cleans it up even when phase 5 returned
-    # early.
+    # Defensive backstop for the slow-sweep marker. Honoring a stale marker
+    # on a future install would silently pad every initial sweep, so make
+    # sure phase 7 cleans it up even when phase 5 returned early.
     $slowSweepMarker = Join-Path $env:LOCALAPPDATA "dbxignore\_test_slow_sweep"
     if (Test-Path $slowSweepMarker) {
         Remove-Item $slowSweepMarker -Force -ErrorAction SilentlyContinue
     }
 
-    # Defensive backstop for the 5g sibling probe dir (BACKLOG #115). The
-    # `try/finally` in phase 5g removes it on the happy path; a mid-phase-5
-    # abort could leave it behind, and it lives outside `$T` so the
-    # recursive cleanup above doesn't reach it.
+    # Defensive backstop for the 5g sibling probe dir. The `try/finally` in
+    # phase 5g removes it on the happy path; a mid-phase-5 abort could leave
+    # it behind, and it lives outside `$T` so the recursive cleanup above
+    # doesn't reach it.
     #
-    # Codex P2 (PR #225): only remove if the contents match what 5g.6 would
-    # have left behind — exactly one `probe.tmp` file and nothing else. A
-    # user-owned directory that happens to share the name (with their own
-    # contents) gets left untouched, with a warning.
+    # Only remove if the contents match what 5g.6 would have left behind —
+    # exactly one `probe.tmp` file and nothing else. A user-owned directory
+    # that happens to share the name (with their own contents) gets left
+    # untouched, with a warning.
     $sibling5g = "$($script:DropboxDir)-dbxignore-5g-sibling"
     if (Test-Path $sibling5g) {
         $contents = @(Get-ChildItem -Path $sibling5g -Force)

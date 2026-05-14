@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from tests.conftest import FakePsutilProcess
 
 
-# ---- singleton lock (followup item #78) -------------------------------------
+# ---- singleton lock ---------------------------------------------------------
 
 
 def test_acquire_singleton_lock_succeeds_on_fresh_state_dir(
@@ -34,9 +34,9 @@ def test_acquire_singleton_lock_returns_none_when_already_held(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Second acquisition while the first is still held returns None.
-    This is the singleton gate that backlog item #78 fixes — the prior
-    state-based check had a non-atomic read-then-write window where two
-    concurrent daemon launches could both proceed."""
+    This is the singleton gate — the prior state-based check had a
+    non-atomic read-then-write window where two concurrent daemon launches
+    could both proceed."""
     monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
     first = daemon._acquire_singleton_lock()
     assert first is not None
@@ -102,11 +102,9 @@ def test_run_refuses_when_singleton_lock_is_held(
 ) -> None:
     """daemon.run() refuses to start when daemon.lock is already held.
 
-    Replaces the prior subprocess-spawn-based test (a Windows-only timing
-    flake — backlog item #14). The new shape: the test process itself
-    acquires the lock, then calls daemon.run() — which sees contention
-    and refuses with an ERROR log. Deterministic, no subprocess, no
-    timing dependency.
+    The test process itself acquires the lock, then calls daemon.run() —
+    which sees contention and refuses with an ERROR log. Deterministic,
+    no subprocess, no timing dependency.
     """
     monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
     monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")
@@ -129,16 +127,15 @@ def test_run_refuses_when_legacy_daemon_alive_without_lock(
     caplog: pytest.LogCaptureFixture,
     fake_psutil_process: FakePsutilProcess,
 ) -> None:
-    """Migration defense-in-depth: a legacy (pre-#78) daemon wrote
-    state.json but never created daemon.lock. The new daemon's lock-
-    acquire succeeds (no contention from the legacy process), so without
-    a state-check after acquisition two daemons would run on the same
-    Dropbox roots during the migration window.
+    """Migration defense-in-depth: an older daemon wrote state.json but
+    never created daemon.lock. The new daemon's lock-acquire succeeds (no
+    contention from the legacy process), so without a state-check after
+    acquisition two daemons would run on the same Dropbox roots during the
+    migration window.
 
     Test: write a state.json with a legacy daemon's pid (no
-    daemon_create_time, simulating a pre-#79 record), mock psutil to
-    claim that pid is a live python process, call daemon.run(), assert
-    it refuses and releases the lock.
+    daemon_create_time), mock psutil to claim that pid is a live python
+    process, call daemon.run(), assert it refuses and releases the lock.
     """
     monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
     monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")

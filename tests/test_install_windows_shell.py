@@ -1,4 +1,4 @@
-"""Windows-only tests for HKCU shell-integration registry mechanics (#65).
+"""Windows-only tests for HKCU shell-integration registry mechanics.
 
 Module-level double guard mirrors the project's other Windows-only
 integration test files (e.g. tests/test_windows_ads_integration.py).

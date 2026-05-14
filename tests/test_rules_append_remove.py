@@ -1,4 +1,4 @@
-"""Unit tests for ``rules.append_rule`` and ``rules.remove_rule`` (item #93).
+"""Unit tests for ``rules.append_rule`` and ``rules.remove_rule``.
 
 Both helpers use atomic temp-then-replace writes to avoid torn state under
 SIGKILL or power loss. Tests verify idempotence, rstrip-equality semantics
@@ -141,8 +141,8 @@ def test_append_does_not_clobber_preexisting_dropboxignore_tmp(tmp_path: Path) -
     """A pre-existing ``.dropboxignore.tmp`` sibling — created by a concurrent
     CLI mutation in flight, an editor's atomic-save backup, or a stray user
     file — must survive the append. Previously ``append_rule`` wrote through
-    the fixed name ``<rule_file>.tmp`` and would have clobbered it
-    (item #101). The new ``mkstemp``-based shape picks a unique temp name."""
+    the fixed name ``<rule_file>.tmp`` and would have clobbered it.
+    The ``mkstemp``-based shape picks a unique temp name."""
     rule_file = tmp_path / ".dropboxignore"
     rule_file.write_text("node_modules/\n", encoding="utf-8")
     sentinel = tmp_path / ".dropboxignore.tmp"
@@ -195,7 +195,7 @@ def test_append_preserves_existing_rule_file_mode(tmp_path: Path) -> None:
     POSIX creates the temp at ``0o600`` for security; without an explicit
     chmod-then-replace, every ``ignore`` / ``unignore`` invocation would
     silently relock the rule file to user-only, breaking shared workflows.
-    Codex P2 follow-up on PR #207."""
+    """
     rule_file = tmp_path / ".dropboxignore"
     rule_file.write_text("build/\n", encoding="utf-8")
     os.chmod(rule_file, 0o644)

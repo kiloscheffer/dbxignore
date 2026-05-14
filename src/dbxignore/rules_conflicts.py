@@ -1,6 +1,6 @@
 """Static rule-conflict detection for `.dropboxignore` rule sequences.
 
-Extracts the detection layer from ``rules.py`` per followup item 6. The
+Extracts the detection layer from ``rules.py``. The
 functions here are pure — they take an in-memory rule sequence and a
 root path, and return a list of ``Conflict`` records. They have no
 coupling to ``RuleCache`` internals beyond the duck-typed shape of the
@@ -185,7 +185,7 @@ def _find_masking_include(
     include for that specific ancestor, no conflict is reported from that
     ancestor — pathspec's last-match-wins semantics is what matters.
 
-    Pre-PR-#108 behavior considered only includes and short-circuited on
+    Earlier behavior considered only includes and short-circuited on
     the first match; that produced false positives like
     `build/*` + `!build/keep/` + `!build/keep/**`, where the second rule
     keeps build/keep unmarked and the third rule's descendants are
@@ -330,11 +330,10 @@ def _detect_conflicts(sequence: Sequence[_SequenceEntryLike], *, root: Path) -> 
             # Children-only includes (raw doesn't end in `/`) do not
             # contribute inheritance, so they're never strict ancestors.
             #
-            # This shape iterated through three Codex P1 review
-            # rounds on PR #149; earlier conservative-drop variants
-            # had false positives that changed marker behavior
-            # (since ``RuleCache.match()`` filters entries listed in
-            # ``_dropped`` before consulting pathspec).
+            # This shape went through several iterations; earlier
+            # conservative-drop variants had false positives that changed
+            # marker behavior (since ``RuleCache.match()`` filters entries
+            # listed in ``_dropped`` before consulting pathspec).
             if not raw.rstrip().endswith("/"):
                 continue
             negation_suffix = _literal_suffix(raw.rstrip())
@@ -349,9 +348,8 @@ def _detect_conflicts(sequence: Sequence[_SequenceEntryLike], *, root: Path) -> 
                 # not reach paths under `b/.dropboxignore` (sibling
                 # scope), so its inheritance can't make the negation
                 # inert. The include's scope must be an ancestor of (or
-                # equal to) the negation's scope. Surfaced by Codex on
-                # PR #149's fourth iteration — earlier shapes did a bare
-                # suffix-prefix string-compare and missed cross-scope.
+                # equal to) the negation's scope. An earlier shape did a
+                # bare suffix-prefix string-compare and missed cross-scope.
                 if not entry.ancestor_dir.is_relative_to(earlier.ancestor_dir):
                     continue
                 include_target = _include_directory_target(earlier)

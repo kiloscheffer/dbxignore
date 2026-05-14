@@ -1,4 +1,4 @@
-"""Tests for ``dbxignore init`` (followup item 63).
+"""Tests for ``dbxignore init``.
 
 Covers: template loading, detection at depth 3 with pruning, full template
 content always written (Strategy 1), --force overwrite, --stdout preview,
@@ -23,8 +23,8 @@ def test_init_writes_full_template_to_dropboxignore(tmp_path: Path) -> None:
     output = tmp_path / IGNORE_FILENAME
     assert output.exists()
     content = output.read_text(encoding="utf-8")
-    # `init`-written rule files are LF-canonical on every platform (item #110,
-    # mirrors the `_atomic_write_rule_file` and `cli.generate` invariants).
+    # `init`-written rule files are LF-canonical on every platform,
+    # mirroring the `_atomic_write_rule_file` and `cli.generate` invariants.
     # `read_text` normalizes CRLF→LF transparently, so check the raw bytes.
     raw = output.read_bytes()
     assert b"\r\n" not in raw, (

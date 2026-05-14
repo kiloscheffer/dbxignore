@@ -11,7 +11,7 @@
 #
 # Usage:
 #   bash manual-test-macos.sh                        # default: PyPI
-#   DBXIGNORE_INSTALL_SPEC='dbxignore==0.5.0' bash manual-test-macos.sh
+#   DBXIGNORE_INSTALL_SPEC='dbxignore==<version>' bash manual-test-macos.sh
 #   DBXIGNORE_INSTALL_SPEC='git+https://github.com/kiloscheffer/dbxignore.git@main' bash manual-test-macos.sh
 #
 # Exits non-zero if any check fails. Prints a PASS/FAIL summary.
@@ -74,7 +74,7 @@ trap cleanup EXIT
 # ---- xattr helpers ---------------------------------------------------------
 # macOS picks the active attribute name from sync mode (legacy ↔
 # com.dropbox.ignored, File Provider ↔ com.apple.fileprovider.ignore#P,
-# or both names in the genuinely-uncertain dual-attr case from item 58).
+# or both names in the genuinely-uncertain dual-attr case).
 # These helpers read both names and report which is present, so a single
 # assertion works regardless of the active mode.
 
@@ -228,8 +228,7 @@ phase_cli_surface() {
     # in tests/test_cli_entrypoints.py — assert "daemon" + "[OPTIONS]"
     # are present and "COMMAND" / "[ARGS]" are absent (so a regression that
     # accidentally adds subcommands to the daemon subcommand surfaces here).
-    # Before BACKLOG #30 this tested `dbxignored --help`; post-#30 the daemon
-    # is reached via `dbxignore daemon`.
+    # The daemon is reached via `dbxignore daemon`.
     local plain usage_line
     plain="$(dbxignore daemon --help 2>&1 | sed $'s/\e\\[[0-9;]*m//g')"
     usage_line="$(printf '%s\n' "$plain" | grep -m1 'Usage:' || true)"
@@ -252,16 +251,16 @@ phase_cli_surface() {
         sed 's/^/    /' /tmp/dbxignore-status.out
     fi
 
-    # Item 37 — sync mode line is darwin-only and prints regardless of
+    # The sync mode line is darwin-only and prints regardless of
     # whether the daemon ever ran (it's derived from on-disk state, not
     # state.json). Format: `sync mode: <mode>: <reason>` where <mode> is
     # one of legacy / file_provider / both.
     if grep -qE '^sync mode: (legacy|file_provider|both):' /tmp/dbxignore-status.out; then
         local mode_line; mode_line="$(grep -E '^sync mode:' /tmp/dbxignore-status.out)"
-        pass "3 — status shows sync mode line (item 37)"
+        pass "3 — status shows sync mode line"
         note "$mode_line"
     else
-        fail "3 — status missing sync mode line (item 37)"
+        fail "3 — status missing sync mode line"
     fi
 
     dbxignore list >/dev/null 2>&1 && pass "dbxignore list (rc=0)" || fail "dbxignore list"
@@ -325,8 +324,7 @@ phase_reconcile() {
     # the NOFOLLOW path (the `xattr` PyPI package's `symlink=True` kwarg),
     # so a matched symlink gets marked silently and successfully. No
     # PermissionError, no WARNING — the symlink itself is marked, not its
-    # target. This is the intentional macOS-vs-Linux behavioral divergence
-    # the v0.4 spec documents.
+    # target. This is the intentional macOS-vs-Linux behavioral divergence.
     note "4e — symlink marked silently (macOS allows xattr on symlinks)"
     local TS="$T/sym"
     mkdir -p "$TS"
@@ -357,20 +355,20 @@ phase_reconcile() {
 # ---------------------------------------------------------------------------
 # Phase 4.5 — extended CLI surface (init, generate, apply variants, clear)
 #
-# Covers user-facing commands added/changed in recent releases:
-#   - PR #102: dbxignore init scaffolds a starter .dropboxignore
-#   - PR #94: dbxignore generate translates a .gitignore byte-for-byte
-#   - PR #108: generate emits a stderr warning on dropped negations
-#   - PR #103: apply --dry-run previews without mutating
-#   - PR #107: apply prompts before mutating; --yes skips the prompt
-#   - PR #107: apply on already-converged state says "Nothing to apply"
-#   - PR #108: detector regression — build/* + !build/keep/ no longer flagged
-#   - PR #100: dbxignore clear (basic; daemon-alive guard tested in phase 5)
+# Covers user-facing commands:
+#   - dbxignore init scaffolds a starter .dropboxignore
+#   - dbxignore generate translates a .gitignore byte-for-byte
+#   - generate emits a stderr warning on dropped negations
+#   - apply --dry-run previews without mutating
+#   - apply prompts before mutating; --yes skips the prompt
+#   - apply on already-converged state says "Nothing to apply"
+#   - detector regression — build/* + !build/keep/ no longer flagged
+#   - dbxignore clear (basic; daemon-alive guard tested in phase 5)
 # ---------------------------------------------------------------------------
 
 # Sourced from scripts/_phase_extended_cli.sh — body byte-near-identical
-# to manual-test-ubuntu-vps.sh's; backlog item #75 extracted it so future
-# PR-#NN Phase 4.5 additions only have to land in one place.
+# to manual-test-ubuntu-vps.sh's; extracted so Phase 4.5 additions only
+# have to land in one place.
 source "$(dirname "$0")/_phase_extended_cli.sh"
 
 # ---------------------------------------------------------------------------
@@ -400,20 +398,20 @@ phase_daemon() {
     rm -rf "$T"; mkdir -p "$T"
     printf '*.tmp\n' > "$T/.dropboxignore"
 
-    # Slow-sweep determinism (BACKLOG #89). Seed a 15s pad so 5a's 5-iteration
-    # state=starting poll deterministically catches the transient state and
-    # 5f's 180s poll deterministically observes the transition to running,
-    # regardless of the watched-tree size. The daemon logs WARNING when it
-    # honors this; cleanup at the end of phase 5 removes it before phase 6.
+    # Slow-sweep determinism. Seed a 15s pad so 5a's 5-iteration state=starting
+    # poll deterministically catches the transient state and 5f's 180s poll
+    # deterministically observes the transition to running, regardless of the
+    # watched-tree size. The daemon logs WARNING when it honors this; cleanup
+    # at the end of phase 5 removes it before phase 6.
     mkdir -p "$DBXIGNORE_STATE_DIR"
     printf '15\n' > "$DBXIGNORE_STATE_DIR/_test_slow_sweep"
-    note "5 — slow-sweep marker seeded: 15s pad on initial sweep (item #89)"
+    note "5 — slow-sweep marker seeded: 15s pad on initial sweep"
 
     dbxignore install >/tmp/dbxignore-install.out 2>&1 \
         && pass "dbxignore install (rc=0)" \
         || { fail "dbxignore install"; sed 's/^/    /' /tmp/dbxignore-install.out; return; }
 
-    # install verbosity defaults (PR #234) — default WARNING quiets install-backend
+    # install verbosity defaults — default WARNING quiets install-backend
     # INFO chatter; the click.echo summary line still surfaces.
     grep -q "Installed dbxignore daemon service" /tmp/dbxignore-install.out \
         && pass "install — click.echo summary present" \
@@ -428,7 +426,7 @@ phase_daemon() {
         && pass "LaunchAgent plist written" \
         || fail "LaunchAgent plist missing"
 
-    # install verb-form (PR #30) — plist invokes `dbxignore daemon`
+    # install verb-form — plist invokes `dbxignore daemon`
     plutil -p "$HOME/Library/LaunchAgents/com.kiloscheffer.dbxignore.plist" \
         | grep -E '"[^"]*daemon"' >/dev/null \
         && pass "ProgramArguments includes 'daemon' subcommand" \
@@ -464,14 +462,14 @@ phase_daemon() {
         return
     fi
 
-    # 5a — opportunistic state=starting capture (PR #162). Probed AFTER
-    # the watching-roots break: daemon.run logs 'watching roots' BEFORE
-    # writing the early state.json (daemon.py:663 then :678), so an
-    # in-loop probe races state.write and almost always misses. Post-
-    # readiness, state.json appears within microseconds; on a real
-    # Dropbox tree state=starting is observable for the ~50s sweep
-    # window. On a small test tree the worker can finish before we
-    # probe — that's the small-tree caveat the note path covers.
+    # 5a — opportunistic state=starting capture. Probed AFTER the
+    # watching-roots break: daemon.run logs 'watching roots' BEFORE writing
+    # the early state.json (daemon.py:663 then :678), so an in-loop probe
+    # races state.write and almost always misses. Post-readiness, state.json
+    # appears within microseconds; on a real Dropbox tree state=starting is
+    # observable for the ~50s sweep window. On a small test tree the worker
+    # can finish before we probe — that's the small-tree caveat the note
+    # path covers.
     local saw_starting=0
     for _ in 1 2 3 4 5; do
         if dbxignore status --summary 2>/dev/null | grep -q '^state=starting pid='; then
@@ -480,20 +478,20 @@ phase_daemon() {
         sleep 1
     done
     if [ "$saw_starting" -eq 1 ]; then
-        pass "5a — observed state=starting via --summary post-readiness (PR #162)"
+        pass "5a — observed state=starting via --summary post-readiness"
     else
         note "5a — state=starting not observed within 5s post-readiness (small tree where sweep finished, or state.json not yet written); 5f still pins state=running"
     fi
 
     # 5a-post — gate watchdog tests on state=running (cache populated).
     # cache.load_root runs in _initial_sweep_worker, NOT the main thread
-    # (item #53 + daemon.py:638). When the slow-sweep marker pads the
-    # worker, RuleCache stays empty until the pad expires AND load_root
-    # finishes — watchdog events arriving during that window dispatch
-    # against match()=False, so 5b would observe an unmarked file even
-    # though the rule applies. Even without the marker, a slow sweep on
-    # a real Dropbox tree could race 5b's 8-second create-and-check
-    # window — this gate makes the test deterministic in both cases.
+    # (daemon.py:638). When the slow-sweep marker pads the worker, RuleCache
+    # stays empty until the pad expires AND load_root finishes — watchdog
+    # events arriving during that window dispatch against match()=False, so
+    # 5b would observe an unmarked file even though the rule applies. Even
+    # without the marker, a slow sweep on a real Dropbox tree could race
+    # 5b's 8-second create-and-check window — this gate makes the test
+    # deterministic in both cases.
     note "5a-post — waiting up to 180s for state=running (cache populated)"
     local cache_ready=0
     for _ in $(seq 1 180); do
@@ -510,13 +508,13 @@ phase_daemon() {
         return
     fi
 
-    # Item 37 — verify the daemon also logged the sync mode at startup.
+    # Verify the daemon also logged the sync mode at startup.
     if grep -qE 'sync mode detection: (legacy|file_provider|both):' "$HOME/Library/Logs/dbxignore/daemon.log"; then
         local log_line; log_line="$(grep -E 'sync mode detection:' "$HOME/Library/Logs/dbxignore/daemon.log" | head -1)"
-        pass "5 — daemon logged sync mode at startup (item 37)"
+        pass "5 — daemon logged sync mode at startup"
         note "$log_line"
     else
-        fail "5 — daemon did not log sync mode (item 37)"
+        fail "5 — daemon did not log sync mode"
     fi
 
     # 5b — watchdog reacts to a new file (created AFTER observer is live)
@@ -545,11 +543,11 @@ phase_daemon() {
         _dump_daemon_diagnostics "$T"
     fi
 
-    # 5d — DIR_CREATE bypass (item 57) — newly created dir matching a rule
+    # 5d — DIR_CREATE bypass — newly created dir matching a rule
     # should be marked synchronously without waiting the OTHER debounce.
     # The bypass calls reconcile_subtree directly from the watchdog handler,
     # so even a tight poll (sub-second) should see the marker.
-    note "5d — DIR_CREATE bypass for matched directory (item 57)"
+    note "5d — DIR_CREATE bypass for matched directory"
     printf '*.tmp\n*.dat\nbuild_*/\n' > "$T/.dropboxignore"
     sleep 6                                           # let the rule reload settle
     mkdir -p "$T/build_x"
@@ -562,7 +560,7 @@ phase_daemon() {
         _dump_daemon_diagnostics "$T"
     fi
 
-    # 5e — clear refuses while daemon is alive (PR #100); --force overrides.
+    # 5e — clear refuses while daemon is alive; --force overrides.
     note "5e — clear refuses while daemon alive"
     if dbxignore clear "$T" --yes >/tmp/dbx-clear-alive.out 2>&1; then
         fail "5e — clear should have refused while daemon alive"
@@ -576,29 +574,27 @@ phase_daemon() {
     # watch-me.tmp's marker, and Phase 6's "uninstall — markers retained on
     # watch-me.tmp" assertion would then fail vacuously (the marker is gone
     # before uninstall even runs). The override behavior is demonstrated
-    # identically on a single-file target. Item #112.
+    # identically on a single-file target.
     if dbxignore clear "$T/freshrule.dat" --force --yes >/dev/null 2>&1; then
         pass "5e — clear --force overrides daemon-alive guard"
     else
         fail "5e — clear --force did not override the guard"
     fi
 
-    # 5f — post-sweep status surface (PR #162). --summary returns the full
-    # state=running field set; human path emits the 'daemon: running' line
-    # distinct from the new 'daemon: starting (initial sweep in progress)'
-    # branch.
+    # 5f — post-sweep status surface. --summary returns the full state=running
+    # field set; human path emits the 'daemon: running' line distinct from
+    # the 'daemon: starting (initial sweep in progress)' branch.
     #
-    # PR #162 marks the daemon ready (and logs 'watching roots') BEFORE
-    # the initial sweep completes — so the watching-roots poll above is
-    # NOT a sweep-complete sentinel post-#162. On a real Dropbox tree
-    # (legacy ~/Dropbox or File Provider ~/Library/CloudStorage/Dropbox)
-    # the sweep can still be running when 5f probes, in which case
-    # --summary correctly emits 'state=starting pid=N' (truncated form).
-    # Poll for state=running for up to 180s to absorb the transition —
-    # matches the watching-roots-wait headroom above. Each iteration also
-    # pays one --summary subprocess invocation, so wall-clock can drift
-    # somewhat past 180s on slow hosts; acceptable for a manual smoke test.
-    note "5f — status --summary post-sweep + human 'daemon: running' line (PR #162)"
+    # The daemon marks itself ready (and logs 'watching roots') BEFORE the
+    # initial sweep completes — so the watching-roots poll above is NOT a
+    # sweep-complete sentinel. On a real Dropbox tree the sweep can still be
+    # running when 5f probes, in which case --summary correctly emits
+    # 'state=starting pid=N' (truncated form). Poll for state=running for up
+    # to 180s to absorb the transition — matches the watching-roots-wait
+    # headroom above. Each iteration also pays one --summary subprocess
+    # invocation, so wall-clock can drift somewhat past 180s on slow hosts;
+    # acceptable for a manual smoke test.
+    note "5f — status --summary post-sweep + human 'daemon: running' line"
     local sum_late=""
     local sum_pattern='^state=running pid=[0-9]+ marked=[0-9]+ cleared=[0-9]+ errors=[0-9]+ conflicts=[0-9]+$'
     for _ in $(seq 1 180); do
@@ -633,10 +629,10 @@ phase_daemon() {
     fi
 
     # Remove slow-sweep marker so phase 6's re-install + uninstall cycles
-    # run with normal sweep timing (item #89). Phase 7 also removes it as
-    # a defensive backstop if this point is never reached.
+    # run with normal sweep timing. Phase 7 also removes it as a defensive
+    # backstop if this point is never reached.
     rm -f "$DBXIGNORE_STATE_DIR/_test_slow_sweep"
-    note "5 — slow-sweep marker removed before phase 6 (item #89)"
+    note "5 — slow-sweep marker removed before phase 6"
 }
 
 # ---------------------------------------------------------------------------
@@ -651,7 +647,7 @@ phase_uninstall() {
 
     # plain uninstall: launchd job removed, markers retained
     # -v added to verify the verbosity flag surfaces install-backend INFO
-    # chatter end-to-end (PR #234). Default-quiet side is verified in Phase 5.
+    # chatter end-to-end. Default-quiet side is verified in Phase 5.
     if dbxignore -v uninstall >/tmp/dbxignore-uninst.out 2>&1; then
         pass "dbxignore -v uninstall (rc=0)"
     else
@@ -671,14 +667,14 @@ phase_uninstall() {
 
     [ -f "$T/watch-me.tmp" ] && assert_xattr_set "$T/watch-me.tmp" "uninstall — markers retained on watch-me.tmp"
 
-    # 6a — status --summary returns state=not_running post-uninstall (PR #162).
+    # 6a — status --summary returns state=not_running post-uninstall.
     # state.json is retained by plain uninstall; the daemon process exits and
     # daemon_is_running(s) flips False. launchctl bootout is synchronous on
     # macOS (the agent is fully torn down before uninstall returns), but
     # Windows schtasks /Delete /F is fire-and-forget on the running task
     # instance — poll for the transition for up to 30s so the case is
     # symmetric across platforms.
-    note "6a — status --summary post-uninstall (PR #162)"
+    note "6a — status --summary post-uninstall"
     local sum_uninst=""
     local sum_uninst_pattern='^state=not_running pid=[0-9]+ marked=[0-9]+ cleared=[0-9]+ errors=[0-9]+ conflicts=[0-9]+$'
     for _ in $(seq 1 30); do
@@ -694,17 +690,13 @@ phase_uninstall() {
         fail "6a — --summary did not advance to state=not_running within 30s (last: $sum_uninst)"
     fi
 
-    # 6c — idempotent uninstall when service is already unloaded
-    # (BACKLOG #119 / PR #242). Install, manually bootout via
-    # launchctl, then `dbxignore uninstall` — the bootout call inside
-    # `uninstall_agent` returns rc=3 / "No such process" stderr; the
-    # stderr-tolerant arm in `macos_launchd._is_service_not_loaded`
-    # treats this as idempotent success, proceeds to plist removal,
-    # and the CLI returns 0. Pre-fix, the swallowed rc made the whole
-    # case indistinguishable from happy-path uninstall, hiding the
-    # symmetric "service refused to die" failure mode the same code
-    # path now surfaces as exit-2.
-    note "6c — idempotent uninstall after manual bootout (BACKLOG #119)"
+    # 6c — idempotent uninstall when service is already unloaded.
+    # Install, manually bootout via launchctl, then `dbxignore uninstall` —
+    # the bootout call inside `uninstall_agent` returns rc=3 / "No such
+    # process" stderr; the stderr-tolerant arm in
+    # `macos_launchd._is_service_not_loaded` treats this as idempotent
+    # success, proceeds to plist removal, and the CLI returns 0.
+    note "6c — idempotent uninstall after manual bootout"
     dbxignore install >/dev/null 2>&1 || abort "6c re-install failed"
     sleep 2
     launchctl bootout "gui/${uid}/com.kiloscheffer.dbxignore" >/dev/null 2>&1 || true
@@ -728,37 +720,36 @@ phase_uninstall() {
     else
         fail "dbxignore uninstall --purge"; sed 's/^/    /' /tmp/dbxignore-purge.out
     fi
-    # PR #204 regression guard: happy-path purge emits the "Cleared N" line
+    # Happy-path purge regression guard: purge emits the "Cleared N" line
     # but must NOT emit the partial-failure error report. (Forcing a real
     # marker-clear OSError for an end-to-end test requires platform-specific
     # FS contortions; the unit tests in test_install.py cover the assertion
     # tightly. This guard pins that the happy path stays clean.)
     if ! grep -q 'Could not fully clear' /tmp/dbxignore-purge.out; then
-        pass "purge — no spurious 'Could not fully clear' on happy path (PR #204)"
+        pass "purge — no spurious 'Could not fully clear' on happy path"
     else
         fail "purge — emitted 'Could not fully clear' on happy path"
         sed 's/^/    /' /tmp/dbxignore-purge.out
     fi
-    # PR #241 parallel guard for the new state-files partial-failure report.
-    # Same trade-off as the marker guard above: forcing a state-dir OSError
-    # end-to-end needs platform-specific FS contortions (BACKLOG #127), and
-    # the unit tests pin the partial-failure assertion tightly. This guard
-    # pins the happy path against an accidental regression that would emit
-    # the report on every clean uninstall.
+    # Happy-path state-files partial-failure guard. Same trade-off as the
+    # marker guard above: forcing a state-dir OSError end-to-end needs
+    # platform-specific FS contortions, and the unit tests pin the
+    # partial-failure assertion tightly. This guard pins the happy path
+    # against an accidental regression that would emit the report on every
+    # clean uninstall.
     if ! grep -q 'Could not fully purge state files' /tmp/dbxignore-purge.out; then
-        pass "purge — no spurious 'Could not fully purge state files' on happy path (PR #241)"
+        pass "purge — no spurious 'Could not fully purge state files' on happy path"
     else
         fail "purge — emitted 'Could not fully purge state files' on happy path"
         sed 's/^/    /' /tmp/dbxignore-purge.out
     fi
-    # PR #243 daemon-alive purge-refusal guard (BACKLOG #122). On a
-    # clean uninstall the guard returns False — the two stderr phrases below
-    # must not appear. Failure-path coverage deferred per BACKLOG #129 —
-    # forcing a daemon to survive uninstall_service requires platform-
-    # specific stuck-process simulation.
+    # Daemon-alive purge-refusal guard. On a clean uninstall the guard
+    # returns False — the two stderr phrases below must not appear.
+    # Failure-path coverage requires platform-specific stuck-process
+    # simulation, which can't be scripted reliably.
     if ! grep -q 'daemon is running' /tmp/dbxignore-purge.out \
        && ! grep -q 'liveness is unknown' /tmp/dbxignore-purge.out; then
-        pass "purge — no spurious daemon-alive guard fire on happy path (PR #243)"
+        pass "purge — no spurious daemon-alive guard fire on happy path"
     else
         fail "purge — daemon-alive guard fired on happy path"
         sed 's/^/    /' /tmp/dbxignore-purge.out
@@ -779,9 +770,9 @@ phase_uninstall() {
         ls -la "$log_dir/" 2>/dev/null | sed 's/^/    /'
     fi
 
-    # 6b — status --summary returns state=no_state post-purge (PR #162).
+    # 6b — status --summary returns state=no_state post-purge.
     # Truncated form: 'state=no_state conflicts=N' with no pid/marked/etc.
-    note "6b — status --summary post-purge (PR #162)"
+    note "6b — status --summary post-purge"
     local sum_purge; sum_purge="$(dbxignore status --summary 2>&1 | head -n 1)"
     if printf '%s\n' "$sum_purge" | grep -qE '^state=no_state conflicts=[0-9]+$'; then
         pass "6b — --summary post-purge: $sum_purge"
@@ -789,17 +780,16 @@ phase_uninstall() {
         fail "6b — --summary post-purge did not match expected pattern: $sum_purge"
     fi
 
-    # 6d — Codex P2 follow-up on PR #243's BACKLOG #122 Arm A: `--purge`
-    # now proceeds when state.json is unreadable AND no daemon process
-    # holds daemon.lock. Force the scenario: re-install (daemon starts),
-    # kill -KILL the daemon directly, corrupt state.json so
+    # 6d — `--purge` proceeds when state.json is unreadable AND no daemon
+    # process holds daemon.lock. Force the scenario: re-install (daemon
+    # starts), kill -KILL the daemon directly, corrupt state.json so
     # `state.read()` returns None, then run `dbxignore uninstall --purge`.
-    # macOS-specific timing concern: launchd's KeepAlive on-Crashed
-    # restart triggers after the built-in 10s throttle. The uninstall
-    # ceremony below runs in under 5s, well within that window —
-    # `launchctl bootout` (inside uninstall_service) removes the
-    # registration before any pending restart can fire.
-    note "6d — --purge recovers from corrupt state.json + dead daemon (BACKLOG #122 Codex P2)"
+    # macOS-specific timing concern: launchd's KeepAlive on-Crashed restart
+    # triggers after the built-in 10s throttle. The uninstall ceremony below
+    # runs in under 5s, well within that window — `launchctl bootout` (inside
+    # uninstall_service) removes the registration before any pending restart
+    # can fire.
+    note "6d — --purge recovers from corrupt state.json + dead daemon"
     dbxignore install >/dev/null 2>&1 || abort "6d re-install failed"
     sleep 2
     local daemon_pid_6d
@@ -819,7 +809,7 @@ phase_uninstall() {
         && pass "6d — corrupt state.json cleaned up by recovery purge" \
         || fail "6d — corrupt state.json still present after recovery purge"
 
-    # 6e — uninstall exits 2 on injected launchctl bootout failure (PR #249, item #128)
+    # 6e — uninstall exits 2 on injected launchctl bootout failure
     # DBXIGNORE_TEST_FAIL_BOOTOUT makes uninstall_agent treat the bootout result
     # as a confirmed non-zero-rc failure (stderr that _is_service_not_loaded
     # does NOT match), so uninstall_agent raises RuntimeError → cli.uninstall
@@ -847,7 +837,7 @@ phase_uninstall() {
     # Recovery: clean uninstall (the plist + registration survived the injected run).
     dbxignore uninstall >/dev/null 2>&1 || true
 
-    # 6f — uninstall --purge exits 2 on injected state-file purge failure (PR #249, item #127)
+    # 6f — uninstall --purge exits 2 on injected state-file purge failure
     # DBXIGNORE_TEST_FAIL_STATE_PURGE makes _purge_dir's unlink loop raise
     # OSError, exercising the state_errors exit-2 path. Re-install first so the
     # daemon writes state.json / daemon.lock — _purge_dir only injects inside
@@ -873,7 +863,7 @@ phase_uninstall() {
         "6f — purge stderr reports the state-file failure"
     dbxignore uninstall --purge >/dev/null 2>&1 || true
 
-    # 6g — uninstall --purge exits 2 on injected daemon-alive guard (PR #249, item #129)
+    # 6g — uninstall --purge exits 2 on injected daemon-alive guard
     # DBXIGNORE_TEST_FAIL_DAEMON_ALIVE fires the --purge daemon-alive gate as if
     # a daemon survived service removal. The gate fires BEFORE the purge body,
     # so nothing is cleared; recovery is a clean --purge re-run.
@@ -908,10 +898,9 @@ phase_cleanup() {
     rm -rf "${DROPBOX_DIR:?}/$TEST_SUBDIR" 2>/dev/null || true
     note "test fixtures removed from Dropbox folder"
 
-    # Defensive backstop for the slow-sweep marker (item #89). Honoring a
-    # stale marker on a future install would silently pad every initial
-    # sweep, so make sure phase 7 cleans it up even when phase 5 returned
-    # early.
+    # Defensive backstop for the slow-sweep marker. Honoring a stale marker
+    # on a future install would silently pad every initial sweep, so make
+    # sure phase 7 cleans it up even when phase 5 returned early.
     rm -f "$DBXIGNORE_STATE_DIR/_test_slow_sweep" 2>/dev/null || true
 
     uv tool uninstall dbxignore >/dev/null 2>&1 \

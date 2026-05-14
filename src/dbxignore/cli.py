@@ -60,8 +60,8 @@ def _purge_dir(
     ``unlink`` arm are appended as ``(path, message)`` tuples in addition
     to being logged. ``uninstall --purge`` passes a list and uses the
     result to feed the exit-2 partial-failure gate — without this, a
-    locked ``daemon.lock`` (the Windows ``schtasks /End`` timeout cascade,
-    BACKLOG #122) would silently exit 0 despite leaving the artifact on
+    locked ``daemon.lock`` (the Windows ``schtasks /End`` timeout cascade)
+    would silently exit 0 despite leaving the artifact on
     disk.
     """
     if not dir_path.exists():
@@ -163,7 +163,7 @@ def _normalize_under_root(path: Path, *, require_exists: bool) -> tuple[Path, Pa
     mismatch), then succeeds via ``path.resolve()``.
 
     Paths that mix ``..`` with a symlinked component are rejected when
-    the LEXICAL interpretation is what we would use (item #105): lexical
+    the LEXICAL interpretation is what we would use: lexical
     normalization of ``link/..`` differs from the filesystem's
     ``<target-of-link>/..``, and silently picking the lexical
     interpretation would operate on a path the user did not intend. The
@@ -205,12 +205,12 @@ def _normalize_under_root(path: Path, *, require_exists: bool) -> tuple[Path, Pa
 
 
 def _reject_dotdot_after_symlink(orig_path: Path, abs_path: Path) -> None:
-    """Refuse to proceed when ``..`` follows a symlinked component (item #105).
+    """Refuse to proceed when ``..`` follows a symlinked component.
 
     ``os.path.normpath`` collapses ``link/..`` lexically (to nothing), but
     the filesystem would resolve it to ``<target-of-link>/..``. The two
-    interpretations diverge, and silently picking the lexical one is the
-    bug item #105 closes. A ``..`` BEFORE any symlink in the path is safe:
+    interpretations diverge, and silently picking the lexical one would
+    operate on a path the user did not intend. A ``..`` BEFORE any symlink in the path is safe:
     it cancels a regular segment with no FS divergence, so the sticky-flag
     only flips once a symlink enters the accumulated prefix.
 
@@ -761,7 +761,7 @@ def _format_summary(state_obj: state.State | None, alive: bool, conflicts_count:
     Format is part of the public API per SemVer (see README §"Status-bar
     integration"). Field additions are non-breaking; removals or renames
     bump MINOR pre-1.0 / MAJOR post-1.0. Adding a new VALUE for an
-    existing field (the `state=starting` token added in item #53) is
+    existing field (the `state=starting` token) is
     technically a breaking change for consumers branching on
     `state == "running"` exhaustively — README documents the addition.
 
@@ -810,7 +810,7 @@ def status(summary: bool) -> None:
 
     if summary:
         # Read the conflict count from state.json's `last_sweep_conflicts`
-        # (item #68) rather than walking the rule cache: status-bar widgets
+        # from state.json rather than walking the rule cache: status-bar widgets
         # poll `--summary` at a high cadence and the rglob over every
         # `.dropboxignore` file in the watched tree was a per-tick cost.
         # Trade-off: the count is from the last daemon sweep (or 0 if no
@@ -850,7 +850,7 @@ def status(summary: bool) -> None:
         for r in s.watched_roots:
             click.echo(f"watching: {r}")
 
-    # macOS sync-mode visibility (followup item 37). Returns None on
+    # macOS sync-mode visibility. Returns None on
     # Windows/Linux where there's no detection step to report — those
     # platforms have a single attribute name fixed at module import.
     detection = markers.detection_summary()
@@ -1038,7 +1038,7 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
     # markers to clear" message, dry-run preview, or confirmation prompt.
     # Otherwise the zero-markers case AND the user-aborts case both
     # swallow the partial-scan-failure surface that's the whole point of
-    # item 7's exit-2 contract (Codex P2 followup on PR #240). Exit 2
+    # the scan-errors exit-2 contract. Exit 2
     # still fires at every return path below, so abort / no-marker /
     # dry-run / success all propagate the failure to scripted callers.
     if scan_errors:
@@ -1080,7 +1080,7 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
     click.echo(f"clear: cleared={cleared} errors={len(errors)} scan_errors={len(scan_errors)}")
     for p, msg in errors[:_MAX_REPORTED_ERRORS]:
         click.echo(f"  error: {p} - {msg}", err=True)
-    # Exit 2 only for the scan-error surface (item from external review). Write
+    # Exit 2 only for the scan-error surface. Write
     # errors continue to be reported via `errors=N` with exit 0, preserving the
     # existing contract for scripted callers that parse stdout.
     if scan_errors:
@@ -1748,7 +1748,7 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
         uninstall_shell_integration_if_supported()
 
     if purge:
-        # BACKLOG #122: fail-closed gate against a silent tug-of-war. By this
+        # Fail-closed gate against a silent tug-of-war. By this
         # point `uninstall_service` has returned but the daemon process may
         # still be alive (Windows: `schtasks /End`'s 30s wait can time out;
         # Linux/macOS service stops are synchronous so the daemon is dead
@@ -1786,7 +1786,7 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
         # (1) Clear xattr markers. Read and clear arms are split so each
         # failure can be attributed to the specific operation that failed;
         # the prior shape collapsed both into one `except OSError: pass`
-        # and silently overstated cleanup success (backlog item #98).
+        # and silently overstated cleanup success.
         discovered = _discover_roots()
         cleared = 0
         errors: list[tuple[Path, str, str]] = []  # (path, operation, message)
@@ -2031,9 +2031,9 @@ def init(path: Path | None, force: bool, to_stdout: bool) -> None:
         sys.exit(2)
 
     # `newline=""` pins LF on every platform — the project's invariant for
-    # written rule files (PR #207). Without it, Python's default text-mode
+    # written rule files. Without it, Python's default text-mode
     # write translates `\n` → `\r\n` on Windows, producing platform-divergent
-    # bytes for the same template input. Item #110.
+    # bytes for the same template input.
     try:
         output.write_text(content, encoding="utf-8", newline="")
     except OSError as exc:
@@ -2115,8 +2115,8 @@ def generate(path: Path, output: Path | None, stdout: bool, force: bool) -> None
         # `newline=""` pins LF on every platform — without it, Python's
         # default text-mode write translates `\n` → `\r\n` on Windows and
         # breaks `generate`'s documented byte-for-byte invariant against the
-        # source file. Same invariant as `_atomic_write_rule_file` (PR #207)
-        # and `cli.init` above. Item #110.
+        # source file. Same invariant as `_atomic_write_rule_file`
+        # and `cli.init` above.
         target.write_text(text, encoding="utf-8", newline="")
     except OSError as exc:
         click.echo(f"error: cannot write {target}: {exc.strerror}", err=True)

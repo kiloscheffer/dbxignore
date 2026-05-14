@@ -1,4 +1,4 @@
-"""Tests for ``dbxignore clear`` (followup item 61).
+"""Tests for ``dbxignore clear``.
 
 Covers: marker clearing, daemon-alive refusal + --force override, --dry-run
 preview, --yes skipping the confirmation, path scoping, .dropboxignore and
@@ -125,10 +125,10 @@ def test_clear_refuses_when_state_json_unreadable(
     """Fail-closed when state.json is present but `state.read()` returns None
     (locked, permission-denied, cloud-placeholder). Daemon liveness is unknown,
     so treating it as "no daemon" would let `clear` race a live daemon that
-    re-marks within seconds. Codex P2 follow-up on PR #203 (item #97)."""
+    re-marks within seconds."""
     paths = _setup_marked_tree(tmp_path, fake_markers, monkeypatch)
     # state.json was created by the fixture; simulate unreadable by stubbing
-    # state.read to return None (the post-item-#97 OSError fallback).
+    # state.read to return None (the OSError fallback).
     monkeypatch.setattr(state, "read", lambda: None)
 
     runner = CliRunner()
@@ -253,11 +253,11 @@ def test_clear_path_arg_clears_marked_directory_target_without_descending(
 def test_clear_surfaces_scan_errors_and_exits_two(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Item 7 from external review: when the marker-scan walk hits an
-    OSError on a path (e.g. ENOTSUP on a filesystem that doesn't support
-    extended attributes), the count is surfaced via stderr and the command
-    exits 2 — previously the read errors were swallowed silently and the
-    user saw "No markers to clear" while the scan had actually failed."""
+    """When the marker-scan walk hits an OSError on a path (e.g. ENOTSUP on
+    a filesystem that doesn't support extended attributes), the count is
+    surfaced via stderr and the command exits 2 — previously the read errors
+    were swallowed silently and the user saw "No markers to clear" while the
+    scan had actually failed."""
     import errno
 
     root = tmp_path
@@ -293,12 +293,12 @@ def test_clear_surfaces_scan_errors_and_exits_two(
 def test_clear_surfaces_scan_errors_when_no_markers_found(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 followup on PR #240: when the scan errored on every
-    walked path AND no markers were found, the previous shape fell
-    through into either the "No markers to clear" message (in the
-    `not to_clear and not scan_errors` arm) or the confirmation prompt,
-    both swallowing the partial-scan-failure surface. The scan-error
-    report and exit 2 must fire regardless of how many markers landed."""
+    """When the scan errored on every walked path AND no markers were
+    found, the previous shape fell through into either the "No markers
+    to clear" message (in the `not to_clear and not scan_errors` arm)
+    or the confirmation prompt, both swallowing the partial-scan-failure
+    surface. The scan-error report and exit 2 must fire regardless of
+    how many markers landed."""
     import errno
 
     root = tmp_path
@@ -332,10 +332,10 @@ def test_clear_surfaces_scan_errors_when_no_markers_found(
 def test_clear_surfaces_scan_errors_when_user_aborts_prompt(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex P2 followup on PR #240: even when the user declines the
-    confirmation prompt, scan errors that fired during the walk must
-    still surface and the command must exit 2. The prior shape returned
-    cleanly with "Aborted." and exit 0, hiding the partial-scan failure."""
+    """Even when the user declines the confirmation prompt, scan errors
+    that fired during the walk must still surface and the command must
+    exit 2. The prior shape returned cleanly with "Aborted." and exit 0,
+    hiding the partial-scan failure."""
     import errno
 
     root = tmp_path

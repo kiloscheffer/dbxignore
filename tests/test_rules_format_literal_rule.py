@@ -1,4 +1,4 @@
-"""Unit tests for ``rules.format_literal_rule`` (item #93).
+"""Unit tests for ``rules.format_literal_rule``.
 
 Pure-function tests — no fixtures, no tmp_path needed, no monkeypatching.
 """
@@ -119,7 +119,7 @@ def test_target_must_be_under_rule_file_parent(tmp_path: Path) -> None:
     reason="Windows filesystems forbid newline in filenames",
 )
 def test_newline_in_segment_raises_value_error(tmp_path: Path) -> None:
-    """Codex P2 regression: a path component containing ``\\n`` or ``\\r`` must
+    """Regression: a path component containing ``\\n`` or ``\\r`` must
     raise ValueError, not silently produce a rule line that splits into two
     (with the suffix becoming an injected rule that could match unrelated
     files — Dropbox would remove them from cloud)."""
@@ -136,7 +136,7 @@ def test_newline_in_segment_raises_value_error(tmp_path: Path) -> None:
     reason="Windows filesystems forbid trailing spaces in filenames",
 )
 def test_file_target_with_trailing_space_escaped(tmp_path: Path) -> None:
-    """Codex P2 regression: a file named ``foo `` (trailing space) must produce
+    """Regression: a file named ``foo `` (trailing space) must produce
     rule ``/foo\\ `` (escaped) so pathspec does not strip the space and fail to
     match the literal target.  Without escaping, the marker is set on ``foo ``
     but the rule matches ``foo`` only — the daemon clears the marker on next
@@ -153,7 +153,7 @@ def test_file_target_with_trailing_space_escaped(tmp_path: Path) -> None:
     reason="Windows filesystems forbid tab in filenames",
 )
 def test_trailing_tab_in_segment_raises_value_error(tmp_path: Path) -> None:
-    """Codex P2 regression: a path component ending in a tab can't be encoded
+    """Regression: a path component ending in a tab can't be encoded
     as a gitignore rule — pathspec strips the trailing tab regardless of
     backslash escape, so the rule would match the wrong path while the marker
     is set on the user-supplied path."""
@@ -170,7 +170,7 @@ def test_trailing_tab_in_segment_raises_value_error(tmp_path: Path) -> None:
     reason="Windows symlink creation requires admin privileges",
 )
 def test_symlink_target_does_not_get_trailing_slash(tmp_path: Path) -> None:
-    """Codex P2 regression: a symlink to a directory must produce a rule
+    """Regression: a symlink to a directory must produce a rule
     WITHOUT trailing slash (treat the link as the link object, not its
     target). Otherwise round-trip ignore/unignore breaks for symlinks
     because format_literal_rule disagrees with how the rule was originally
@@ -192,7 +192,7 @@ def test_symlink_target_does_not_get_trailing_slash(tmp_path: Path) -> None:
     reason="Windows filesystems forbid Unicode line separators in filenames",
 )
 def test_unicode_line_separator_in_segment_raises_value_error(tmp_path: Path) -> None:
-    """Codex P2 regression: U+2028 (LINE SEPARATOR) is a `str.splitlines()`
+    """Regression: U+2028 (LINE SEPARATOR) is a `str.splitlines()`
     separator, so a filename containing it would split into multiple rule
     lines on read-back. The rejection check must use `c.isspace() and c != ' '`
     to catch Unicode line separators beyond the ASCII set."""

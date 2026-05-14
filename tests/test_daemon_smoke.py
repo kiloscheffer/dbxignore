@@ -21,9 +21,8 @@ def test_daemon_starts_and_responds_to_one_event(
 ) -> None:
     """Single-event watchdog canary: daemon thread + Observer wiring is alive.
 
-    Reduced from a multi-event scenario that flaked weekly under Windows CI
-    runner load (backlog item #34, six observations 2026-04-24 .. 2026-05-07).
-    PR #135's DEBUG-level instrumentation captured a trace in PR #136 showing
+    Reduced from a multi-event scenario that flaked under Windows CI runner
+    load. DEBUG-level instrumentation captured a trace showing
     ``ReadDirectoryChangesW`` events silently dropped on the runner — not
     delayed. Ruling out timeout-widening as a fix shape.
 
@@ -59,7 +58,7 @@ def test_daemon_starts_and_responds_to_one_event(
             # and the test should be deleted, not widened further.
             assert _poll_until(lambda: markers.is_ignored(tmp_path / "build"), timeout_s=10.0), (
                 "build/ was not marked ignored within 10s — likely a dropped "
-                "ReadDirectoryChangesW event (see backlog item #34)."
+                "ReadDirectoryChangesW event (Windows can drop these under load)."
             )
         except Exception:
             sys.stderr.write("\n=== daemon.log on failure ===\n")

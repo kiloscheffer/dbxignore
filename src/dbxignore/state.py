@@ -26,7 +26,7 @@ SCHEMA_VERSION = 1
 # `"python"` substring check covers source runs (`python -m dbxignore daemon`
 # and `pythonw -m dbxignore daemon`); this set covers the frozen-binary
 # names: dbxignore.exe (CLI; foreground daemon launches), dbxignorew.exe
-# (Task Scheduler default after PR #239), and their Linux/macOS analogs.
+# (Task Scheduler default for the windowless logon daemon), and their Linux/macOS analogs.
 _DAEMON_PROCESS_NAMES: frozenset[str] = frozenset(
     {
         "dbxignore",
@@ -45,7 +45,7 @@ _DAEMON_PROCESS_NAMES: frozenset[str] = frozenset(
 # lock subsystem is unavailable (e.g. `ENOLCK` on filesystems without
 # advisory lock support, `EINTR` from a signal, `EIO`, `ENOTSUP`) — the
 # probe is indeterminate and `is_any_daemon_running` should return False
-# (matching `is_daemon_alive`'s convention from item #118) rather than
+# (matching `is_daemon_alive`'s fail-open convention) rather than
 # false-positive "daemon alive" and block `--purge` recovery.
 _LOCK_CONTENTION_ERRNOS: frozenset[int] = frozenset(
     {errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES, errno.EDEADLK}
@@ -66,7 +66,7 @@ class State:
     # Unix-epoch float). Persisted alongside daemon_pid so is_daemon_alive
     # can distinguish "the daemon is still that PID" from "the kernel
     # recycled that PID for an unrelated process". Optional for backwards-
-    # compat with state.json files written before #79.
+    # compat with older state.json files that predate the field.
     daemon_create_time: float | None = None
     daemon_started: datetime | None = None
     last_sweep: datetime | None = None
@@ -76,7 +76,7 @@ class State:
     last_sweep_errors: int = 0
     # Count of rule conflicts detected at the last sweep's `cache.load_root`.
     # Persisted so `cli.status --summary` can report it without re-walking
-    # the rule cache on every poll (item #68). Stale when the daemon isn't
+    # the rule cache on every poll. Stale when the daemon isn't
     # running, same lineage as `last_sweep_*` above.
     last_sweep_conflicts: int = 0
     last_error: LastError | None = None
@@ -125,7 +125,7 @@ def daemon_is_running(state_obj: State | None) -> bool:
     don't have to repeat ``s is not None and s.daemon_pid is not None and
     is_daemon_alive(s.daemon_pid)``. Forwards ``state_obj.daemon_create_time``
     so a recycled PID at the same numeric value but with a different
-    create_time is correctly rejected (followup item #79).
+    create_time is correctly rejected.
     """
     if state_obj is None or state_obj.daemon_pid is None:
         return False
@@ -146,12 +146,11 @@ def is_daemon_alive(pid: int | None, create_time: float | None = None) -> bool:
 
     The second stage, gated on a non-None ``create_time``, additionally
     requires the live process's ``psutil.Process.create_time()`` to match
-    the caller-supplied value. This is the followup item #79 enhancement:
-    a substring-name match is not enough when the recycled PID's new
-    occupant happens to also be a python process (very common when the
-    test suite or any python tooling runs after a daemon dies). Comparing
-    the create_time disambiguates "still that daemon" from "PID was
-    recycled by another python".
+    the caller-supplied value. A substring-name match is not enough when
+    the recycled PID's new occupant happens to also be a python process
+    (very common when the test suite or any python tooling runs after a
+    daemon dies). Comparing the create_time disambiguates "still that
+    daemon" from "PID was recycled by another python".
 
     Lazy-imports ``psutil``; falls back to ``os.kill(pid, 0)`` for the
     bare-existence check when ``psutil`` isn't installed. The fallback
@@ -160,13 +159,13 @@ def is_daemon_alive(pid: int | None, create_time: float | None = None) -> bool:
     indeterminate (logs WARNING, returns False). The ``SystemError`` catch
     covers CPython's exception-state-wrapping case where ``os.kill`` fires
     while another exception (e.g. a partially-initialized psutil import)
-    is still being handled (item #118). With psutil unavailable, PID-reuse
+    is still being handled. With psutil unavailable, PID-reuse
     can't be detected and ``create_time`` is silently ignored — a known
     limitation, not a behavior bug. Used by ``cli.status`` to render the
     "running / not running / state may be stale" UI. The daemon's
-    singleton gate has moved to a process-lifetime OS lock (see
-    ``daemon._acquire_singleton_lock``), so this helper is no longer on
-    that path.
+    singleton gate is a process-lifetime OS lock (see
+    ``daemon._acquire_singleton_lock``); this helper is for external
+    observers, not on the daemon's own startup path.
     """
     if pid is None:
         return False
@@ -180,11 +179,9 @@ def is_daemon_alive(pid: int | None, create_time: float | None = None) -> bool:
         except (OSError, SystemError) as exc:
             # SystemError can wrap an OSError when os.kill fires while
             # another exception is still being handled — e.g. a prior
-            # ImportError on psutil left exception state dirty (item
-            # #118, surfaced by Python 3.14 + the psutil partial-init
-            # scenario from item #117). Either way the PID probe is
-            # indeterminate; log so the cause surfaces, return False
-            # so callers don't block on an opaque error.
+            # ImportError on psutil left exception state dirty. Either way
+            # the PID probe is indeterminate; log so the cause surfaces,
+            # return False so callers don't block on an opaque error.
             logger.warning(
                 "os.kill(%d, 0) probe failed (%s: %s); treating daemon as not alive",
                 pid,
@@ -261,7 +258,7 @@ def is_any_daemon_running() -> bool:
 
     ``True`` only when a contender holds the lock. ``False`` when the lock
     file is missing, empty, acquirable, or the probe is indeterminate — the
-    last case matches ``is_daemon_alive``'s item #118 convention (destructive
+    last case matches ``is_daemon_alive``'s fail-open convention (destructive
     verbs should not block on opaque errors). Called from ``cli.uninstall``'s
     ``--purge`` daemon-alive gate.
     """
@@ -303,13 +300,13 @@ def write(state: State, path: Path | None = None) -> None:
     # power loss between truncate and write completion would otherwise leave
     # an empty / partial state.json — _read_at would log WARNING and return
     # None, and daemon.run's singleton check would then proceed and start a
-    # second daemon while the first is still alive (followup item 20).
+    # second daemon while the first is still alive.
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(_encode(state), indent=2), encoding="utf-8")
     # Parse-back guard: a future serializer regression producing malformed JSON
     # would otherwise be committed by os.replace, and _read_at's JSONDecodeError
-    # arm would silently fall through to "no prior daemon" — same singleton-
-    # bypass mode item 20 already defended (followup item 55).
+    # arm would silently fall through to "no prior daemon" — the same singleton-
+    # bypass mode the temp-file-plus-replace shape above defends against.
     try:
         json.loads(tmp.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
@@ -326,7 +323,7 @@ def _read_at(path: Path) -> State | None:
     # OSError (locked / permission-denied / cloud-placeholder) warns and
     # returns None instead of propagating, so CLI verbs that consult state
     # best-effort (`status`, `clear`'s daemon-alive guard, daemon legacy-state
-    # migration) don't crash on a stale-or-broken file. Followup items 24, 97.
+    # migration) don't crash on a stale-or-broken file.
     # The middle arm catches the JSON-syntax + shape errors that `_decode`
     # raises (KeyError on missing last_error sub-key; TypeError on non-dict
     # last_error; ValueError on a stored datetime that no longer parses).
@@ -378,8 +375,8 @@ def _decode(raw: dict[str, Any]) -> State:
         # Raise ValueError here so `_read_at`'s corrupt-state arm catches
         # it and `read()` returns None.
         daemon_pid=_validate_pid(raw.get("daemon_pid")),
-        # `daemon_create_time` is decode-tolerant: old state.json files
-        # (pre-#79) lack the field and decode to None, which triggers the
+        # `daemon_create_time` is decode-tolerant: older state.json files
+        # lack the field and decode to None, which triggers the
         # legacy substring-name fallback in is_daemon_alive. But when the
         # field IS present, it MUST be a number — a hand-edited or shape-
         # mismatched state file with e.g. a string ``daemon_create_time``
@@ -398,7 +395,7 @@ def _decode(raw: dict[str, Any]) -> State:
         last_sweep_marked=raw.get("last_sweep_marked", 0),
         last_sweep_cleared=raw.get("last_sweep_cleared", 0),
         last_sweep_errors=raw.get("last_sweep_errors", 0),
-        # Decode-tolerant: pre-#68 state.json files lack this field and
+        # Decode-tolerant: older state.json files lack this field and
         # decode to 0, which keeps `status --summary conflicts=0` sane until
         # the next daemon sweep refreshes the count.
         last_sweep_conflicts=raw.get("last_sweep_conflicts", 0),
@@ -440,7 +437,7 @@ def _validate_pid(value: Any) -> int | None:
 def _validate_create_time(value: Any) -> float | None:
     """Coerce a JSON-decoded ``daemon_create_time`` to a float or raise.
 
-    Accepts None (field absent — pre-#79 state.json) and numeric values
+    Accepts None (field absent in older state.json files) and numeric values
     (int or float). Rejects bool (a Python int subclass), strings, lists,
     dicts, and anything else. ValueError surfaces through ``_read_at``'s
     corrupt-state arm so ``read()`` returns None on a hand-edited or

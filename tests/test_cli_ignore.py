@@ -989,10 +989,11 @@ def test_ignore_then_unignore_round_trip_for_trailing_space_filename(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Regression: a file named `foo ` (trailing space) goes through
-    `format_literal_rule`'s trailing-space escape (commit 88a7cee). The /simplify
-    pass (d0ac827) had dropped .rstrip() from the canonical side of the
-    comparison, breaking the round-trip — the canonical `/foo\\ ` failed to
-    equal m.pattern.rstrip() (`/foo\\`). Verify ignore-then-unignore works."""
+    `format_literal_rule`'s trailing-space escape. The round-trip must
+    preserve that escape on both sides of the canonical comparison: a
+    dropped `.rstrip()` on the canonical side makes `/foo\\ ` fail to equal
+    `m.pattern.rstrip()` (`/foo\\`), breaking the round-trip. Verify
+    ignore-then-unignore works."""
     root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
     target = root / "foo "  # file with trailing space
     target.touch()

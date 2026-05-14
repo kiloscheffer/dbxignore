@@ -62,13 +62,15 @@ darwin (followup item 37).
 Dual-attribute mode behavior (followup item 58): when ``_detected_attr_names()``
 returns both names, ``is_ignored`` iterates and short-circuits ``True`` on
 the first non-empty hit (so legacy users don't pay two getxattr calls per
-file); ``set_ignored`` writes both names sequentially and a partial-failure
-on the second propagates with the second's exception, mirroring the
-single-attr "either fully successful or raises" contract; ``clear_ignored``
-removes both with per-attribute ENOATTR no-op so a half-marked path that
-only ever had one name written gets cleaned up regardless. The trade is a
-stray attribute on the inactive sync stack (metadata cleanliness) versus
-a silent no-op on the active stack (correctness).
+file); ``set_ignored`` writes both names sequentially and, if a write fails
+partway, rolls back the attributes that call newly created before
+propagating the exception, so the path is left exactly as it was before
+the call rather than half-marked (see ``set_ignored``'s docstring for why
+half-marked state is harmful); ``clear_ignored`` removes both with
+per-attribute ENOATTR no-op so a half-marked path — e.g. one left behind by
+a sync-mode switch — gets cleaned up regardless. The trade is a stray
+attribute on the inactive sync stack (metadata cleanliness) versus a
+silent no-op on the active stack (correctness).
 
 The cross-platform facade ``markers.detection_summary()`` returns this
 module's summary string on darwin and ``None`` on Windows/Linux (where

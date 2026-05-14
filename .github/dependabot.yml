@@ -1,7 +1,7 @@
 # Keep the SHA-pinned GitHub Actions in `.github/workflows/` fresh.
 #
-# Workflows are pinned to 40-char commit SHAs with a
-# trailing `# v<X>` comment naming the tag the SHA was resolved from.
+# Workflows are pinned to 40-char commit SHAs with a trailing
+# `# v<X>` comment naming the tag the SHA was resolved from.
 # Dependabot updates both the SHA and the comment when a new release is
 # published, so the pin stays current without losing the tracked-tag label.
 

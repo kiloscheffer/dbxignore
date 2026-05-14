@@ -16,10 +16,8 @@ jobs:
     # the Claude action's anti-loop guard refuses with "Workflow initiated
     # by non-human actor" and the check shows red on the PR
     # (mergeStateStatus=UNSTABLE). The `endsWith` form covers any bot
-    # identity (dependabot[bot], renovate[bot]) without enumeration.
-    # Originally driven by the
-    # claude[bot] auto-fix pattern; still relevant for Dependabot/Renovate
-    # synchronizes.
+    # identity (dependabot[bot], renovate[bot]) without enumeration, and
+    # stays relevant for Dependabot/Renovate synchronizes.
     if: ${{ !endsWith(github.actor, '[bot]') }}
 
     # Optional alternative filter (not active): only run for specific PR

@@ -438,3 +438,110 @@ def test_default_path_linux_falls_back_to_local_state(
     monkeypatch.delenv("XDG_STATE_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     assert state.default_path() == tmp_path / ".local" / "state" / "dbxignore" / "state.json"
+
+
+def test_is_any_daemon_running_no_lock_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No daemon has ever run on this system (or `--purge` cleaned up the
+    state dir) — lock file doesn't exist, helper returns False."""
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+
+    assert state.is_any_daemon_running() is False
+
+
+def test_is_any_daemon_running_empty_lock_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lock file exists but is empty — the daemon writes a placeholder byte
+    BEFORE locking, so an empty file means the daemon never reached its
+    lock-acquire step. Helper returns False (no daemon)."""
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    (state_dir / "daemon.lock").touch()
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+
+    assert state.is_any_daemon_running() is False
+
+
+def test_is_any_daemon_running_acquirable_lock_returns_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lock file exists with a placeholder byte but no one holds the lock
+    (e.g. daemon died ungracefully — OS released the lock, file lingers).
+    Helper acquires and releases the lock, returns False (no daemon)."""
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    lock_path = state_dir / "daemon.lock"
+    lock_path.write_bytes(b" ")
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+
+    assert state.is_any_daemon_running() is False
+
+
+def test_is_any_daemon_running_held_lock_returns_true(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lock file is held by another process (or in this test, another
+    file descriptor in the same process — fcntl.flock and msvcrt.locking
+    are both per-open-file-description, so a second acquire fails with
+    EWOULDBLOCK/EACCES). Helper returns True (daemon-equivalent contention
+    detected)."""
+    from dbxignore import daemon
+
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+
+    holder = daemon._acquire_singleton_lock()
+    assert holder is not None, "test setup: could not acquire holder lock"
+    try:
+        assert state.is_any_daemon_running() is True
+    finally:
+        holder.close()
+
+
+def test_is_any_daemon_running_non_contention_oserror_returns_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Codex P2 #3 follow-up on PR #243: when the lock primitive raises
+    an OSError for a reason OTHER than contention (e.g. ``ENOLCK`` on a
+    filesystem without advisory-lock support, ``EINTR``, ``ENOTSUP``),
+    the prior shape blanket-caught it as ``return True`` (lock held →
+    daemon alive). That blocked ``uninstall --purge`` recovery on systems
+    where lock probing isn't actually available. New behavior: distinguish
+    `_LOCK_CONTENTION_ERRNOS` from other errors; log + return False
+    (indeterminate → no daemon) for the non-contention case so destructive
+    verbs can proceed."""
+    import errno as _errno
+
+    state_dir = tmp_path / "state_dir"
+    state_dir.mkdir()
+    lock_path = state_dir / "daemon.lock"
+    lock_path.write_bytes(b" ")
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+
+    if sys.platform == "win32":
+        import msvcrt  # type: ignore[import-not-found, unused-ignore]
+
+        def fake_locking(fd: int, mode: int, n: int) -> None:
+            raise OSError(_errno.ENOLCK, "fake non-contention error")
+
+        monkeypatch.setattr(msvcrt, "locking", fake_locking)
+    else:
+        import fcntl  # type: ignore[import-not-found, unused-ignore]
+
+        def fake_flock(fd: int, op: int) -> None:
+            raise OSError(_errno.ENOLCK, "fake non-contention error")
+
+        monkeypatch.setattr(fcntl, "flock", fake_flock)
+
+    with caplog.at_level("WARNING"):
+        result = state.is_any_daemon_running()
+
+    assert result is False, "non-contention OSError must NOT report a live daemon"
+    assert any("probe" in r.message.lower() for r in caplog.records), (
+        "should have logged a WARNING about the indeterminate probe"
+    )

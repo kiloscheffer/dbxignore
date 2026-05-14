@@ -695,7 +695,7 @@ phase_uninstall() {
     fi
 
     # 6c — idempotent uninstall when service is already unloaded
-    # (BACKLOG #119 / PR #<THIS_PR>). Install, manually bootout via
+    # (BACKLOG #119 / PR #242). Install, manually bootout via
     # launchctl, then `dbxignore uninstall` — the bootout call inside
     # `uninstall_agent` returns rc=3 / "No such process" stderr; the
     # stderr-tolerant arm in `macos_launchd._is_service_not_loaded`
@@ -751,6 +751,18 @@ phase_uninstall() {
         fail "purge — emitted 'Could not fully purge state files' on happy path"
         sed 's/^/    /' /tmp/dbxignore-purge.out
     fi
+    # PR #243 daemon-alive purge-refusal guard (BACKLOG #122). On a
+    # clean uninstall the guard returns False — the two stderr phrases below
+    # must not appear. Failure-path coverage deferred per BACKLOG #129 —
+    # forcing a daemon to survive uninstall_service requires platform-
+    # specific stuck-process simulation.
+    if ! grep -q 'daemon is running' /tmp/dbxignore-purge.out \
+       && ! grep -q 'liveness is unknown' /tmp/dbxignore-purge.out; then
+        pass "purge — no spurious daemon-alive guard fire on happy path (PR #243)"
+    else
+        fail "purge — daemon-alive guard fired on happy path"
+        sed 's/^/    /' /tmp/dbxignore-purge.out
+    fi
 
     [ -f "$T/watch-me.tmp" ] && assert_xattr_unset "$T/watch-me.tmp" "purge — watch-me.tmp marker cleared"
     [ -d "$T/cache" ]        && assert_xattr_unset "$T/cache"        "purge — cache/ marker cleared"
@@ -776,6 +788,36 @@ phase_uninstall() {
     else
         fail "6b — --summary post-purge did not match expected pattern: $sum_purge"
     fi
+
+    # 6d — Codex P2 follow-up on PR #243's BACKLOG #122 Arm A: `--purge`
+    # now proceeds when state.json is unreadable AND no daemon process
+    # holds daemon.lock. Force the scenario: re-install (daemon starts),
+    # kill -KILL the daemon directly, corrupt state.json so
+    # `state.read()` returns None, then run `dbxignore uninstall --purge`.
+    # macOS-specific timing concern: launchd's KeepAlive on-Crashed
+    # restart triggers after the built-in 10s throttle. The uninstall
+    # ceremony below runs in under 5s, well within that window —
+    # `launchctl bootout` (inside uninstall_service) removes the
+    # registration before any pending restart can fire.
+    note "6d — --purge recovers from corrupt state.json + dead daemon (BACKLOG #122 Codex P2)"
+    dbxignore install >/dev/null 2>&1 || abort "6d re-install failed"
+    sleep 2
+    local daemon_pid_6d
+    daemon_pid_6d="$(python3 -c "import json; print(json.load(open('$state_dir/state.json'))['daemon_pid'])" 2>/dev/null || echo "")"
+    if [ -n "$daemon_pid_6d" ] && [ "$daemon_pid_6d" != "None" ]; then
+        kill -KILL "$daemon_pid_6d" 2>/dev/null || true
+    fi
+    sleep 1
+    printf '%s\n' 'corrupt {{{ not valid json' > "$state_dir/state.json"
+    if dbxignore uninstall --purge >/tmp/dbxignore-recovery.out 2>&1; then
+        pass "6d — uninstall --purge succeeded with corrupt state.json + dead daemon"
+    else
+        fail "6d — uninstall --purge failed; expected exit 0"
+        sed 's/^/    /' /tmp/dbxignore-recovery.out
+    fi
+    [ ! -f "$state_dir/state.json" ] \
+        && pass "6d — corrupt state.json cleaned up by recovery purge" \
+        || fail "6d — corrupt state.json still present after recovery purge"
 }
 
 # ---------------------------------------------------------------------------

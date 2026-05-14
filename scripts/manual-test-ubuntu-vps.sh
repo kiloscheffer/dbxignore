@@ -802,6 +802,18 @@ phase_uninstall() {
         fail "purge — emitted 'Could not fully purge state files' on happy path"
         sed 's/^/    /' /tmp/dbxignore-purge.out
     fi
+    # PR #243 daemon-alive purge-refusal guard (BACKLOG #122). On a
+    # clean uninstall the guard returns False — the two stderr phrases below
+    # must not appear. Failure-path coverage deferred per BACKLOG #129 —
+    # forcing a daemon to survive uninstall_service requires platform-
+    # specific stuck-process simulation.
+    if ! grep -q 'daemon is running' /tmp/dbxignore-purge.out \
+       && ! grep -q 'liveness is unknown' /tmp/dbxignore-purge.out; then
+        pass "purge — no spurious daemon-alive guard fire on happy path (PR #243)"
+    else
+        fail "purge — daemon-alive guard fired on happy path"
+        sed 's/^/    /' /tmp/dbxignore-purge.out
+    fi
 
     [ -f "$T/watch-me.tmp" ] && assert_xattr_unset "$T/watch-me.tmp" "purge — watch-me.tmp marker cleared"
     [ -d "$T/cache" ]        && assert_xattr_unset "$T/cache"        "purge — cache/ marker cleared"
@@ -822,6 +834,35 @@ phase_uninstall() {
     else
         fail "6b — --summary post-purge did not match expected pattern: $sum_purge"
     fi
+
+    # 6c — Codex P2 follow-up on PR #243's BACKLOG #122 Arm A: `--purge`
+    # now proceeds when state.json is unreadable AND no daemon process
+    # holds daemon.lock. Force the scenario: re-install (daemon starts),
+    # kill -KILL the daemon directly (service registration survives but
+    # the daemon process is dead; systemd's Restart=on-failure RestartSec
+    # is 60s, giving us a wide window), corrupt state.json so
+    # `state.read()` returns None, then run `dbxignore uninstall --purge`.
+    # uninstall_service removes the service registration before any
+    # restart can fire; Arm A's lock probe sees no contender and proceeds.
+    note "6c — --purge recovers from corrupt state.json + dead daemon (BACKLOG #122 Codex P2)"
+    dbxignore install >/dev/null 2>&1 || abort "6c re-install failed"
+    sleep 2
+    local daemon_pid_6c
+    daemon_pid_6c="$(python3 -c "import json; print(json.load(open('$DBXIGNORE_STATE_DIR/state.json'))['daemon_pid'])" 2>/dev/null || echo "")"
+    if [ -n "$daemon_pid_6c" ] && [ "$daemon_pid_6c" != "None" ]; then
+        kill -KILL "$daemon_pid_6c" 2>/dev/null || true
+    fi
+    sleep 1
+    printf '%s\n' 'corrupt {{{ not valid json' > "$DBXIGNORE_STATE_DIR/state.json"
+    if dbxignore uninstall --purge >/tmp/dbxignore-recovery.out 2>&1; then
+        pass "6c — uninstall --purge succeeded with corrupt state.json + dead daemon"
+    else
+        fail "6c — uninstall --purge failed; expected exit 0"
+        sed 's/^/    /' /tmp/dbxignore-recovery.out
+    fi
+    [ ! -f "$DBXIGNORE_STATE_DIR/state.json" ] \
+        && pass "6c — corrupt state.json cleaned up by recovery purge" \
+        || fail "6c — corrupt state.json still present after recovery purge"
 }
 
 # ---------------------------------------------------------------------------

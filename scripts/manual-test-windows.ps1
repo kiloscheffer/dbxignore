@@ -1468,6 +1468,19 @@ function Test-Uninstall {
         Write-Fail "purge - emitted 'Could not fully purge state files' on happy path"
         Get-Content $purgeOut | ForEach-Object { Write-Note "    $_" }
     }
+    # PR #243 daemon-alive purge-refusal guard (BACKLOG #122). On a
+    # clean uninstall the guard returns False - the two stderr phrases
+    # below must not appear. Failure-path coverage deferred per BACKLOG
+    # #129 - forcing a daemon to survive uninstall_service requires
+    # platform-specific stuck-process simulation, and on Windows
+    # specifically the schtasks /End 30s-timeout case can't be reproduced
+    # without a stuck filesystem operation.
+    if ($purgeText -notmatch 'daemon is running' -and $purgeText -notmatch 'liveness is unknown') {
+        Write-Pass "purge - no spurious daemon-alive guard fire on happy path (PR #243)"
+    } else {
+        Write-Fail "purge - daemon-alive guard fired on happy path"
+        Get-Content $purgeOut | ForEach-Object { Write-Note "    $_" }
+    }
 
     if (Test-Path "$T\watch-me.tmp") { Assert-AdsUnset -Path "$T\watch-me.tmp" -Name "purge - watch-me.tmp marker cleared" }
     if (Test-Path "$T\cache")        { Assert-AdsUnset -Path "$T\cache"        -Name "purge - cache/ marker cleared" }
@@ -1573,6 +1586,47 @@ function Test-Uninstall {
         } else {
             Write-Fail "6e - verb keys persisted despite --purge"
         }
+    }
+
+    # 6f - Codex P2 follow-up on PR #243's BACKLOG #122 Arm A: --purge now
+    # proceeds when state.json is unreadable AND no daemon process holds
+    # daemon.lock. Force the scenario: re-install (daemon starts),
+    # Stop-Process -Force the daemon (Task Scheduler RestartOnFailure
+    # Interval is PT1M = 60s, wide window for our uninstall to run),
+    # corrupt state.json so state.read() returns None, then run
+    # `dbxignore uninstall --purge`. uninstall_service removes the
+    # task registration before any restart fires.
+    Write-Note "6f - --purge recovers from corrupt state.json + dead daemon (BACKLOG #122 Codex P2)"
+    $installOut6f = & dbxignore install 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "6f - re-install failed: $installOut6f"
+        return
+    }
+    Start-Sleep -Seconds 2
+    $statePath6f = Join-Path $stateDir "state.json"
+    $daemonPid6f = $null
+    try {
+        $stateObj6f = Get-Content $statePath6f -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $daemonPid6f = $stateObj6f.daemon_pid
+    } catch {
+        Write-Note "6f - could not read daemon PID from state.json: $_"
+    }
+    if ($null -ne $daemonPid6f) {
+        Stop-Process -Id $daemonPid6f -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 1
+    Set-Content -Path $statePath6f -Value "corrupt {{{ not valid json" -Encoding utf8 -NoNewline
+    $recoveryOut = & dbxignore uninstall --purge 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Pass "6f - uninstall --purge succeeded with corrupt state.json + dead daemon"
+    } else {
+        Write-Fail "6f - uninstall --purge failed; expected exit 0"
+        $recoveryOut | ForEach-Object { Write-Note "    $_" }
+    }
+    if (-not (Test-Path $statePath6f)) {
+        Write-Pass "6f - corrupt state.json cleaned up by recovery purge"
+    } else {
+        Write-Fail "6f - corrupt state.json still present after recovery purge"
     }
 }
 

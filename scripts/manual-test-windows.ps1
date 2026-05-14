@@ -1158,9 +1158,9 @@ function Test-Daemon {
         _Dump-DaemonDiagnostics -T $T
     }
 
-    # 5d — DIR_CREATE bypass (item 57) — newly created dir matching a rule
+    # 5d — DIR_CREATE bypass — newly created dir matching a rule
     # should be marked synchronously without waiting the OTHER debounce.
-    Write-Note "5d - DIR_CREATE bypass for matched directory (item 57)"
+    Write-Note "5d - DIR_CREATE bypass for matched directory"
     Set-Content -Path "$T\.dropboxignore" -Value "*.tmp`n*.dat`nbuild_*/" -Encoding utf8
     Start-Sleep -Seconds 6                            # let the rule reload settle
     New-Item -ItemType Directory -Path "$T\build_x" -Force | Out-Null

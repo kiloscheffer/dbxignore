@@ -9,7 +9,7 @@
 # Usage:
 #   bash manual-test-ubuntu-vps.sh                  # default: PyPI, keep Dropbox
 #   bash manual-test-ubuntu-vps.sh --cleanup-dropbox
-#   DBXIGNORE_INSTALL_SPEC='dbxignore==0.4.0' bash manual-test-ubuntu-vps.sh
+#   DBXIGNORE_INSTALL_SPEC='dbxignore==<version>' bash manual-test-ubuntu-vps.sh
 #   DBXIGNORE_INSTALL_SPEC='git+https://github.com/kiloscheffer/dbxignore.git@<tag>' bash manual-test-ubuntu-vps.sh
 #
 # Exits non-zero if any check fails. Prints a PASS/FAIL summary.
@@ -617,12 +617,12 @@ phase_daemon() {
         _dump_daemon_diagnostics "$T"
     fi
 
-    # 5d — DIR_CREATE bypass (item 57) — newly created dir matching a rule
+    # 5d — DIR_CREATE bypass — newly created dir matching a rule
     # should be marked synchronously without waiting the OTHER debounce.
     # The bypass calls reconcile_subtree directly from the watchdog handler,
     # so even a tight poll (sub-second) should see the marker. Mirrored from
     # the macOS script for cross-platform parity.
-    note "5d — DIR_CREATE bypass for matched directory (item 57)"
+    note "5d — DIR_CREATE bypass for matched directory"
     printf '*.tmp\n*.dat\nbuild_*/\n' > "$T/.dropboxignore"
     sleep 6                                           # let the rule reload settle
     mkdir -p "$T/build_x"

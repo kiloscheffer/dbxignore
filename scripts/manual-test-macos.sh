@@ -11,7 +11,7 @@
 #
 # Usage:
 #   bash manual-test-macos.sh                        # default: PyPI
-#   DBXIGNORE_INSTALL_SPEC='dbxignore==0.5.0' bash manual-test-macos.sh
+#   DBXIGNORE_INSTALL_SPEC='dbxignore==<version>' bash manual-test-macos.sh
 #   DBXIGNORE_INSTALL_SPEC='git+https://github.com/kiloscheffer/dbxignore.git@main' bash manual-test-macos.sh
 #
 # Exits non-zero if any check fails. Prints a PASS/FAIL summary.
@@ -74,7 +74,7 @@ trap cleanup EXIT
 # ---- xattr helpers ---------------------------------------------------------
 # macOS picks the active attribute name from sync mode (legacy ↔
 # com.dropbox.ignored, File Provider ↔ com.apple.fileprovider.ignore#P,
-# or both names in the genuinely-uncertain dual-attr case from item 58).
+# or both names in the genuinely-uncertain dual-attr case).
 # These helpers read both names and report which is present, so a single
 # assertion works regardless of the active mode.
 
@@ -251,16 +251,16 @@ phase_cli_surface() {
         sed 's/^/    /' /tmp/dbxignore-status.out
     fi
 
-    # Item 37 — sync mode line is darwin-only and prints regardless of
+    # The sync mode line is darwin-only and prints regardless of
     # whether the daemon ever ran (it's derived from on-disk state, not
     # state.json). Format: `sync mode: <mode>: <reason>` where <mode> is
     # one of legacy / file_provider / both.
     if grep -qE '^sync mode: (legacy|file_provider|both):' /tmp/dbxignore-status.out; then
         local mode_line; mode_line="$(grep -E '^sync mode:' /tmp/dbxignore-status.out)"
-        pass "3 — status shows sync mode line (item 37)"
+        pass "3 — status shows sync mode line"
         note "$mode_line"
     else
-        fail "3 — status missing sync mode line (item 37)"
+        fail "3 — status missing sync mode line"
     fi
 
     dbxignore list >/dev/null 2>&1 && pass "dbxignore list (rc=0)" || fail "dbxignore list"
@@ -508,13 +508,13 @@ phase_daemon() {
         return
     fi
 
-    # Item 37 — verify the daemon also logged the sync mode at startup.
+    # Verify the daemon also logged the sync mode at startup.
     if grep -qE 'sync mode detection: (legacy|file_provider|both):' "$HOME/Library/Logs/dbxignore/daemon.log"; then
         local log_line; log_line="$(grep -E 'sync mode detection:' "$HOME/Library/Logs/dbxignore/daemon.log" | head -1)"
-        pass "5 — daemon logged sync mode at startup (item 37)"
+        pass "5 — daemon logged sync mode at startup"
         note "$log_line"
     else
-        fail "5 — daemon did not log sync mode (item 37)"
+        fail "5 — daemon did not log sync mode"
     fi
 
     # 5b — watchdog reacts to a new file (created AFTER observer is live)
@@ -543,11 +543,11 @@ phase_daemon() {
         _dump_daemon_diagnostics "$T"
     fi
 
-    # 5d — DIR_CREATE bypass (item 57) — newly created dir matching a rule
+    # 5d — DIR_CREATE bypass — newly created dir matching a rule
     # should be marked synchronously without waiting the OTHER debounce.
     # The bypass calls reconcile_subtree directly from the watchdog handler,
     # so even a tight poll (sub-second) should see the marker.
-    note "5d — DIR_CREATE bypass for matched directory (item 57)"
+    note "5d — DIR_CREATE bypass for matched directory"
     printf '*.tmp\n*.dat\nbuild_*/\n' > "$T/.dropboxignore"
     sleep 6                                           # let the rule reload settle
     mkdir -p "$T/build_x"

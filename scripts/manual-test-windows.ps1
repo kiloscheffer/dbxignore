@@ -949,7 +949,7 @@ function Get-Verb5gState {
 function Test-Daemon {
     Write-Phase "Phase 5 - daemon (Task Scheduler + watchdog)"
 
-    # 5-pre — dbxignorew.exe is the preferred windowless launcher (item #137, PR <THIS_PR>)
+    # 5-pre — dbxignorew.exe is the preferred windowless launcher (item #137, PR #252)
     # Temporarily rename pythonw.exe away in dbxignore's tool venv, then
     # install. Pre-#137, detect_invocation trusted any pythonw.exe by name,
     # and a uv venv's pythonw.exe is a console-subsystem copy of python.exe,

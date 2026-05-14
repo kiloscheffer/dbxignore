@@ -1,4 +1,4 @@
-"""Windows Explorer right-click verb registration (backlog #65).
+"""Windows Explorer right-click verb registration.
 
 Writes two HKCU registry keys that surface "Ignore from Dropbox" and
 "Restore to Dropbox" verbs on every file and directory inside discovered

@@ -15,16 +15,16 @@ Fail points
 -----------
 - ``MARKER_READ``  — ``cli._walk_marked_paths`` raises ``OSError`` before
   every ``markers.is_ignored`` read. Drives the ``scan_errors`` exit-2
-  path of ``clear`` / ``list`` (BACKLOG #121).
+  path of ``clear`` / ``list`` .
 - ``STATE_PURGE``  — ``cli._purge_dir`` raises ``OSError`` before each
   ``f.unlink()``. Drives the ``state_errors`` exit-2 path of
-  ``uninstall --purge`` (BACKLOG #127).
+  ``uninstall --purge`` .
 - ``BOOTOUT``      — ``install.macos_launchd.uninstall_agent`` treats the
   ``launchctl bootout`` result as a confirmed non-zero-rc failure. Drives
-  the bootout exit-2 path of ``uninstall`` on macOS (BACKLOG #128).
+  the bootout exit-2 path of ``uninstall`` on macOS .
 - ``DAEMON_ALIVE`` — ``cli.uninstall``'s ``--purge`` daemon-alive gate
   fires as if a daemon survived service removal. Drives the daemon-alive
-  purge-refusal exit-2 path (BACKLOG #129).
+  purge-refusal exit-2 path.
 
 Test-only. Nothing outside the manual-test scripts and ``tests/`` should
 set these env vars. New fail points are a one-liner here (a docstring

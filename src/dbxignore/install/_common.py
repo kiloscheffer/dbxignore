@@ -1,7 +1,7 @@
 """Shared helpers for platform-specific install backends.
 
 Exposes detect_invocation() and detect_cli_invocation() — unified binary
-lookup logic for the daemon and CLI entry points after PR #30. Frozen
+lookup logic for the daemon and CLI entry points. Frozen
 (PyInstaller) paths: on Windows, prefer the dbxignorew.exe sibling
 next to sys.executable (GUI-subsystem binary, silent at logon); on Linux /
 macOS, use sys.executable directly. Non-frozen
@@ -170,8 +170,8 @@ def detect_invocation() -> tuple[Path, str]:
             return Path(dbxignorew_in_path), "daemon"
         # 4. Last resort: python.exe (always console-subsystem). The daemon
         # launched at logon will show a console window; warn so the cause
-        # is discoverable. The warning + fallback shape originated in PR #229
-        # (item #100, pythonw.exe-absent case) and now also covers the
+        # is discoverable. The warning + fallback covers the pythonw.exe-absent
+        # case and also the
         # console-subsystem-pythonw.exe / console-delegating-dbxignorew.exe
         # cases — the common one being `uv run` from a source checkout, whose
         # uv project venv ships console-subsystem trampolines.

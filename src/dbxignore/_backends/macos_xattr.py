@@ -239,7 +239,7 @@ def _detect() -> tuple[list[str], str]:
     Why path-primary rather than pluginkit-primary: PluginKit registration
     is a *system-level* fact (does macOS know about ``DropboxFileProvider.appex``?).
     The user-level fact (which mode is *this account* in?) lives in
-    ``info.json``'s path field.  v0.4.0a4 conflated the two and
+    ``info.json``'s path field.  An earlier implementation conflated the two and
     misdetected users who had Dropbox.app installed but had declined the
     File Provider migration.  Path-primary fixes that.
 

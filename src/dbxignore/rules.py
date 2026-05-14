@@ -48,7 +48,7 @@ def _is_real_dir(path: Path) -> bool:
     one ``lstat()`` syscall instead of two. ``S_ISDIR`` on an ``lstat()``
     result is False for symlinks regardless of target type — `lstat`
     reports the link's own mode (`S_IFLNK`), not the target's. That
-    matches the symlinks-are-leaves invariant from PR #191's
+    matches the symlinks-are-leaves invariant for
     ``format_literal_rule``. All three call sites use this helper:
     ``cache.match`` / ``cache.explain`` (daemon hot path) and
     ``format_literal_rule`` (cold path).
@@ -225,7 +225,7 @@ def append_rule(rule_file: Path, rule_line: str) -> bool:
     updated or unchanged. The temp name is unique (``mkstemp``-generated)
     rather than the fixed ``<rule_file>.tmp`` that previously could collide
     with a concurrent CLI mutation, an editor's atomic-save backup, or a
-    user-created temp file (item #101). Still doesn't prevent lost updates
+    user-created temp file. Still doesn't prevent lost updates
     when two writers race the read-modify-write itself; an advisory lock
     would be needed for that and is deferred until a concrete failure shows.
 
@@ -290,9 +290,8 @@ def _atomic_write_rule_file(rule_file: Path, new_content: str) -> None:
     Uses ``tempfile.mkstemp`` to pick a non-colliding name in ``rule_file``'s
     parent directory (same filesystem, so ``os.replace`` is atomic), then
     closes and ``os.replace``s into place. The unique temp name prevents
-    the collisions item #101 documents: two concurrent CLI mutations, an
-    editor's backup temp file, or a stray user-created
-    ``.dropboxignore.tmp`` would all have raced the old fixed name.
+    collisions between concurrent CLI mutations, an editor's backup temp
+    file, or a stray user-created ``.dropboxignore.tmp`` with the old fixed name.
 
     ``mkstemp`` creates its temp at mode ``0o600`` on POSIX (a sensible
     default for sensitive temp files), so the write happens, then
@@ -384,8 +383,8 @@ class _LoadedRules:
     ``content_hash`` is a blake2b-128 digest of the file's bytes at load
     time, used by ``_load_if_changed`` to skip reparsing files whose content
     is unchanged. Replaces the prior ``(mtime_ns, size)`` shortcut, which
-    missed same-size edits with preserved mtimes (item #102 — common when
-    editors or ``touch -r`` restore the original timestamp after a save).
+    missed same-size edits with preserved mtimes (common when editors or
+    ``touch -r`` restore the original timestamp after a save).
 
     ``mtime_ns`` and ``size`` remain on the dataclass for diagnostic value
     and to keep the existing private-API touches in
@@ -453,7 +452,7 @@ class RuleCache:
                 self._roots.append(root)
             seen: set[Path] = set()
             for current_dir, _dirnames, filenames in os.walk(root, followlinks=False):
-                # Cooperative cancellation per directory visited (item #86).
+                # Cooperative cancellation per directory visited.
                 # The previous shape used `root.rglob(IGNORE_FILENAME)` and
                 # checked between yields — fine for trees with many rule
                 # files, but coarse for trees with many directories and few
@@ -480,7 +479,7 @@ class RuleCache:
                 # `.DropboxIgnore` would be found by a `.dropboxignore`
                 # query. The exact-match check fires first so a canonical
                 # file always wins over a mixed-case sibling on case-
-                # sensitive filesystems where both could coexist. (PR #184)
+                # sensitive filesystems where both could coexist.
                 if IGNORE_FILENAME in filenames:
                     match_name = IGNORE_FILENAME
                 else:
@@ -495,7 +494,7 @@ class RuleCache:
                 # lowercase so `PosixPath` equality (case-sensitive on
                 # POSIX) doesn't split entries between `match()`'s
                 # `ancestor / IGNORE_FILENAME` lookup and `load_root`'s
-                # discovered-path storage (PR #184).
+                # discovered-path storage.
                 ignore_file = Path(current_dir) / match_name
                 canonical = Path(current_dir) / IGNORE_FILENAME
                 # Skip stale-purge tracking on unresolvable paths (e.g.
@@ -522,13 +521,13 @@ class RuleCache:
         ``.dropboxignore`` when one exists. Cache key is normalized to
         canonical lowercase so ``PosixPath`` equality (case-sensitive on
         POSIX) doesn't split entries between this method and ``match()``
-        / ``load_root`` (item #92).
+        / ``load_root``.
         """
-        # DEBUG-level boundary log for backlog item #34 timing diagnostics.
-        # Measures rule-cache reload + conflict-detector recompute under the
-        # write lock. Lock contention against the watchdog thread's lock-free
-        # `match()` reads can in principle delay this; the log makes that
-        # observable. ``timed_debug`` no-ops when DEBUG isn't enabled.
+        # DEBUG-level timing log. Measures rule-cache reload +
+        # conflict-detector recompute under the write lock. Lock contention
+        # against the watchdog thread's lock-free `match()` reads can in
+        # principle delay this; the log makes that observable.
+        # ``timed_debug`` no-ops when DEBUG isn't enabled.
         with timed_debug(logger, "reload_file path=%s", ignore_file), self._lock:
             ignore_file = _resolve_to_canonical_sibling(ignore_file)
             canonical = _canonical_cache_key(ignore_file)
@@ -544,8 +543,7 @@ class RuleCache:
         ``.dropboxignore`` still exists, since the cache entry reflects
         the canonical file's still-valid rules. Cache key is normalized
         to canonical lowercase so the lookup hits on case-sensitive
-        filesystems where ``PosixPath`` equality is case-sensitive
-        (item #92).
+        filesystems where ``PosixPath`` equality is case-sensitive.
         """
         with self._lock:
             if not is_ignore_filename(ignore_file.name):
@@ -761,8 +759,8 @@ class RuleCache:
         the (more expensive) pathspec compile only when the hash matches
         the cached digest. The prior shortcut compared
         ``(mtime_ns, size)`` from a stat call — cheaper, but missed
-        same-size edits whose mtime was preserved by the editing tool
-        (item #102). Read+hash on a small .dropboxignore is sub-millisecond;
+        same-size edits whose mtime was preserved by the editing tool.
+        Read+hash on a small .dropboxignore is sub-millisecond;
         pathspec compile is the cost worth skipping.
 
         ``as_path`` overrides the cache-key derivation (mirrors

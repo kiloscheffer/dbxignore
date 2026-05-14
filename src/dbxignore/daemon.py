@@ -60,7 +60,7 @@ def _resolve_under_roots(raw_path: str | None, roots: list[Path]) -> tuple[Path,
     ``~/Dropbox``) still dispatches against the resolved in-root path.
     Same shape as the CLI's resolved-path fallback. The resolve syscall
     only runs for events that fail the lexical check (rare), so the
-    item #43 cost hoist is preserved in the common case.
+    cheap lexical fast-path is preserved in the common case.
     """
     if not raw_path:
         return None
@@ -113,7 +113,7 @@ def _classify(
 
     ``key`` is a ``DebounceKey`` (``(role, path)`` tuple) — the role
     discriminator distinguishes the three RULES sub-shapes that previously
-    collided under a single string-keyed model (BACKLOG #77). Roles in
+    collided under a single string-keyed model. Roles in
     use: ``"single"`` for create/modify/delete-on-rule and for all
     DIR_CREATE / OTHER events; ``"moved-out"`` for moved events with
     src=rule_file; ``"moved-into"`` for moved events with dest=rule_file.
@@ -122,7 +122,7 @@ def _classify(
     dest is a `.dropboxignore` under a watched root, else ``None``. Threaded
     through so ``_dispatch`` doesn't re-run ``find_containing`` +
     ``Path.resolve()`` on the dest path that ``_moved_dest_under_root``
-    already computed (the same cost optimization as item #43 for src).
+    already computed (the same cost optimization applied to src).
     """
     dest_rule = _moved_dest_under_root(event, roots)
     located = _resolve_under_roots(event.src_path, roots)
@@ -193,7 +193,7 @@ class _DeferredEvents:
     Without the queue the gate would drop events instead of deferring them,
     leaving newly-created ignored directories unmarked until the initial
     sweep reached them (~50s on big trees) — Dropbox could ingest in the
-    meantime. Surfaced by Codex on PR #240.
+    meantime.
     """
 
     def __init__(self) -> None:
@@ -233,11 +233,11 @@ def _dispatch(
     if classification is None:
         return
     kind, _key, root, src, dest_pair = classification
-    # DEBUG-level boundary log for backlog item #34 timing diagnostics.
-    # Emitted on the debouncer worker thread (or synchronously from the
-    # watchdog thread for fast-path DIR_CREATEs that route through here in
-    # the future). Pairs with `submit` / `emit` timestamps to measure
-    # queue-to-dispatch latency. No-op cost when DBXIGNORE_LOG_LEVEL != DEBUG.
+    # DEBUG-level timing log. Emitted on the debouncer worker thread (or
+    # synchronously from the watchdog thread for fast-path DIR_CREATEs that
+    # route through here in the future). Pairs with `submit` / `emit`
+    # timestamps to measure queue-to-dispatch latency.
+    # No-op cost when DBXIGNORE_LOG_LEVEL != DEBUG.
     logger.debug(
         "dispatch kind=%s event_type=%s path=%s",
         kind.value,
@@ -259,7 +259,7 @@ def _dispatch(
     # When ``deferred`` is supplied, gated events are appended to the
     # deferred queue and re-dispatched after ``cache_ready.set()`` — closes
     # both the transient-unmark race AND the symmetric "new ignored dir
-    # not marked during startup window" race (Codex P2 followup on PR #240).
+    # not marked during startup window" race.
     # When ``deferred`` is None, gated events are dropped and the initial
     # sweep handles them — used by direct test callers that don't need the
     # queue.
@@ -554,11 +554,10 @@ def _acquire_singleton_lock() -> Any | None:
     Cross-platform via ``fcntl.flock`` on POSIX and ``msvcrt.locking``
     on Windows. Both use non-blocking exclusive semantics: a second
     acquisition fails immediately rather than waiting. This is the
-    singleton gate that backlog item #78 introduces — the prior
-    state-based check (read state.json → check is_daemon_alive(prior.pid))
-    had a non-atomic window between read and the first state.write, so
-    two concurrent ``dbxignored`` launches could both decide "no other
-    daemon" and proceed.
+    singleton gate — the prior state-based check (read state.json →
+    check is_daemon_alive(prior.pid)) had a non-atomic window between
+    read and the first state.write, so two concurrent ``dbxignored``
+    launches could both decide "no other daemon" and proceed.
     """
     lock_path = _singleton_lock_path()
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -624,10 +623,10 @@ class _WatchdogHandler(FileSystemEventHandler):
         self._cache = cache
 
     def on_any_event(self, event: Any) -> None:
-        # DEBUG-level boundary log for backlog item #34 timing diagnostics.
-        # Emitted on the watchdog thread BEFORE classification so we can
-        # measure kernel-event-delivery latency from the test-side write
-        # timestamp. No-op cost when DBXIGNORE_LOG_LEVEL != DEBUG.
+        # DEBUG-level timing log. Emitted on the watchdog thread BEFORE
+        # classification so we can measure kernel-event-delivery latency
+        # from the test-side write timestamp.
+        # No-op cost when DBXIGNORE_LOG_LEVEL != DEBUG.
         logger.debug(
             "on_any_event type=%s path=%s is_dir=%s",
             event.event_type,
@@ -665,7 +664,7 @@ def run(stop_event: threading.Event | None = None) -> None:
         stop_event = stop_event or threading.Event()
         daemon_started = dt.datetime.now(dt.UTC)
 
-        # Singleton gate (backlog item #78). The OS-level lock is the
+        # Singleton gate. The OS-level lock is the
         # authoritative check: kernel-released on process exit so a stale
         # lock file is never a problem, and acquisition is atomic so two
         # concurrent ``dbxignored`` launches can't both proceed. The
@@ -698,18 +697,14 @@ def run(stop_event: threading.Event | None = None) -> None:
         # ``worker`` is bound here (before the try) so the outer finally
         # can join it before releasing the lock — a live worker mutating
         # markers after lock release would let a second daemon start and
-        # run concurrently with it (PR #162 / Codex P2).
+        # run concurrently with it.
         worker: threading.Thread | None = None
         try:
-            # Defense-in-depth for the migration window: a legacy
-            # (pre-#78) daemon wrote state.json but never created
-            # daemon.lock, so the lock-acquire above succeeded against
-            # nothing. Re-check state.json against the live process
-            # table and refuse if a different live daemon is recorded.
-            # Once everyone has run this version once, state.json's
-            # daemon_pid matches the most recent (this-version) daemon
-            # whose lock would have already blocked the second start,
-            # so this branch becomes vacuous.
+            # Defense-in-depth: if daemon.lock is absent (the daemon was
+            # never started under the current version), the lock-acquire
+            # above succeeded against nothing. Re-check state.json against
+            # the live process table and refuse if a different live daemon
+            # is recorded.
             prior = state_module.read()
             if (
                 prior is not None
@@ -725,8 +720,8 @@ def run(stop_event: threading.Event | None = None) -> None:
                 return
 
             # Capture our own process create_time so the persisted state.json
-            # carries it for future is_daemon_alive(create_time=...) checks
-            # (backlog item #79). Lazy-imported because psutil is soft-required
+            # carries it for future is_daemon_alive(create_time=...) checks.
+            # Lazy-imported because psutil is soft-required
             # and we want graceful degradation when it's missing.
             try:
                 import psutil  # type: ignore[import-untyped, unused-ignore]
@@ -761,10 +756,8 @@ def run(stop_event: threading.Event | None = None) -> None:
             # `cache.load_root` is NOT called here on purpose. The worker
             # thread does it before signaling `cache_ready`, so the main
             # thread's early `state.write` below isn't blocked by a slow
-            # `rglob('**/.dropboxignore')` on large trees. The cost the
-            # BACKLOG #53 fix is meant to remove was the synchronous
-            # initial sweep, but a similar argument applies to the rule
-            # scan — both belong on the worker side.
+            # `rglob('**/.dropboxignore')` on large trees. Both the rule
+            # scan and the initial sweep belong on the worker side.
             #
             # Watchdog events arriving before the worker populates the cache
             # are handled per-kind: RULES events still dispatch (they call
@@ -794,7 +787,7 @@ def run(stop_event: threading.Event | None = None) -> None:
 
                 # Early state.write: signal "daemon alive, sweep pending"
                 # to consumers. last_sweep=None is the canonical
-                # state=starting marker (item #53). On disk-write failure
+                # state=starting marker. On disk-write failure
                 # log WARNING and continue — the worker will retry the
                 # write at end of initial sweep.
                 early_state = state_module.State(
@@ -855,7 +848,6 @@ def run(stop_event: threading.Event | None = None) -> None:
                         # it isn't a correctness issue, but the wasted work
                         # is bounded by skipping the tick. The next tick
                         # runs normally once the worker exits. Surfaced by
-                        # Codex on PR #162.
                         if worker.is_alive():
                             continue
                         try:
@@ -873,7 +865,7 @@ def run(stop_event: threading.Event | None = None) -> None:
                             # that would otherwise propagate out of the while
                             # loop and force a service-manager restart. The
                             # initial-sweep worker carries the symmetric wrap
-                            # (item #91). BaseException (SystemExit / Keyboard
+                            # BaseException (SystemExit / Keyboard
                             # Interrupt) still propagates so shutdown stays
                             # responsive.
                             logger.exception("hourly sweep tick failed; continuing")
@@ -921,8 +913,7 @@ def _sweep_once(
     # shared _rules dict, so parallelizing across roots would just serialize
     # on the RLock anyway. Cost depends on whether the cache is warm: the
     # initial-sweep worker's first call walks every directory under the
-    # root looking for `.dropboxignore` files (the operation BACKLOG #53
-    # deferred off the main thread); subsequent calls are cheap because
+    # root looking for `.dropboxignore` files; subsequent calls are cheap because
     # `_load_if_changed` skips reparse on unchanged mtime+size.
     # `stop_event` threads through to `load_root`'s `os.walk` so SIGTERM
     # during the rule scan is observed within one directory's worth of
@@ -939,7 +930,7 @@ def _sweep_once(
     # the top-of-loop guard above doesn't catch that. Without this check,
     # the cache_ready signal below — or the Phase 2 reconcile that
     # follows — would race against incomplete rules and could clear
-    # markers for not-yet-loaded rule files. (Codex P2 followup on PR #240.)
+    # markers for not-yet-loaded rule files.
     if stop_event is not None and stop_event.is_set():
         logger.debug("sweep cancelled after phase 1; skipping reconcile")
         return
@@ -951,8 +942,7 @@ def _sweep_once(
     # queue was drained there too. Co-locating the signal + drain with
     # Phase 1's completion (instead of pre-loading in the worker and
     # re-loading here) eliminates the double-walk that the worker's
-    # pre-load + Phase 1 used to incur on big trees. (Codex P2 followup
-    # on PR #240.)
+    # pre-load + Phase 1 used to incur on big trees.
     if cache_ready is not None:
         cache_ready.set()
     if deferred is not None and redispatch is not None:
@@ -967,7 +957,7 @@ def _sweep_once(
     # Phase 2: reconcile each root. Reads cache (no writes) and writes
     # per-file markers on disjoint paths, so threads don't contend.
     #
-    # Fan-out across top-level subdirs (item #53 candidate 3): the ~50s
+    # Fan-out across top-level subdirs: the ~50s
     # initial-sweep wall-clock on a 27k-dir personal Dropbox tree is
     # dominated by per-directory ``markers.is_ignored`` syscalls, and a
     # single root's walk is single-threaded under the per-root pool used
@@ -1005,7 +995,7 @@ def _sweep_once(
             # potentially outside the watched root. Reconcile the
             # symlink path itself (descend=False) instead. The prior
             # one-os.walk-per-root shape saw symlinks only as dirnames
-            # entries, where followlinks=False actually applies (PR #183).
+            # entries, where followlinks=False actually applies.
             descend = not child.is_symlink()
             work.append((r, child, descend))
 
@@ -1047,7 +1037,7 @@ def _sweep_once(
     )
 
     # Snapshot the conflict count so `cli.status --summary` can report it
-    # without re-walking the rule cache on every poll (item #68). Free —
+    # without re-walking the rule cache on every poll. Free —
     # `cache.conflicts()` reads the already-computed `_conflicts` list that
     # `cache.load_root` populated above.
     total_conflicts = len(cache.conflicts())
@@ -1088,7 +1078,7 @@ def _slow_sweep_pad_seconds() -> float:
     deterministically exercise the long-sweep arms (Phase 5a's
     ``state=starting`` capture and 5f's ``state=running`` transition) on
     small test trees that would otherwise finish the sweep before any
-    timing-sensitive case can observe the transient state (item #89).
+    timing-sensitive case can observe the transient state.
 
     Lives in production code because the manual-test scripts drive the
     *installed* daemon — bypassing the install path would change what's
@@ -1159,7 +1149,7 @@ def _initial_sweep_worker(
     deferred: _DeferredEvents | None = None,
     redispatch: Callable[[Any], None] | None = None,
 ) -> None:
-    """Run the initial sweep in a worker thread (item #53).
+    """Run the initial sweep in a worker thread.
 
     Catches all non-system exceptions, logs with traceback, and sets
     ``stop_event`` so the main thread shuts the daemon down via the same
@@ -1169,13 +1159,13 @@ def _initial_sweep_worker(
     A ``_test_slow_sweep`` marker file under ``state.user_state_dir()``
     pads this worker with a ``stop_event.wait`` before the sweep runs, so
     manual-test scripts can observe the ``state=starting`` window on small
-    trees (item #89). The wait is interruptible — shutdown stays prompt
+    trees. The wait is interruptible — shutdown stays prompt
     even mid-pad.
 
     The pad-helper call AND the wait both live inside the try/except so
     an unanticipated exception type routes through the same shutdown arm
     rather than escaping the worker thread silently and stranding the
-    daemon in ``state=starting`` (item #91).
+    daemon in ``state=starting``.
 
     Cache loading, the ``cache_ready`` signal, and the deferred-event
     drain all live INSIDE ``_sweep_once`` (between Phase 1 and Phase 2)
@@ -1183,7 +1173,7 @@ def _initial_sweep_worker(
     shape pre-loaded the cache in this worker and then re-ran Phase 1
     in ``_sweep_once``; ``_load_if_changed`` skipped reparse, but
     ``RuleCache.load_root``'s ``os.walk`` still ran in full, doubling
-    the startup wall-clock on big trees. (Codex P2 followup on PR #240.)
+    the startup wall-clock on big trees.
     """
     try:
         pad_s = _slow_sweep_pad_seconds()

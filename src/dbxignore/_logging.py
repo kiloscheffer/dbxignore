@@ -20,7 +20,7 @@ def timed_debug(logger: logging.Logger, msg_fmt: str, *args: object) -> Iterator
     ``t0 = time.perf_counter(); ...; logger.debug(... time.perf_counter() - t0)``
     shape paid the perf_counter cost on every call regardless of log level,
     which the per-mutation reconcile loop multiplied by the size of the
-    swept tree (item #53 measured 49.62s on a 27k-dir tree). The
+    swept tree (measured at 49.62s on a 27k-dir tree). The
     ``isEnabledFor(DEBUG)`` gate makes the no-op-when-not-debug claim
     actually hold.
 

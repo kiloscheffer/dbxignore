@@ -36,9 +36,8 @@ class EventKind(enum.Enum):
 # and a created/modified event for `A/.dropboxignore` within the 100ms
 # RULES debounce window both keyed on `str(A/.dropboxignore).lower()`, and
 # the Debouncer's last-wins overwrite would drop one event's dispatch.
-# Surfaced in BACKLOG item #77; the previous string-prefix `"moved-into:"`
-# scheme (PR #120) addressed only the moved-out vs moved-into half of the
-# disambiguation.
+# Without the role discriminator, the previous string-prefix scheme
+# addressed only the moved-out vs moved-into half of the disambiguation.
 DebounceRole = Literal["single", "moved-out", "moved-into"]
 DebounceKey = tuple[DebounceRole, str]
 
@@ -86,11 +85,10 @@ class Debouncer:
         deadline = time.monotonic() + timeout
         with self._cond:
             self._pending[(kind, key)] = _Pending(payload=payload, deadline=deadline)
-            # DEBUG-level boundary log for backlog item #34 timing diagnostics.
-            # Inside the lock + after the insert so `queue_depth` is the
-            # post-insert size, not a racing pre-insert read. Pairs with the
-            # `emit` log below to measure debouncer queue latency. No-op cost
-            # when DBXIGNORE_LOG_LEVEL != DEBUG.
+            # DEBUG-level timing log. Inside the lock + after the insert so
+            # `queue_depth` is the post-insert size, not a racing pre-insert read.
+            # Pairs with the `emit` log below to measure debouncer queue latency.
+            # No-op cost when DBXIGNORE_LOG_LEVEL != DEBUG.
             logger.debug(
                 "submit kind=%s role=%s path=%s timeout=%.3fs queue_depth=%d",
                 kind.value,
@@ -132,8 +130,7 @@ class Debouncer:
                     continue
             # Emit outside the lock so on_emit can re-entrantly call submit().
             for emit_kind, emit_key, payload, deadline in due:
-                # DEBUG-level boundary log for backlog item #34 timing
-                # diagnostics. `dwell` measures how long after the deadline
+                # DEBUG-level timing log. `dwell` measures how long after the deadline
                 # the worker actually got to the item — under GIL/CPU
                 # starvation this can be much larger than the configured
                 # timeout. No-op cost when DBXIGNORE_LOG_LEVEL != DEBUG.

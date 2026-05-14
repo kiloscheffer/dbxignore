@@ -3,7 +3,7 @@
 Plist is written to ~/Library/LaunchAgents/com.kiloscheffer.dbxignore.plist
 and bootstrapped into the user's GUI session domain (gui/<uid>) via the
 modern launchctl bootstrap/bootout commands. Legacy `launchctl load -w`/
-`unload -w` is intentionally not used — see the v0.4 spec for rationale.
+`unload -w` is intentionally not used — see the macOS launchd backend notes for rationale.
 
 GUI-domain prerequisite: `launchctl bootstrap gui/<uid>` requires the
 user has logged into the macOS GUI at least once since the last reboot.
@@ -194,9 +194,9 @@ def uninstall_agent() -> None:
     #    stderr-pattern matching via `_is_service_not_loaded` because
     #    launchctl's rc isn't a stable indicator across macOS versions.
     #
-    # BACKLOG #119: prior shape discarded both rc and stderr, leaving the
-    # tug-of-war silent. The fix below mirrors the eventual-consistency
-    # contract Linux/Windows uphold via their respective service-managers.
+    # The prior shape discarded both rc and stderr, leaving the tug-of-war
+    # silent. The fix below mirrors the eventual-consistency contract
+    # Linux/Windows uphold via their respective service-managers.
     try:
         result = subprocess.run(  # noqa: S603 — hardcoded args, no user data
             ["launchctl", "bootout", _service_target()],

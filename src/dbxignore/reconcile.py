@@ -50,8 +50,8 @@ def reconcile_subtree(
     CLI/daemon boundary — the daemon resolves roots upfront via
     ``_discover_roots()`` (avoiding a per-walk ``Path.resolve()`` syscall
     that previously dominated sweep wall-clock on Windows). The CLI's
-    path-taking verbs may pass symlink-preserving normalized paths (item
-    #95): containment check below is purely lexical and tolerates either
+    path-taking verbs may pass symlink-preserving normalized paths:
+    containment check below is purely lexical and tolerates either
     form. The ``ValueError`` raised on out-of-root ``subdir`` is the
     caller's responsibility to avoid; misuse is a programming error.
 
@@ -66,7 +66,7 @@ def reconcile_subtree(
     When ``descend`` is False, only ``subdir`` itself is reconciled; the
     ``os.walk`` is skipped. Used by ``daemon._sweep_once`` to handle the
     root-path reconcile separately from the per-top-level-child fan-out
-    (item #53 candidate 3) — the caller submits one ``descend=False`` call
+    — the caller submits one ``descend=False`` call
     per root plus one ``descend=True`` call per top-level child to a single
     ``ThreadPoolExecutor``, parallelizing the walk across subdirs.
 
@@ -75,14 +75,13 @@ def reconcile_subtree(
     returned has accurate counts for what completed before the break;
     convergence (next sweep over the same paths) finishes the rest. Used
     by the daemon's initial-sweep worker to support cooperative
-    cancellation on SIGTERM (item #53).
+    cancellation on SIGTERM.
     """
     start = time.perf_counter()
     report = Report()
-    # DEBUG-level boundary log for backlog item #34 timing diagnostics.
-    # Pairs with the `done` log below to measure subtree-walk wall-clock.
-    # Under AV scanning, this can be the dominant cost on Windows runners.
-    # No-op cost when DBXIGNORE_LOG_LEVEL != DEBUG.
+    # DEBUG-level timing log. Pairs with the `done` log below to measure
+    # subtree-walk wall-clock. Under AV scanning, this can be the dominant
+    # cost on Windows runners. No-op cost when DBXIGNORE_LOG_LEVEL != DEBUG.
     logger.debug(
         "reconcile_subtree start subdir=%s dry_run=%s descend=%s", subdir, dry_run, descend
     )
@@ -98,7 +97,7 @@ def reconcile_subtree(
     # Without this guard, a descend=True walk on a symlinked directory
     # would traverse the link target — potentially outside any
     # Dropbox tree. Mirrors `daemon._sweep_once`'s per-child symlink
-    # guard at the dispatch site (PR #183) and `_walk_marked_paths`'s
+    # guard at the dispatch site and `_walk_marked_paths`'s
     # explicit short-circuit in cli.py.
     if descend and subdir.is_symlink():
         descend = False
@@ -191,9 +190,8 @@ def _reconcile_path(
     try:
         if should_ignore and not currently_ignored:
             if not dry_run:
-                # DEBUG-level boundary log for backlog item #34 timing
-                # diagnostics. Measures NTFS ADS write latency per path; on
-                # Windows this is the layer most likely to be slowed by
+                # DEBUG-level timing log. Measures NTFS ADS write latency per
+                # path; on Windows this is the layer most likely to be slowed by
                 # Defender real-time scanning. ``timed_debug`` gates the
                 # ``time.perf_counter()`` calls on the logger level so the
                 # per-mutation cost is zero in production INFO config.
@@ -225,7 +223,7 @@ def _reconcile_path(
         # Write failed: the marker state is still whatever we read.
         return currently_ignored
     except OSError as exc:
-        # Symmetric to the read-side broad-OSError arm (item #21). Tolerates
+        # Symmetric to the read-side broad-OSError arm. Tolerates
         # transient I/O errors (EIO on network drives, ENOSPC on quota-full
         # disks, etc.) without killing the per-root sweep worker. Other
         # exception types (real bugs, e.g. AttributeError, TypeError) still

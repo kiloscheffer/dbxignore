@@ -28,24 +28,6 @@ from click.testing import CliRunner
 
 from dbxignore import cli, markers
 
-# ---- Symlink-availability gate ---------------------------------------------
-
-
-@pytest.fixture
-def symlink_capable(tmp_path: Path) -> None:
-    """Skip the test if symlink creation isn't permitted (Windows without Dev Mode)."""
-    probe_target = tmp_path / "_symlink_probe_target"
-    probe_target.touch()
-    probe_link = tmp_path / "_symlink_probe_link"
-    try:
-        os.symlink(probe_target, probe_link)
-    except OSError as exc:
-        pytest.skip(f"symlink creation not permitted on this host: {exc}")
-    finally:
-        probe_link.unlink(missing_ok=True)
-        probe_target.unlink(missing_ok=True)
-
-
 # ---- Raw-argument spy ------------------------------------------------------
 
 

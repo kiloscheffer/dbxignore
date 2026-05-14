@@ -3,6 +3,7 @@
 Pure-function tests — no fixtures, no tmp_path needed, no monkeypatching.
 """
 
+import stat
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -43,8 +44,7 @@ def test_meta_char_escaping_in_segment(tmp_path: Path) -> None:
     # to create a Path-like object with relative_to and is_dir methods.
     target = MagicMock(spec=Path)
     target.relative_to.return_value = Path("foo*bar")
-    target.is_dir.return_value = True
-    target.is_symlink.return_value = False
+    target.lstat.return_value.st_mode = stat.S_IFDIR
     assert format_literal_rule(target, rule_file) == r"/foo\*bar/"
 
 
@@ -55,8 +55,7 @@ def test_question_mark_and_brackets_escaped(tmp_path: Path) -> None:
     # to test escaping logic independently.
     target = MagicMock(spec=Path)
     target.relative_to.return_value = Path("weird?name[ish]")
-    target.is_dir.return_value = True
-    target.is_symlink.return_value = False
+    target.lstat.return_value.st_mode = stat.S_IFDIR
     assert format_literal_rule(target, rule_file) == r"/weird\?name\[ish\]/"
 
 
@@ -70,8 +69,7 @@ def test_literal_backslash_escaped_in_segment(tmp_path: Path) -> None:
     rule_file.touch()
     target = MagicMock(spec=Path)
     target.relative_to.return_value = Path(r"back\slash")
-    target.is_dir.return_value = True
-    target.is_symlink.return_value = False
+    target.lstat.return_value.st_mode = stat.S_IFDIR
     assert format_literal_rule(target, rule_file) == r"/back\\slash/"
 
 
@@ -129,8 +127,6 @@ def test_newline_in_segment_raises_value_error(tmp_path: Path) -> None:
     rule_file.touch()
     target = MagicMock(spec=Path)
     target.relative_to.return_value = Path("foo\n*.tmp")
-    target.is_dir.return_value = False
-    target.is_symlink.return_value = False
     with pytest.raises(ValueError, match="non-space whitespace"):
         format_literal_rule(target, rule_file)
 
@@ -165,8 +161,6 @@ def test_trailing_tab_in_segment_raises_value_error(tmp_path: Path) -> None:
     rule_file.touch()
     target = MagicMock(spec=Path)
     target.relative_to.return_value = Path("foo\t")
-    target.is_dir.return_value = False
-    target.is_symlink.return_value = False
     with pytest.raises(ValueError, match="non-space whitespace"):
         format_literal_rule(target, rule_file)
 
@@ -206,8 +200,6 @@ def test_unicode_line_separator_in_segment_raises_value_error(tmp_path: Path) ->
     rule_file.touch()
     target = MagicMock(spec=Path)
     target.relative_to.return_value = Path("foo bar")
-    target.is_dir.return_value = False
-    target.is_symlink.return_value = False
     with pytest.raises(ValueError, match="non-space whitespace"):
         format_literal_rule(target, rule_file)
 

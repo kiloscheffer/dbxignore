@@ -849,7 +849,7 @@ function Test-ExtendedCli {
     Write-Note "4v - clear/list exit 2 on injected marker-read failure"
     Remove-Item -Recurse -Force $T -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $T | Out-Null
-    Set-Content -Path (Join-Path $T ".dropboxignore") -Value "*.tmp" -NoNewline
+    Set-Content -Path (Join-Path $T ".dropboxignore") -Value "*.tmp" -Encoding utf8 -NoNewline
     New-Item -ItemType File -Force -Path (Join-Path $T "foo.tmp") | Out-Null
     dbxignore apply $T --yes *> $null
 

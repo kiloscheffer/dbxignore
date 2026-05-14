@@ -479,6 +479,94 @@ def test_install_wraps_filenotfounderror_from_systemctl(
         linux_systemd.install_unit()
 
 
+def test_uninstall_unit_tolerates_systemctl_missing_on_disable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bare ``systemctl disable --now`` call uses ``check=False`` to
+    swallow a missing-unit non-zero exit — but ``FileNotFoundError``
+    (systemctl absent on a minimal container / chroot) is an OSError, not
+    a CalledProcessError, so ``check=False`` doesn't suppress it. Without
+    an OSError arm around that call it escapes as a raw traceback. The
+    daemon-reload call afterward surfaces a genuinely-missing systemctl as
+    RuntimeError, so the disable call itself should just be tolerated."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    def fake_run(
+        cmd: list[str], check: bool = False, capture_output: bool = False, text: bool = False
+    ) -> subprocess.CompletedProcess[str]:
+        if "disable" in cmd:
+            raise FileNotFoundError(2, "No such file or directory", "systemctl")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    from dbxignore.install import linux_systemd
+
+    # No unit file staged → unlink is skipped; daemon-reload succeeds via
+    # fake_run. The disable call's FileNotFoundError must not escape.
+    linux_systemd.uninstall_unit()
+
+
+def test_uninstall_unit_raises_runtimeerror_when_unit_unlink_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An OSError removing the unit file (permission denied, etc.) must be
+    converted to RuntimeError — cli.uninstall catches RuntimeError; a raw
+    OSError would escape as a traceback after partial cleanup."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    unit_path = tmp_path / ".config" / "systemd" / "user" / "dbxignore.service"
+    unit_path.parent.mkdir(parents=True)
+    unit_path.write_text("[Unit]\nDescription=stub\n")
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda cmd, check=False, capture_output=False, text=False: subprocess.CompletedProcess(
+            cmd, 0, "", ""
+        ),
+    )
+
+    def boom(self: Path, *args: object, **kwargs: object) -> None:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "unlink", boom)
+
+    from dbxignore.install import linux_systemd
+
+    with pytest.raises(RuntimeError, match="could not remove"):
+        linux_systemd.uninstall_unit()
+
+
+def test_remove_dropin_directory_routes_rmtree_error_to_accumulator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An OSError from shutil.rmtree must be routed through the caller's
+    error accumulator, not raised — uninstall --purge calls this mid-cleanup
+    and a raw traceback there strands the rest of the purge."""
+    import shutil
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    dropin_dir = tmp_path / ".config" / "systemd" / "user" / "dbxignore.service.d"
+    dropin_dir.mkdir(parents=True)
+    (dropin_dir / "scratch.conf").write_text("[Service]\n", encoding="utf-8")
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(shutil, "rmtree", boom)
+
+    from dbxignore.install import linux_systemd
+
+    errors: list[tuple[Path, str]] = []
+    result = linux_systemd.remove_dropin_directory(errors=errors)
+
+    # Did not crash; signalled failure via None return + the accumulator.
+    assert result is None
+    assert len(errors) == 1
+    assert errors[0][0] == dropin_dir
+    assert dropin_dir.exists()  # still there — removal failed
+
+
 def test_remove_dropin_directory_removes_existing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

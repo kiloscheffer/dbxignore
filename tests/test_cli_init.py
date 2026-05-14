@@ -155,6 +155,25 @@ def test_init_path_not_a_directory_errors(tmp_path: Path) -> None:
     assert result.exit_code == 2
 
 
+def test_init_write_failure_errors_cleanly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An OSError on the file write (permission denied, read-only dir,
+    cloud-placeholder) must surface as ``error: cannot write ...`` + exit 2
+    — not an unhandled traceback. Mirrors the sibling ``generate`` command's
+    write-error contract."""
+    runner = CliRunner()
+
+    def boom(self: Path, *args: object, **kwargs: object) -> int:
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "write_text", boom)
+    result = runner.invoke(cli.main, ["init", str(tmp_path)])
+
+    assert result.exit_code == 2
+    assert "cannot write" in result.output
+    assert "Permission denied" in result.output
+    assert not (tmp_path / IGNORE_FILENAME).exists()
+
+
 def test_init_default_path_is_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Omitting PATH defaults to cwd — verify by chdir-ing and running unscoped."""
     monkeypatch.chdir(tmp_path)

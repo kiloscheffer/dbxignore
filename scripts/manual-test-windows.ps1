@@ -465,6 +465,32 @@ function Test-ExtendedCli {
         Write-Fail "4g - init did not write expected header"
     }
 
+    # 4g — init refuses an unwritable target dir with exit 2 + a clean
+    # "cannot write" message rather than an unhandled OSError traceback (<THIS_PR>).
+    Write-Note "4g - dbxignore init on an unwritable directory"
+    $roDir = Join-Path $T "init-readonly"
+    New-Item -ItemType Directory -Force -Path $roDir | Out-Null
+    # Deny Write Data + Append Data so the .dropboxignore write inside fails;
+    # Read/Execute stay intact so init's detection walk still runs normally.
+    icacls $roDir /deny "${env:USERNAME}:(WD,AD)" *> $null
+    $initRoErrFile = Join-Path $env:TEMP "dbx-init-ro.err"
+    & dbxignore init $roDir *> $initRoErrFile
+    $initRoExitCode = $LASTEXITCODE
+    # Drop the deny ACE so Reset-TestDir can clean $roDir up later.
+    icacls $roDir /remove:d "${env:USERNAME}" *> $null
+    if ($initRoExitCode -eq 2) {
+        Write-Pass "4g - init exits 2 on an unwritable dir"
+    } else {
+        Write-Fail "4g - init exited $initRoExitCode instead of 2"
+    }
+    $initRoErr = if (Test-Path $initRoErrFile) { Get-Content $initRoErrFile -Raw } else { "" }
+    if ($initRoErr -match 'cannot write') {
+        Write-Pass "4g - init stderr says 'cannot write'"
+    } else {
+        Write-Note "init stderr: $initRoErr"
+        Write-Fail "4g - init stderr missing 'cannot write'"
+    }
+
     # 4h — dbxignore generate (byte-for-byte)
     # `-NoNewline` + explicit trailing `` `n `` writes pure LF (matches the
     # bash version's `printf 'X\n' >` output). Without `-NoNewline`,

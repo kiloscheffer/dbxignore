@@ -39,6 +39,43 @@ def _read_dropbox_account_paths(info_path: Path) -> list[str]:
     return paths
 
 
+def _validate_account_paths(account_paths: list[str], source: Path) -> list[Path]:
+    """Filter info.json account paths to absolute, existing directories.
+
+    A stale ``info.json`` entry — an account that was unlinked, a folder
+    that was relocated, an external drive that isn't mounted — would
+    otherwise become a configured root unchecked. The daemon then crashes
+    at ``observer.schedule()`` on the nonexistent path. This mirrors the ``DBXIGNORE_ROOT``
+    override's absolute / exists / is-dir checks in ``discover()``; here
+    invalid entries are skipped individually (each with a WARNING) rather
+    than rejecting the whole file, so one stale account does not mask a
+    valid sibling.
+    """
+    valid: list[Path] = []
+    for raw in account_paths:
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            logger.warning(
+                "Dropbox account path %r in %s is not absolute; skipping entry",
+                raw,
+                source,
+            )
+            continue
+        # `is_dir()` follows symlinks and swallows its own OSError → False,
+        # so it covers "doesn't exist", "is a file", and "unreadable" in
+        # one check.
+        if not candidate.is_dir():
+            logger.warning(
+                "Dropbox account path %s in %s does not exist or is not a directory; "
+                "skipping entry",
+                candidate,
+                source,
+            )
+            continue
+        valid.append(candidate)
+    return valid
+
+
 def find_containing(path: Path, roots: list[Path]) -> Path | None:
     """Return the first root that contains ``path``, or ``None`` if none do."""
     for root in roots:
@@ -148,7 +185,20 @@ def discover() -> list[Path]:
                 candidate,
             )
             continue
-        return [Path(p) for p in account_paths]
+        # Validate before returning: a stale account path (folder relocated,
+        # drive unmounted, account unlinked) would otherwise crash the
+        # daemon at observer.schedule(). Per-entry skip with a WARNING — an
+        # all-invalid candidate falls through to the next one, same as the
+        # empty-accounts arm above.
+        valid_roots = _validate_account_paths(account_paths, candidate)
+        if not valid_roots:
+            logger.warning(
+                "Dropbox info.json at %s has no account paths that resolve to existing "
+                "directories; trying next candidate",
+                candidate,
+            )
+            continue
+        return valid_roots
 
     if not tried:
         if len(candidates) == 1:

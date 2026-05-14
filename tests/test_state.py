@@ -198,6 +198,46 @@ def test_read_bool_daemon_create_time_returns_none(tmp_path: Path) -> None:
     assert state.read(p) is None
 
 
+def test_read_string_daemon_pid_returns_none(tmp_path: Path) -> None:
+    """A non-integer ``daemon_pid`` (hand-edited or shape-mismatched
+    state file) must fail decode and route through the corrupt-state
+    fallback. Without validation at decode time, the string would reach
+    ``psutil.pid_exists()`` / ``os.kill()`` inside ``is_daemon_alive`` and
+    raise an uncaught ``TypeError`` — the ``(OSError, SystemError)`` arm
+    there does not catch it — breaking ``status``, ``clear``'s daemon-alive
+    guard, and the daemon's startup guard."""
+    p = tmp_path / "state.json"
+    p.write_text('{"daemon_pid": "1234"}', encoding="utf-8")
+    assert state.read(p) is None
+
+
+def test_read_bool_daemon_pid_returns_none(tmp_path: Path) -> None:
+    """``isinstance(True, int)`` is True (bool subclasses int), so a naive
+    int check would accept ``"daemon_pid": true``. Explicit bool exclusion
+    rejects it — a bool is never a real PID."""
+    p = tmp_path / "state.json"
+    p.write_text('{"daemon_pid": true}', encoding="utf-8")
+    assert state.read(p) is None
+
+
+def test_read_float_daemon_pid_returns_none(tmp_path: Path) -> None:
+    """A float ``daemon_pid`` is not a valid PID. ``os.kill`` rejects
+    non-int pids with ``TypeError``; reject it at decode time instead."""
+    p = tmp_path / "state.json"
+    p.write_text('{"daemon_pid": 1234.5}', encoding="utf-8")
+    assert state.read(p) is None
+
+
+def test_read_none_daemon_pid_decodes(tmp_path: Path) -> None:
+    """``daemon_pid: null`` is valid — it's the documented "pid never
+    written" state. Validation must accept None, not just integers."""
+    p = tmp_path / "state.json"
+    p.write_text('{"daemon_pid": null}', encoding="utf-8")
+    loaded = state.read(p)
+    assert loaded is not None
+    assert loaded.daemon_pid is None
+
+
 # ---- is_daemon_alive (followup item 59) -------------------------------------
 
 

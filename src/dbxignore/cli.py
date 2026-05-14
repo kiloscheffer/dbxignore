@@ -1852,13 +1852,24 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
                     err=True,
                 )
 
-        # (3) Remove the systemd drop-in directory (Linux only).
+        # (3) Remove the systemd drop-in directory (Linux only). An
+        # shutil.rmtree failure is routed through a dedicated accumulator
+        # (kept separate from state_errors so the user-facing message stays
+        # accurate — a drop-in dir isn't a state file) and folded into the
+        # exit-2 gate below.
         if sys.platform.startswith("linux"):
             from dbxignore.install import linux_systemd
 
-            removed_dropin = linux_systemd.remove_dropin_directory()
+            dropin_errors: list[tuple[Path, str]] = []
+            removed_dropin = linux_systemd.remove_dropin_directory(errors=dropin_errors)
             if removed_dropin is not None:
                 click.echo(f"Removed systemd drop-in directory {removed_dropin}.")
+            for path, msg in dropin_errors:
+                click.echo(
+                    f"Could not remove systemd drop-in directory {path}: {msg}",
+                    err=True,
+                )
+            state_errors.extend(dropin_errors)
 
         if shell_errors:
             click.echo(
@@ -2014,7 +2025,11 @@ def init(path: Path | None, force: bool, to_stdout: bool) -> None:
     # written rule files (PR #207). Without it, Python's default text-mode
     # write translates `\n` → `\r\n` on Windows, producing platform-divergent
     # bytes for the same template input. Item #110.
-    output.write_text(content, encoding="utf-8", newline="")
+    try:
+        output.write_text(content, encoding="utf-8", newline="")
+    except OSError as exc:
+        click.echo(f"error: cannot write {output}: {exc.strerror}", err=True)
+        sys.exit(2)
     if detected:
         click.echo(f"wrote {output} ({len(detected)} detected: {', '.join(detected)})")
     else:

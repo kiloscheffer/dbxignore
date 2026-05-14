@@ -21,8 +21,7 @@ jobs:
       # guaranteed conformant by the `commit-message.prefix` config in
       # `.github/dependabot.yml` (produces `ci(deps): bump …`), but that
       # config doesn't constrain humans who push to the same branch later,
-      # so this step has to run for them. Surfaced as a Codex P2 follow-up
-      # on PR #160.
+      # so this step has to run for them.
       - name: Validate commit messages
         uses: commit-check/commit-check-action@7c158d4541309c5952de3343151750882b036d10 # v2.6.0
         with:

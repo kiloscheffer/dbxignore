@@ -3,7 +3,7 @@
 #   pre-commit install --hook-type commit-msg --hook-type pre-push
 # After that, `git commit` and `git push` run these checks automatically.
 # CI re-runs them via commit-check-action, so local install is a convenience,
-# not a merge gate — see CLAUDE.md "Git workflow".
+# not a merge gate — see CONTRIBUTING.md "Git workflow".
 
 repos:
   - repo: https://github.com/commit-check/commit-check

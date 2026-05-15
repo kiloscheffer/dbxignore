@@ -173,9 +173,9 @@ def _pluginkit_extension_state() -> Literal["allowed", "disabled", "not_register
       should treat as "can't decide from pluginkit, fall through to other
       signals."
 
-    Output format verified against macOS Tahoe 26.4 / Dropbox 250.4 on
-    2026-05-01: one line per matching extension, prefix character (or
-    leading whitespace) indicates user-toggled state.
+    Output format (verified against macOS Tahoe 26.4 / Dropbox 250.4): one
+    line per matching extension, prefix character (or leading whitespace)
+    indicates user-toggled state.
     """
     try:
         result = subprocess.run(  # noqa: S603,S607 — hardcoded args, no user data

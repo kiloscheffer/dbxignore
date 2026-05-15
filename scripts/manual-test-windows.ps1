@@ -231,9 +231,9 @@ function Test-Preflight {
     }
     Write-Note ("uv: " + (uv --version))
 
-    # OneDrive-on-AppData detection. Per CLAUDE.md gotcha: if %AppData% is
-    # OneDrive-synced with Files-On-Demand, uv's hardlink-from-cache install
-    # fails with ERROR_CLOUD_FILE_INCOMPATIBLE_HARDLINKS (os error 396).
+    # OneDrive-on-AppData detection: if %AppData% is OneDrive-synced with
+    # Files-On-Demand, uv's hardlink-from-cache install fails with
+    # ERROR_CLOUD_FILE_INCOMPATIBLE_HARDLINKS (os error 396).
     # Force --link-mode=copy unconditionally to dodge the issue — same cost
     # on a non-OneDrive setup, just slightly slower install.
     $env:UV_LINK_MODE = "copy"

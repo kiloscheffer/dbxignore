@@ -53,9 +53,10 @@ def test_daemon_starts_and_responds_to_one_event(
 
             # 10s budget: one event in flight, one reconcile to perform.
             # Generous relative to ~30ms reconcile + sub-second event delivery
-            # under load. If this still flakes, candidate H8 (Windows kernel
-            # silently dropping events — see CLAUDE.md gotcha) is the cause
-            # and the test should be deleted, not widened further.
+            # under load. If this still flakes, the cause is the Windows kernel
+            # silently dropping events (see docs/internals/long-form-gotchas.md,
+            # "Windows watchdog mystery") and the test should be deleted, not
+            # widened further.
             assert _poll_until(lambda: markers.is_ignored(tmp_path / "build"), timeout_s=10.0), (
                 "build/ was not marked ignored within 10s — likely a dropped "
                 "ReadDirectoryChangesW event (Windows can drop these under load)."

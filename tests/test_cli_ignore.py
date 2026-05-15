@@ -531,9 +531,10 @@ def test_ignore_preserves_symlink_path(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Regression: when the target is a symlink, the verb must operate
-    on the LINK (markers apply to the link per CLAUDE.md's symlink invariant),
-    not the symlink's target. Specifically: a symlink under Dropbox pointing
-    outside Dropbox must NOT be rejected as "not under any Dropbox root"."""
+    on the LINK (markers apply to the link, not the target — symlinks are
+    leaves for marker operations). Specifically: a symlink under Dropbox
+    pointing outside Dropbox must NOT be rejected as "not under any Dropbox
+    root"."""
     root = _setup_dropbox_root(tmp_path, fake_markers, monkeypatch)
     # Set up: a directory outside the Dropbox root that the symlink targets.
     outside = tmp_path.parent / "outside_dropbox"
@@ -1337,9 +1338,9 @@ def test_ignore_refuses_when_existing_rule_file_invalid(
     — but the daemon will drop the file on reconcile too and clear the marker.
     Surface the error and refuse before mutating.
 
-    pathspec is liberal and accepts most malformed patterns without raising
-    (see CLAUDE.md gotcha). Monkeypatch rules._build_spec to raise, as the
-    CLAUDE.md recommends for testing the (ValueError, TypeError, re.error) arm.
+    pathspec is liberal and accepts most malformed patterns without raising,
+    so this test monkeypatches rules._build_spec to raise — the only reliable
+    way to exercise the (ValueError, TypeError, re.error) arm.
     """
     from dbxignore import rules
 

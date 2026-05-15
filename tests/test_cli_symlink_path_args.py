@@ -421,10 +421,10 @@ def test_case8_apply_symlink_to_directory_does_not_descend(
     marker but does NOT walk into the link target's tree.
 
     Without the ``descend=False`` guard, ``os.walk(link, followlinks=False)``
-    follows the link at the walk root (per the CLAUDE.md gotcha) and apply
-    would write markers under paths the daemon's own walk (which starts
-    from the Dropbox root with ``followlinks=False``) would never reach,
-    stranding orphan markers.
+    follows the link at the walk root (``followlinks=False`` only suppresses
+    following at non-root frames) and apply would write markers under paths
+    the daemon's own walk (which starts from the Dropbox root with
+    ``followlinks=False``) would never reach, stranding orphan markers.
     """
     # Create a directory and a file in it; the file would be matched by
     # a top-level rule.
@@ -469,8 +469,9 @@ def test_case9_clear_list_symlink_to_directory_does_not_descend(
 
     ``_walk_marked_paths`` short-circuits when ``target.is_symlink()`` —
     ``os.walk(target, followlinks=False)`` still follows the link at the
-    walk root (per the CLAUDE.md gotcha; same shape as apply's walk and
-    the daemon's per-subdir fan-out). Without the guard,
+    walk root (``followlinks=False`` only suppresses following at non-root
+    frames; same shape as apply's walk and the daemon's per-subdir fan-out).
+    Without the guard,
     `dbxignore clear ~/Dropbox/link-to-external` would enumerate and
     clear markers in the link's external target tree.
     """

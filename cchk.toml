@@ -1,7 +1,7 @@
 # Single source of truth for Conventional Commits + Conventional Branch
 # enforcement. Consumed by both the pre-commit commit-msg hook (local) and
 # commit-check-action (CI). Do not duplicate these lists in prose — reference
-# this file from CLAUDE.md instead.
+# this file from CONTRIBUTING.md instead.
 #
 # Specs:
 #   https://www.conventionalcommits.org/en/v1.0.0/

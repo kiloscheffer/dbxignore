@@ -49,7 +49,7 @@ def test_append_does_not_deduplicate(tmp_path: Path) -> None:
 
 
 def test_append_appends_after_trailing_whitespace_existing_line(tmp_path: Path) -> None:
-    """Trailing-whitespace tolerance no longer matters for append (we always
+    """Trailing-whitespace tolerance doesn't matter for append (we always
     append). The existing manually-typed `build/   ` stays untouched; the new
     canonical `build/` is appended verbatim."""
     rule_file = tmp_path / ".dropboxignore"
@@ -127,9 +127,10 @@ def test_remove_when_file_does_not_exist_returns_zero(tmp_path: Path) -> None:
 
 
 def test_append_to_existing_empty_file_starts_on_line_1(tmp_path: Path) -> None:
-    """Regression: empty existing rule file (e.g., touched by user) was producing
-    a leading blank line on first append. The empty-existing case must be
-    treated like a missing file — write header + rule, no leading blank."""
+    """An empty existing rule file (e.g., touched by user) must not
+    produce a leading blank line on first append. The empty-existing
+    case must be treated like a missing file — write header + rule, no
+    leading blank."""
     rule_file = tmp_path / ".dropboxignore"
     rule_file.touch()  # empty file exists
     appended = append_rule(rule_file, "build/")
@@ -140,9 +141,9 @@ def test_append_to_existing_empty_file_starts_on_line_1(tmp_path: Path) -> None:
 def test_append_does_not_clobber_preexisting_dropboxignore_tmp(tmp_path: Path) -> None:
     """A pre-existing ``.dropboxignore.tmp`` sibling — created by a concurrent
     CLI mutation in flight, an editor's atomic-save backup, or a stray user
-    file — must survive the append. Previously ``append_rule`` wrote through
-    the fixed name ``<rule_file>.tmp`` and would have clobbered it.
-    The ``mkstemp``-based shape picks a unique temp name."""
+    file — must survive the append. A fixed ``<rule_file>.tmp`` temp name
+    would clobber it; the ``mkstemp``-based shape picks a unique temp
+    name."""
     rule_file = tmp_path / ".dropboxignore"
     rule_file.write_text("node_modules/\n", encoding="utf-8")
     sentinel = tmp_path / ".dropboxignore.tmp"
@@ -154,7 +155,7 @@ def test_append_does_not_clobber_preexisting_dropboxignore_tmp(tmp_path: Path) -
     assert rule_file.read_text(encoding="utf-8") == "node_modules/\nbuild/\n"
     assert sentinel.read_text(encoding="utf-8") == "sentinel: in-flight concurrent write\n", (
         "Pre-existing .dropboxignore.tmp was clobbered. The mkstemp-based "
-        "temp-name picker must not collide with the fixed legacy name."
+        "temp-name picker must not collide with the fixed `<rule>.tmp` name."
     )
 
 
@@ -212,10 +213,10 @@ def test_append_preserves_existing_rule_file_mode(tmp_path: Path) -> None:
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only permission bits")
 def test_append_respects_umask_for_new_rule_file(tmp_path: Path) -> None:
     """When ``append_rule`` creates a brand-new ``.dropboxignore``, the
-    file's mode must match ``0o666 & ~umask`` — same as what the prior
-    ``Path.write_text`` shape produced via a default open(O_CREAT). Pins
-    that the chmod-after-mkstemp restoration uses the umask-based default
-    for new files, not mkstemp's locked-down 0o600."""
+    file's mode must match ``0o666 & ~umask`` — the same default a
+    ``Path.write_text`` / open(O_CREAT) creation would produce. Pins
+    that the chmod-after-mkstemp restoration uses the umask-based
+    default for new files, not mkstemp's locked-down 0o600."""
     rule_file = tmp_path / ".dropboxignore"
     saved = os.umask(0o022)
     try:

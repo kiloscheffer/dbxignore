@@ -80,7 +80,7 @@ def test_should_use_gui_dialogs_false_when_no_console_but_stdio_has_fileno(
 def test_should_use_gui_dialogs_true_when_no_console_and_stdout_is_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No console window AND sys.stdout is None (legacy noconsole shape) → True."""
+    """No console window AND sys.stdout is None → True."""
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(ctypes, "windll", _make_fake_kernel32_windll(0), raising=False)
     monkeypatch.setattr(sys, "stdout", None)

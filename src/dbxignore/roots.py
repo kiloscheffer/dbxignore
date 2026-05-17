@@ -155,11 +155,11 @@ def discover() -> list[Path]:
         return []
 
     # Iterate candidates and accept the first one that exists, parses
-    # cleanly, AND contains at least one usable account path. A
-    # stale APPDATA\Dropbox\info.json (from an uninstalled per-user
-    # install) used to mask a valid per-machine LOCALAPPDATA\Dropbox\info.json
-    # (or vice versa) on Windows in two distinct ways: (a) parse failure
-    # on a corrupt first candidate; (b) parse-success-but-empty
+    # cleanly, AND contains at least one usable account path. A stale
+    # APPDATA\Dropbox\info.json (from an uninstalled per-user install)
+    # can mask a valid per-machine LOCALAPPDATA\Dropbox\info.json (or
+    # vice versa) on Windows in two distinct ways: (a) parse failure on
+    # a corrupt first candidate; (b) parse-success-but-empty
     # ``account_paths`` from a Dropbox-uninstall residue (``{}``, or
     # ``{"personal": {}}``, etc. — the file remains on disk but its
     # accounts dict has no usable ``path`` entries). Both arms fall through

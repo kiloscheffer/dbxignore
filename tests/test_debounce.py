@@ -134,8 +134,8 @@ def test_stop_waits_for_in_flight_emit() -> None:
 
 def test_submit_from_within_emit_callback_is_processed() -> None:
     """Re-entrant submit (from inside on_emit) must not deadlock and must
-    produce the follow-up event. Regression guard for the submit-while-
-    emitting race the cond refactor has to preserve."""
+    produce the follow-up event. Pins the submit-while-emitting race
+    the cond-variable design has to preserve."""
     received: list[tuple[EventKind, DebounceKey, object]] = []
     done = threading.Event()
 

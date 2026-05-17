@@ -174,9 +174,9 @@ def test_reconcile_subtree_descend_false_skips_walk(
 def test_reconcile_subtree_stops_mid_dirnames_on_stop_event(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write_file: WriteFile
 ) -> None:
-    # Regression for the dirnames list-comprehension window: the pre-fix code
-    # checked stop_event only at os.walk iteration boundaries, so all sibling
-    # directories in one level were processed before the next check could fire.
+    # Guards the dirnames list-comprehension window: checking stop_event
+    # only at os.walk iteration boundaries would process every sibling
+    # directory in one level before the next check could fire.
     import threading
 
     write_file(tmp_path / ".dropboxignore", "")

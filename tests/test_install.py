@@ -534,8 +534,8 @@ def test_purge_reports_marker_clear_errors_and_exits_two(
     """When `markers.clear_ignored` raises OSError on one path, --purge
     collects the error, prints a stderr report listing the failure, still
     purges every OTHER marker and the local state dir, and exits 2 so
-    scripts can detect incomplete cleanup. The prior shape silently
-    swallowed OSError and reported full success."""
+    scripts can detect incomplete cleanup. Silently swallowing OSError
+    and reporting full success would hide the partial cleanup."""
     import click.testing
 
     from dbxignore import cli, state
@@ -587,9 +587,10 @@ def test_purge_skips_vanished_paths_silently(
     """A path that `os.walk` listed can vanish before `markers.is_ignored`
     is called (Dropbox sync deleting the path, IDE moving a temp file,
     concurrent user activity). `FileNotFoundError` is an `OSError`
-    subclass, so without a specific arm the prior fix would report the
-    vanished path as a read failure and exit 2 spuriously. Mirrors the
-    reconcile read arm's vanished-path treatment."""
+    subclass, so without a specific arm the generic OSError handler
+    would report the vanished path as a read failure and exit 2
+    spuriously. Mirrors the reconcile read arm's vanished-path
+    treatment."""
     import click.testing
 
     from dbxignore import cli, state
@@ -845,9 +846,9 @@ def test_purge_dir_continues_after_permission_error(
     surviving file. Cascade of the Windows uninstall-timeout path: when
     ``schtasks /End`` times out (``windows_task.py:208``), the daemon's
     ``daemon.lock`` handle is still open, and ``Path.unlink`` raises
-    ``PermissionError`` (subclass of ``OSError``). Pre-fix, the only
-    suppress was ``FileNotFoundError``, so the user got a traceback instead
-    of a partial-cleanup report."""
+    ``PermissionError`` (subclass of ``OSError``). Suppressing only
+    ``FileNotFoundError`` would surface this as a traceback instead of
+    a partial-cleanup report."""
     from dbxignore import cli
 
     state_dir = tmp_path / "state_dir"
@@ -921,10 +922,10 @@ def test_purge_exits_two_when_state_cleanup_fails(
 ) -> None:
     """When a file in the state dir can't be removed (typically the
     Windows daemon-lock cascade), the failure must propagate to the CLI
-    exit code so scripts gating on ``$?`` see the partial cleanup. The
-    prior shape logged-and-continued but the failure never reached
-    ``uninstall``'s exit-2 gate, so a script could conclude the purge had
-    succeeded while a dbxignore artifact was still on disk."""
+    exit code so scripts gating on ``$?`` see the partial cleanup. A
+    log-and-continue shape would let the failure bypass
+    ``uninstall``'s exit-2 gate, so a script could conclude the purge
+    had succeeded while a dbxignore artifact was still on disk."""
     import click.testing
 
     from dbxignore import cli, state
@@ -1124,8 +1125,8 @@ def test_purge_proceeds_when_state_unreadable_and_no_daemon(
 def test_purge_proceeds_when_daemon_dead(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_markers: FakeMarkers
 ) -> None:
-    """Regression guard: the daemon-alive guard must NOT block the purge
-    body when ``state.json`` exists but the daemon is no longer running
+    """The daemon-alive guard must NOT block the purge body when
+    ``state.json`` exists but the daemon is no longer running
     (the common case — daemon was cleanly stopped by ``uninstall_service``).
     Pins the guard fires only on the genuine tug-of-war condition."""
     import click.testing

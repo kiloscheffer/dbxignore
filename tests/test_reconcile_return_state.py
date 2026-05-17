@@ -152,9 +152,10 @@ def test_reconcile_path_returns_unchanged_state_when_write_fails(
 def test_reconcile_subtree_does_not_reread_ads_after_reconcile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write_file: WriteFile
 ) -> None:
-    """Regression guard: reconcile_subtree must call markers.is_ignored at most
-    once per visited path. The final ignored state threads out of
-    _reconcile_path; a second read purely to decide pruning is the bug."""
+    """reconcile_subtree must call markers.is_ignored at most once per
+    visited path. The final ignored state threads out of
+    _reconcile_path; a second read purely to decide pruning would be a
+    bug."""
     write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
     (tmp_path / "build" / "deep").mkdir()

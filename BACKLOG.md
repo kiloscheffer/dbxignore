@@ -64,11 +64,9 @@ Touches: `.github/workflows/release.yml` (signing + notarization steps); GitHub 
 - The predicate (`is_relative_to(cloud_storage)` vs. `len(real_parts) >= 3 and real_parts[1] == "Volumes"`).
 - The log message ("Detected File Provider mode: %s under ~/Library/CloudStorage/" vs. "Detected File Provider mode (external drive): %s").
 
-A code-review agent during a `/simplify` pass proposed extracting `_first_match(paths, predicate, log_msg) -> bool` to dedupe. A second agent argued the dual structure is correct because the two loops encode different *priority levels*: CloudStorage match wins unconditionally (regardless of pluginkit state); `/Volumes` match only fires if `extension_state == "allowed"`. Merging into a single pass would either change priority semantics (a CloudStorage hit on account[1] would lose to a Volumes hit on account[0]) or require carrying a "found Volumes match, hold it" variable — both worse.
+One option is extracting `_first_match(paths, predicate, log_msg) -> bool` to dedupe. The counterargument: the dual structure correctly encodes different *priority levels* — CloudStorage match wins unconditionally (regardless of pluginkit state); `/Volumes` match only fires if `extension_state == "allowed"`. Merging into a single pass would either change priority semantics (a CloudStorage hit on account[1] would lose to a Volumes hit on account[0]) or require carrying a "found Volumes match, hold it" variable — both worse.
 
-The disagreement isn't about whether the code is correct (it is); it's about whether the dual-loop structure is the best way to express the priority semantics, or whether a shared helper called twice (with different predicates) would be clearer.
-
-Surfaced in a `/simplify` pass.
+The question isn't whether the code is correct (it is); it's whether the dual-loop structure is the best way to express the priority semantics, or whether a shared helper called twice (with different predicates) would be clearer.
 
 **Fix candidates:**
 
@@ -98,11 +96,11 @@ Touches: `src/dbxignore/_backends/macos_xattr.py` (one helper added, two call si
 
 `src/dbxignore/install/__init__.py` has two near-identical 14-line if-elif-else dispatchers (`install_service` and `uninstall_service`), each branching `sys.platform` against `win32` / `linux*` / `darwin` and importing+calling the matching backend's `install_*` / `uninstall_*` function. The two functions differ only in the imported function name and the call.
 
-A `/simplify` quality-review agent proposed extracting a `_dispatch_platform_action(action: str) -> Callable` helper that takes `"install"` or `"uninstall"` and returns the matching backend function, eliminating the duplicate branching.
+One option is extracting a `_dispatch_platform_action(action: str) -> Callable` helper that takes `"install"` or `"uninstall"` and returns the matching backend function, eliminating the duplicate branching.
 
 **Counterargument** (chosen direction): the current shape is six trivial blocks (3 platforms × 2 ops), each block is two lines (lazy import + call), and the structure makes it trivial to add a fourth platform — touch one place per op. A factored-out dispatcher would (a) introduce a stringly-typed `action` parameter, (b) couple install and uninstall behind one indirection so a reader has to walk through the helper to see what each op does, and (c) violate the project's preference for "three similar lines over a premature abstraction". The duplication is *intentional clarity*, not accidental copy-paste.
 
-This is the same shape as item #4 — filed for the design-tension record so future readers see "this was considered and explicitly rejected" rather than re-discovering the pattern in another `/simplify` pass.
+This is the same shape as item #4 — filed for the design-tension record so future readers see "this was considered and explicitly rejected" rather than re-discovering the pattern.
 
 **Fix candidates:**
 
@@ -115,9 +113,7 @@ Touches: `src/dbxignore/install/__init__.py` (would touch all 14 lines if the ex
 
 ## 6. Initial-sweep wall-clock on a fresh tree (no existing markers) — 49.62s on 27k dirs
 
-Two of the three fix candidates have already shipped (ready-before-sweep; per-subdir worker fan-out). Candidate 2 (persisted sweep-complete hint) remains open; the body below is preserved as future-reference. The ready-before-sweep change removed the user-visible systemd-startup pause (sweep wall-clock unchanged); the per-subdir fan-out parallelizes the sweep across each root's top-level subdirs (`os.cpu_count()`-capped via a single `ThreadPoolExecutor`), so wall-clock improves on multi-subdir trees too.
-
-Surfaced during VPS testing — Ubuntu 24.04, Python 3.14, 27,000-directory personal Dropbox tree, journalctl shows the initial sweep took 49.62s. The manual test's daemon-startup poll initially timed out at 30s; the test was fixed by raising the poll to 180s, but the underlying app cost is the real concern.
+Measured on a VPS — Ubuntu 24.04, Python 3.14, 27,000-directory personal Dropbox tree — journalctl shows the initial sweep takes 49.62s. The manual-test daemon-startup poll uses a 180s budget to cover this. The daemon writes `state.json` early and runs the initial sweep on a worker thread (so `dbxignore status` returns immediately and systemd-startup doesn't pause), and `_sweep_once` fans out across each root's top-level subdirs via a single `ThreadPoolExecutor`. Wall-clock of the sweep itself is still ~50s on a tree this size; that's the open concern.
 
 `reconcile.reconcile_subtree` (called by `daemon._sweep_once`) traverses every directory under each root via `os.walk(followlinks=False)` and calls `markers.is_ignored()` (one xattr query / syscall) + `cache.match()` per visited directory. Cost is dominated by per-directory stat + xattr work, not by the reconcile match logic.
 
@@ -125,13 +121,13 @@ Surfaced during VPS testing — Ubuntu 24.04, Python 3.14, 27,000-directory pers
 
 What pruning does NOT help: the **initial sweep on a fresh install** where no markers exist yet. Every directory has to be visited at least once to call `match()`, write the marker for matching dirs, and let pruning kick in for subsequent sweeps. The 49.62s VPS measurement is this case. After the first sweep, hourly sweeps are fast.
 
-**Remaining fix candidate:**
+**Fix candidates:**
 
 - **Persist a "last sweep completed" hint per root in state.json.** On daemon start, if a recorded successful-sweep marker exists AND the root's tree mtime is at-or-before that timestamp AND `RuleCache.load_root` reports no rule changes since, skip the initial sweep — let watchdog events + the hourly recovery handle drift. ~80 LOC. Reliability concern: directory mtime semantics on network filesystems and File-Provider-mode Dropbox trees are not always monotonic, so the hint can lie. Worth measuring in a beta-tester install before committing.
 
 - **Defer.** The initial-sweep cost is a one-time per-fresh-install pain. Workaround documented today: run `dbxignore apply` synchronously before `dbxignore install` so the markers exist before the daemon's first sweep, which then prunes correctly.
 
-**Urgency:** medium-low. Fundamental to evaluating an N-dir tree once; reproduces only on fresh installs of personal-account-sized trees. Hourly steady-state sweeps are unaffected. With the user-visible systemd-startup symptom fixed, the remaining concern is purely "the sweep itself takes 50s".
+**Urgency:** medium-low. Fundamental to evaluating an N-dir tree once; reproduces only on fresh installs of personal-account-sized trees. Hourly steady-state sweeps are unaffected. With the early `state.json` write hiding the systemd-startup pause, the remaining concern is purely "the sweep itself takes 50s".
 
 Touches: `src/dbxignore/state.py` (the hint field); `src/dbxignore/daemon.py` (skip logic at startup); `tests/test_reconcile_basic.py` already documents the steady-state pruning contract via `test_does_not_descend_into_marked_subtree` — new tests would cover the chosen candidate's incremental contract.
 
@@ -247,7 +243,7 @@ Touches: `scripts/manual-test-ubuntu-vps.sh`, `scripts/manual-test-macos.sh`.
 
 ## 12. Stale uv tool venv survives failed uninstall, partial state on next install
 
-When `uv tool uninstall dbxignore` fails mid-cleanup (e.g. the Windows daemon is still running and holds `dbxignored.exe` mapped), the tool venv at `%APPDATA%\uv\tools\dbxignore` (or platform equivalent) is left behind in a partially-cleaned state — the entry-point shims under `~/.local/bin/` may be removed but the venv's `site-packages/` survives. A subsequent `uv tool install .` detects the existing venv and does an *incremental update* rather than a fresh install: only changed packages get reinstalled, others (psutil, watchdog, etc.) are retained from the prior install. Result: a hybrid venv with packages from two different install events that can produce subtle compatibility issues — partially-initialized module errors on Python 3.14, daemon hangs during initial sweep, etc.
+When `uv tool uninstall dbxignore` fails mid-cleanup (e.g. the Windows daemon is still running and holds `dbxignorew.exe` mapped), the tool venv at `%APPDATA%\uv\tools\dbxignore` (or platform equivalent) is left behind in a partially-cleaned state — the entry-point shims under `~/.local/bin/` may be removed but the venv's `site-packages/` survives. A subsequent `uv tool install .` detects the existing venv and does an *incremental update* rather than a fresh install: only changed packages get reinstalled, others (psutil, watchdog, etc.) are retained from the prior install. Result: a hybrid venv with packages from two different install events that can produce subtle compatibility issues — partially-initialized module errors on Python 3.14, daemon hangs during initial sweep, etc.
 
 Surfaced when a Phase 7 `uv tool uninstall` failed (daemon-running race) and the follow-up `uv tool install .` produced a venv where freshly-installed dbxignore + click/colorama/pathspec/markdown-it-py/mdurl coexisted with carryover psutil 7.2.2 + watchdog + pygments + rich + rich-click from the prior install. The daemon hung silently after the slow-sweep WARNING (likely a watchdog C-extension state issue), and `uninstall --purge` raised an opaque `SystemError` chain rooted in a `psutil` circular import.
 
@@ -405,7 +401,7 @@ Twenty items. Most are passive (no concrete trigger requires action) — bundle 
 - **#3** — Codesigning + notarization for macOS binaries. Smooths Gatekeeper UX but requires $99/yr Apple Developer membership. Awaits concrete pain signal.
 - **#4** — Dual `paths` for-loops in `_detected_attr_name()` could share a `_first_match` helper. Reviewers disagreed: one proposed extraction, another argued the dual structure correctly documents priority semantics. Filed for the design-tension record; current shape is defensible. Awaits a third predicate (rule-of-three trigger).
 - **#5** — `install/__init__.py` platform dispatch duplicated across `install_service`/`uninstall_service`. Filed for the design-tension record (precedent: #4); current 6-block shape is defensible vs a factored-out helper that would introduce stringly-typed action coupling.
-- **#6** — Initial-sweep wall-clock on a fresh install (no existing markers) was 49.62s on a 27k-dir tree, blocking systemd readiness for ~50s. Two of three fix candidates have shipped (readiness fix; per-subdir fan-out). Only the persisted sweep-complete hint candidate (~80 LOC) remains — has reliability concerns on network FS / File Provider mtime semantics; no fired trigger yet.
+- **#6** — Initial-sweep wall-clock on a fresh install (no existing markers) is ~49.62s on a 27k-dir tree. The early `state.json` write keeps systemd readiness unblocked and `_sweep_once` fans out across top-level subdirs, but the sweep itself still costs ~50s on a tree this size. The persisted sweep-complete hint candidate (~80 LOC) remains open — reliability concerns on network FS / File Provider mtime semantics; no fired trigger yet.
 - **#7** — Watchdog observer's recursive watch schedules one inotify watch per directory under `~/Dropbox`, including marked-ignored subtrees. Architectural fix (per-directory watches with mark/unmark lifecycle) is ~200 LOC of race-condition-prone state-machine work; deferred until a beta tester hits the watch ceiling on a system with limits already raised.
 - **#8** — macOS sync-mode detection is process-global; mixed legacy/File-Provider account setups may need per-root or write-both behavior.
 - **#9** — `dropbox_root` fixture from `test_cli_symlink_path_args.py` packages the ~27-site inline `monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])` pattern across `test_cli_apply.py` / `test_cli_clear.py` / `test_cli_status_list_explain.py`. Filed for design-tension record (precedent: #4, #5); current dual shape is defensible.

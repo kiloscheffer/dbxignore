@@ -229,7 +229,7 @@ def test_status_summary_flag_emits_single_line(
     Pins is_daemon_alive=True via monkeypatch rather than relying on the
     test process's own name matching the dbxignore daemon-name guard:
     pytest entry-point exec'd by `uv run pytest` shows up as `pytest` on
-    Linux, which fails the `"python" in name or "dbxignored" in name`
+    Linux, which fails the `"python" in name or "dbxignorew" in name`
     check and would land us in not_running. Explicit fixture >
     host-dependent guess.
     """
@@ -280,12 +280,13 @@ def test_status_summary_reads_conflicts_count_from_state(
     """`status --summary` reports ``conflicts=N`` from ``state.last_sweep_conflicts``
     rather than re-walking the rule cache.
 
-    Status-bar widgets poll ``--summary`` at high cadence. The prior
-    implementation ran ``_load_cache(discovered).conflicts()`` per tick, which
-    rglobbed every ``.dropboxignore`` under the watched roots. The fix caches
-    the count on the daemon side at sweep time; ``--summary`` reads from
-    state.json. Trade-off: the count is from the last sweep, same staleness
-    lineage as ``last_sweep_marked`` / ``cleared`` / ``errors``.
+    Status-bar widgets poll ``--summary`` at high cadence. Running
+    ``_load_cache(discovered).conflicts()`` per tick would rglob every
+    ``.dropboxignore`` under the watched roots; instead the count is
+    cached on the daemon side at sweep time and ``--summary`` reads
+    from state.json. Trade-off: the count is from the last sweep, same
+    staleness lineage as ``last_sweep_marked`` / ``cleared`` /
+    ``errors``.
     """
     s = state.State(
         daemon_pid=12345,
@@ -376,8 +377,8 @@ def test_status_column_aligns_conflicts_with_varying_pattern_lengths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Multi-conflict output column-aligns the 'masked by' prefix and trailing
-    fields even when dropped patterns differ in length. Regression backstop:
-    a future "simplification" back to fixed two-space separators would fail
+    fields even when dropped patterns differ in length. A future
+    "simplification" back to fixed two-space separators would fail
     here rather than only surfacing in real-world `.dropboxignore` files."""
     import click.testing
 

@@ -127,11 +127,10 @@ def test_dir_create_under_dropped_negation_marks_path_via_dispatch(
     therefore reports the negated path as ignored, and a DIR_CREATE event
     for that path reconciles to a marker write.
 
-    This is the dispatch-level half of the coverage that the prior
-    Windows smoke test uniquely exercised (its
-    ``markers.is_ignored(build/keep)`` assertion succeeded via the
-    watchdog DIR_CREATE fast-path, ``daemon.py:519``). Without this
-    test, a regression in either ``_dispatch``'s DIR_CREATE arm or
+    Covers the dispatch-level half of dropped-negation handling: a
+    ``markers.is_ignored(build/keep)`` assertion at the watchdog
+    DIR_CREATE fast-path (``daemon.py:519``). Without this test, a
+    regression in either ``_dispatch``'s DIR_CREATE arm or
     ``cache.match`` for dropped-negation paths could land silently.
     """
     root = tmp_path.resolve()

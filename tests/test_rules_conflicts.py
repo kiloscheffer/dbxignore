@@ -184,8 +184,7 @@ def test_detect_glob_prefix_negation_under_directory_marking_glob_include(
     negations, so `!**/foo/bar/` is inert wherever the `**` lands under
     a matched parent.
 
-    Earlier behavior returned `[]` (documented limitation); the current
-    implementation flags a conflict via ``_find_masking_directory_include``.
+    Flagged as a conflict via ``_find_masking_directory_include``.
     """
     root = tmp_path
     sequence = [
@@ -267,9 +266,9 @@ def test_detect_glob_prefix_negation_overridden_by_children_only_include_no_flag
     ``bar/`` doesn't start with ``build/``), so neither include
     triggers the inheritance-inert flag.
 
-    Pre-fix the conservative-drop arm flagged this (because ``build/``
-    was a directory-marking include), silently dropping the negation
-    and leaving ``foo/bar/`` ignored on disk."""
+    A conservative-drop arm that fired on any directory-marking
+    include (``build/``) would silently drop the negation and leave
+    ``foo/bar/`` ignored on disk."""
     root = tmp_path
     sequence = [
         _entry(str(root / ".dropboxignore"), 1, "build/", str(root)),

@@ -255,8 +255,8 @@ def test_clear_surfaces_scan_errors_and_exits_two(
 ) -> None:
     """When the marker-scan walk hits an OSError on a path (e.g. ENOTSUP on
     a filesystem that doesn't support extended attributes), the count is
-    surfaced via stderr and the command exits 2 — previously the read errors
-    were swallowed silently and the user saw "No markers to clear" while the
+    surfaced via stderr and the command exits 2 — swallowing the read
+    errors silently would let the user see "No markers to clear" while the
     scan had actually failed."""
     import errno
 
@@ -334,8 +334,8 @@ def test_clear_surfaces_scan_errors_when_user_aborts_prompt(
 ) -> None:
     """Even when the user declines the confirmation prompt, scan errors
     that fired during the walk must still surface and the command must
-    exit 2. The prior shape returned cleanly with "Aborted." and exit 0,
-    hiding the partial-scan failure."""
+    exit 2. Returning cleanly with "Aborted." and exit 0 would hide the
+    partial-scan failure."""
     import errno
 
     root = tmp_path

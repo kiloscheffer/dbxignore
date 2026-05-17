@@ -466,10 +466,9 @@ def test_classify_moved_out_and_single_same_path_have_distinct_roles(tmp_path: P
     and a single-path event (created/modified/deleted on `A/.dropboxignore`)
     both carry the same path but are semantically distinct: the move-out
     wants its dest-side reload of B preserved, while the single event
-    just refreshes A. An earlier implementation keyed on bare
-    ``str(src).lower()`` and a scripted ``mv A/.dropboxignore B/ && touch
-    A/.dropboxignore`` within the 100ms RULES debounce window collapsed
-    them under last-wins.
+    just refreshes A. Keying on bare ``str(src).lower()`` would let a
+    scripted ``mv A/.dropboxignore B/ && touch A/.dropboxignore`` within
+    the 100ms RULES debounce window collapse them under last-wins.
 
     The ``DebounceKey`` role discriminator (``"moved-out"`` vs ``"single"``)
     closes that gap: same path, different role tokens, distinct debounce
@@ -622,10 +621,10 @@ def test_timeouts_from_env_rejects_negative_values(
 
 def test_classify_recognizes_mixed_case_rule_file(tmp_path: Path) -> None:
     """A watchdog event for a mixed-case `.DropboxIgnore` must classify as
-    RULES. An earlier implementation used an exact-match `src.name ==
-    IGNORE_FILENAME` check that filtered out mixed-case events at the daemon
-    boundary, so reload_file/remove_file were never called for them and
-    the cache stayed stale until the next hourly sweep."""
+    RULES. An exact-match `src.name == IGNORE_FILENAME` check would
+    filter out mixed-case events at the daemon boundary, leaving
+    reload_file/remove_file uncalled for them so the cache stays stale
+    until the next hourly sweep."""
     root = tmp_path.resolve()
     src = root / "proj" / ".DropboxIgnore"  # mixed case
     src.parent.mkdir(parents=True)
@@ -643,9 +642,9 @@ def test_classify_recognizes_mixed_case_rule_file(tmp_path: Path) -> None:
 def test_classify_moved_into_mixed_case_rule_file(tmp_path: Path) -> None:
     """An atomic save (`.DropboxIgnore.tmp` -> `.DropboxIgnore`) where
     dest has mixed casing must still be recognized via
-    `_moved_dest_under_root`. An earlier implementation used an exact-match
-    `dest_path.name != IGNORE_FILENAME` filter that dropped these, so atomic
-    saves of mixed-case rule files never triggered cache reloads."""
+    `_moved_dest_under_root`. An exact-match `dest_path.name !=
+    IGNORE_FILENAME` filter would drop these, so atomic saves of
+    mixed-case rule files would never trigger cache reloads."""
     root = tmp_path.resolve()
     proj = root / "proj"
     proj.mkdir()
@@ -664,8 +663,8 @@ def test_classify_moved_into_mixed_case_rule_file(tmp_path: Path) -> None:
 
 # ---- Cache-ready gate ------------------------------------------------------
 # An OTHER event under an already-marked subtree, dispatched during the
-# startup window where the rule cache is empty, used to reconcile with
-# match()=False and transiently clear the existing marker. The gate
+# startup window where the rule cache is empty, would otherwise reconcile
+# with match()=False and transiently clear the existing marker. The gate
 # blocks OTHER and DIR_CREATE events on `cache_ready`; RULES events
 # still dispatch because they reload their own cache entries.
 
@@ -932,9 +931,9 @@ def test_dispatch_falls_through_when_cache_ready_set_inside_append_race(
 
 
 # ---- Symlink-escape via .resolve() ----------------------------------------
-# `_resolve_under_roots` used to call Path.resolve() unconditionally,
-# which made a symlink inside Dropbox pointing OUTSIDE Dropbox escape
-# the watched root — reconcile_subtree would then raise on its
+# Calling Path.resolve() unconditionally in `_resolve_under_roots` would
+# let a symlink inside Dropbox pointing OUTSIDE Dropbox escape the
+# watched root — reconcile_subtree would then raise on its
 # is_relative_to guard or operate on filesystem paths outside any
 # Dropbox tree. Lexical-first containment preserves the symlinks-are-
 # leaves invariant for paths already under a root.
@@ -980,10 +979,10 @@ def test_resolve_under_roots_falls_back_to_resolved_for_alias(tmp_path: Path) ->
 
 def test_resolve_under_roots_drops_path_that_escapes_via_symlink(tmp_path: Path) -> None:
     """A symlink inside a watched root whose target is OUTSIDE every
-    watched root must NOT be silently routed to the link target. Before
-    the earlier resolve()-then-no-recheck behavior would escape the root
-    and feed reconcile_subtree a path outside Dropbox. With lexical-
-    first containment the link path itself is returned (a leaf), and
+    watched root must NOT be silently routed to the link target. A
+    resolve()-then-no-recheck shape would escape the root and feed
+    reconcile_subtree a path outside Dropbox. With lexical-first
+    containment the link path itself is returned (a leaf), and
     reconcile operates on the link object."""
     root = tmp_path.resolve() / "Dropbox"
     root.mkdir()

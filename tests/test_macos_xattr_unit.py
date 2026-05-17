@@ -305,9 +305,10 @@ def test_detected_attr_name_legacy_when_extension_installed_but_user_in_legacy_m
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
 ) -> None:
     """User has Dropbox.app with FP extension registered (pluginkit allowed)
-    BUT this account is still on legacy mode (info.json path is `~/Dropbox`,
-    NOT under CloudStorage). An earlier implementation wrongly returned File
-    Provider; correct detection follows the path → legacy.
+    BUT this account is on legacy mode (info.json path is `~/Dropbox`,
+    NOT under CloudStorage). Pluginkit-primary detection would wrongly
+    return File Provider; path-primary detection correctly returns
+    legacy.
     """
     monkeypatch.setenv("HOME", str(tmp_path))
     legacy_dropbox = tmp_path / "Dropbox"

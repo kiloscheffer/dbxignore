@@ -185,13 +185,13 @@ def _find_masking_include(
     include for that specific ancestor, no conflict is reported from that
     ancestor — pathspec's last-match-wins semantics is what matters.
 
-    Earlier behavior considered only includes and short-circuited on
-    the first match; that produced false positives like
-    `build/*` + `!build/keep/` + `!build/keep/**`, where the second rule
-    keeps build/keep unmarked and the third rule's descendants are
-    reachable. The full last-match scan necessary to model that loses the
-    early exit, making this O(ancestors × earlier_entries) per negation;
-    bounded because detection only fires on rule mutations (not the
+    Considering only includes and short-circuiting on the first match
+    would produce false positives like `build/*` + `!build/keep/` +
+    `!build/keep/**`, where the second rule keeps build/keep unmarked
+    and the third rule's descendants are reachable. The full last-match
+    scan needed to model that loses the early exit, making this
+    O(ancestors × earlier_entries) per negation; bounded because
+    detection only fires on rule mutations (not the
     steady-state sweep). Don't reintroduce the early `break` to "optimize"
     — it would re-open the false-positive class.
     """
@@ -330,10 +330,10 @@ def _detect_conflicts(sequence: Sequence[_SequenceEntryLike], *, root: Path) -> 
             # Children-only includes (raw doesn't end in `/`) do not
             # contribute inheritance, so they're never strict ancestors.
             #
-            # This shape went through several iterations; earlier
-            # conservative-drop variants had false positives that changed
-            # marker behavior (since ``RuleCache.match()`` filters entries
-            # listed in ``_dropped`` before consulting pathspec).
+            # The narrow scoping below avoids conservative-drop false
+            # positives that would change marker behavior, since
+            # ``RuleCache.match()`` filters entries listed in ``_dropped``
+            # before consulting pathspec.
             if not raw.rstrip().endswith("/"):
                 continue
             negation_suffix = _literal_suffix(raw.rstrip())
@@ -348,8 +348,8 @@ def _detect_conflicts(sequence: Sequence[_SequenceEntryLike], *, root: Path) -> 
                 # not reach paths under `b/.dropboxignore` (sibling
                 # scope), so its inheritance can't make the negation
                 # inert. The include's scope must be an ancestor of (or
-                # equal to) the negation's scope. An earlier shape did a
-                # bare suffix-prefix string-compare and missed cross-scope.
+                # equal to) the negation's scope — a bare suffix-prefix
+                # string-compare would miss cross-scope.
                 if not entry.ancestor_dir.is_relative_to(earlier.ancestor_dir):
                     continue
                 include_target = _include_directory_target(earlier)

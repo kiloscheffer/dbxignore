@@ -328,9 +328,9 @@ def test_state_starting_appears_before_rule_scan(
     t.start()
     try:
         # state.json should appear within a few seconds even though
-        # `cache.load_root` is blocked. Without the fix, the main thread
-        # would call `cache.load_root` before `state.write`, so the gate
-        # would block state.json creation.
+        # `cache.load_root` is blocked. If the main thread called
+        # `cache.load_root` before `state.write`, the gate would block
+        # state.json creation.
         appeared = _poll_until(
             lambda: (state_dir / "state.json").exists(),
             timeout_s=5.0,
@@ -390,10 +390,11 @@ def test_periodic_sweep_skipped_while_initial_worker_alive(
     # window. The default 3600s would never fire during a 2-second test.
     monkeypatch.setattr(daemon, "SWEEP_INTERVAL_S", 0.3)
 
-    # Count _sweep_once calls. Without the fix, a periodic tick would call
-    # _sweep_once a second time (count=2) while the worker's _sweep_once
-    # is still blocked on the gate. With the fix, the periodic tick sees
-    # worker.is_alive() and skips, leaving count=1.
+    # Count _sweep_once calls. Without the worker.is_alive() gate on the
+    # periodic tick, a tick would call _sweep_once a second time
+    # (count=2) while the worker's _sweep_once is still blocked. With
+    # the gate, the periodic tick sees worker.is_alive() and skips,
+    # leaving count=1.
     sweep_calls: list[float] = []
     real_sweep_once = daemon._sweep_once
 
@@ -421,8 +422,8 @@ def test_periodic_sweep_skipped_while_initial_worker_alive(
 
         # Let the periodic loop tick a few times while the worker is still
         # blocked on the gate. SWEEP_INTERVAL_S=0.3 means roughly 4 ticks
-        # in 1.2 seconds. Without the fix, sweep_calls grows; with the fix,
-        # it stays at 1.
+        # in 1.2 seconds. Without the worker-alive gate, sweep_calls
+        # grows; with the gate it stays at 1.
         time.sleep(1.2)
 
         # The worker called _sweep_once exactly once. The periodic loop
@@ -470,8 +471,9 @@ def test_hourly_tick_recovers_from_sweep_exception(
             real_sweep_once(*args, **kwargs)  # type: ignore[arg-type]
             return
         if n == 2:
-            # First hourly tick — raise. Without the fix this propagates
-            # out of the while loop and the daemon dies.
+            # First hourly tick — raise. Without the in-loop except
+            # arm this would propagate out of the while loop and the
+            # daemon would die.
             raise RuntimeError("simulated hourly sweep failure")
         # Subsequent tick — confirms the loop kept ticking after recovery.
         third_call_event.set()

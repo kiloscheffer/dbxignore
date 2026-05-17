@@ -424,8 +424,9 @@ def test_sweep_once_does_not_set_cache_ready_when_load_root_returned_partial(
 ) -> None:
     """If ``stop_event`` fires mid-walk during the FINAL ``cache.load_root``,
     the top-of-loop stop check inside ``_sweep_once`` doesn't catch it (loop
-    has exited), and ``cache_ready.set()`` used to fire against a partial
-    cache. The post-loop re-check refuses to signal ready in that state.
+    has exited), so a naive ``cache_ready.set()`` after the loop would
+    fire against a partial cache. The post-loop re-check refuses to
+    signal ready in that state.
 
     Logic lives in ``_sweep_once`` so the initial sweep walks the tree
     exactly once; this test targets ``_sweep_once`` directly."""

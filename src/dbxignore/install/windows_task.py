@@ -195,7 +195,7 @@ def uninstall_task() -> None:
     # Gate the wait on /End succeeding: per Microsoft docs (schtasks /End)
     # the command "Stops only the instances of a program started by a
     # scheduled task", so a non-zero /End cannot make a non-task-instance
-    # daemon exit — e.g. a manually-launched `dbxignored` or a stale
+    # daemon exit — e.g. a manually-launched `dbxignorew` or a stale
     # state.json pointing at any other live process. Polling such cases
     # for the full 30s would just delay /Delete with no benefit.
     if daemon_pid is not None and end_result is not None and end_result.returncode == 0:

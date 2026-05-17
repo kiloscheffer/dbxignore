@@ -112,8 +112,8 @@ def _classify(
     so downstream consumers don't repeat the syscall.
 
     ``key`` is a ``DebounceKey`` (``(role, path)`` tuple) — the role
-    discriminator distinguishes the three RULES sub-shapes that previously
-    collided under a single string-keyed model. Roles in
+    discriminator distinguishes the three RULES sub-shapes that would
+    otherwise collide under a string-only key. Roles in
     use: ``"single"`` for create/modify/delete-on-rule and for all
     DIR_CREATE / OTHER events; ``"moved-out"`` for moved events with
     src=rule_file; ``"moved-into"`` for moved events with dest=rule_file.
@@ -148,12 +148,12 @@ def _classify(
         # Distinguish moved-out (move event with src=rule) from single
         # (create/modify/delete on the rule file). Both key on `str(src)`
         # at the path level, but the role discriminator separates their
-        # debounce queues — a scripted `mv A/.dropboxignore B/ && touch
-        # A/.dropboxignore` within the 100ms RULES debounce window
-        # otherwise lost one of the two dispatches under last-wins
-        # coalesce. Editor save patterns don't naturally produce that
-        # sequence, so the bug was rare; the role discriminator closes
-        # the correctness gap regardless.
+        # debounce queues — without it, a scripted
+        # `mv A/.dropboxignore B/ && touch A/.dropboxignore` within the
+        # 100ms RULES debounce window loses one of the two dispatches
+        # under last-wins coalesce. Editor save patterns don't naturally
+        # produce that sequence, so this is a rare edge case; the role
+        # discriminator closes the correctness gap regardless.
         role: DebounceRole = "moved-out" if event.event_type == "moved" else "single"
         return EventKind.RULES, (role, str(src).lower()), root, src, dest_rule
     # Moved event with src inside a root but not a rule file, dest is a rule
@@ -554,10 +554,10 @@ def _acquire_singleton_lock() -> Any | None:
     Cross-platform via ``fcntl.flock`` on POSIX and ``msvcrt.locking``
     on Windows. Both use non-blocking exclusive semantics: a second
     acquisition fails immediately rather than waiting. This is the
-    singleton gate — the prior state-based check (read state.json →
-    check is_daemon_alive(prior.pid)) had a non-atomic window between
-    read and the first state.write, so two concurrent ``dbxignored``
-    launches could both decide "no other daemon" and proceed.
+    singleton gate — a state-based check (read state.json →
+    check is_daemon_alive(prior.pid)) would have a non-atomic window
+    between read and the first state.write, letting two concurrent
+    ``dbxignorew`` launches both decide "no other daemon" and proceed.
     """
     lock_path = _singleton_lock_path()
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -664,13 +664,10 @@ def run(stop_event: threading.Event | None = None) -> None:
         stop_event = stop_event or threading.Event()
         daemon_started = dt.datetime.now(dt.UTC)
 
-        # Singleton gate. The OS-level lock is the
-        # authoritative check: kernel-released on process exit so a stale
-        # lock file is never a problem, and acquisition is atomic so two
-        # concurrent ``dbxignored`` launches can't both proceed. The
-        # prior state-based check (read state.json → is_daemon_alive)
-        # had a non-atomic window between read and the first state.write
-        # and is now removed in favor of this lock.
+        # Singleton gate. The OS-level lock is the authoritative check:
+        # kernel-released on process exit so a stale lock file is never a
+        # problem, and acquisition is atomic so two concurrent
+        # ``dbxignorew`` launches can't both proceed.
         singleton_lock = _acquire_singleton_lock()
         if singleton_lock is None:
             # Read state.json (best-effort) to recover the existing
@@ -713,8 +710,7 @@ def run(stop_event: threading.Event | None = None) -> None:
                 and state_module.is_daemon_alive(prior.daemon_pid, prior.daemon_create_time)
             ):
                 logger.error(
-                    "daemon already running (pid=%d); refusing to start "
-                    "(legacy daemon predates the singleton lock file)",
+                    "daemon already running (pid=%d); refusing to start",
                     prior.daemon_pid,
                 )
                 return
@@ -831,7 +827,7 @@ def run(stop_event: threading.Event | None = None) -> None:
                         _redispatch_deferred,
                     ),
                     daemon=False,
-                    name="dbxignored-initial-sweep",
+                    name="dbxignorew-initial-sweep",
                 )
                 worker.start()
 
@@ -940,9 +936,9 @@ def _sweep_once(
     # pass cache_ready=None / deferred=None and skip both steps — the
     # cache was already signalled ready by the initial sweep, and the
     # queue was drained there too. Co-locating the signal + drain with
-    # Phase 1's completion (instead of pre-loading in the worker and
-    # re-loading here) eliminates the double-walk that the worker's
-    # pre-load + Phase 1 used to incur on big trees.
+    # Phase 1's completion lets the initial sweep walk the tree exactly
+    # once instead of pre-loading the cache in the worker and re-walking
+    # in Phase 1.
     if cache_ready is not None:
         cache_ready.set()
     if deferred is not None and redispatch is not None:
@@ -1169,11 +1165,11 @@ def _initial_sweep_worker(
 
     Cache loading, the ``cache_ready`` signal, and the deferred-event
     drain all live INSIDE ``_sweep_once`` (between Phase 1 and Phase 2)
-    so that the initial sweep walks the tree exactly once. An earlier
-    shape pre-loaded the cache in this worker and then re-ran Phase 1
-    in ``_sweep_once``; ``_load_if_changed`` skipped reparse, but
-    ``RuleCache.load_root``'s ``os.walk`` still ran in full, doubling
-    the startup wall-clock on big trees.
+    so that the initial sweep walks the tree exactly once. Pre-loading
+    the cache here would force ``RuleCache.load_root``'s ``os.walk`` to
+    run again in ``_sweep_once`` (``_load_if_changed`` skips reparse,
+    but the walk still runs), doubling the startup wall-clock on big
+    trees.
     """
     try:
         pad_s = _slow_sweep_pad_seconds()

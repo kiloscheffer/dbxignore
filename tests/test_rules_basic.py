@@ -7,9 +7,10 @@ from tests.conftest import FakeMarkers, WriteFile
 
 
 def test_match_rejects_relative_path(tmp_path: Path, write_file: WriteFile) -> None:
-    """Caller contract: match()/explain() require absolute paths. The internal
-    resolve() used to mask relative-path bugs by silently normalizing; now
-    they raise loudly so the bug surfaces at the call site instead."""
+    """Caller contract: match()/explain() require absolute paths. An
+    internal resolve() would mask relative-path bugs by silently
+    normalizing; the explicit raise surfaces the bug at the call site
+    instead."""
     write_file(tmp_path / ".dropboxignore", "build/\n")
     cache = RuleCache()
     cache.load_root(tmp_path)
@@ -134,13 +135,13 @@ def test_load_root_preserves_cache_when_pre_stat_would_flap(
     rule files in a way that lets a transient stat failure silently skip
     the file. If it did, the file would be missing from `seen` and the
     stale-purge would drop the cached entry — letting Dropbox upload
-    previously-ignored paths before the next sweep recovers. The fix is
-    to use os.walk's already-materialized filenames list rather than a
-    separate `Path.is_file()` call.
+    already-ignored paths before the next sweep recovers. The contract
+    is to use os.walk's already-materialized filenames list rather than
+    a separate `Path.is_file()` call.
 
     Pin contract: monkeypatching `Path.is_file` to always return False
     must NOT prevent load_root from finding the rule file or preserving
-    its cached entry. (If a future refactor reintroduces a pre-stat
+    its cached entry. (If a future refactor introduces a pre-stat
     gate via is_file, this test fails.)"""
     rule_file = tmp_path / "sub" / ".dropboxignore"
     write_file(rule_file, "build/\n")
@@ -174,12 +175,11 @@ def test_load_root_finds_and_applies_mixed_case_dropboxignore(
     """load_root must find rule
     files whose on-disk filename has mixed casing (e.g. `.DropboxIgnore`
     vs `.dropboxignore`) AND the rules must actually apply via
-    `cache.match()`. The prior `rglob` shape found mixed-case files on
-    Windows NTFS and default macOS APFS/HFS+ because glob matching is
-    case-insensitive there. The os.walk swap must preserve that behavior
-    AND ensure the cache key is canonical (lowercase) so `match()`'s
-    lookup hits — without normalization, `PosixPath` equality is
-    case-sensitive on Linux/macOS and the cached entry is unreachable.
+    `cache.match()`. On Windows NTFS and default macOS APFS/HFS+ glob
+    matching is case-insensitive, so the cache key is canonicalized to
+    lowercase so `match()`'s lookup hits — without normalization,
+    `PosixPath` equality is case-sensitive on Linux/macOS and the
+    cached entry would be unreachable.
 
     Portable: on case-sensitive Linux, this creates a file named exactly
     `.DropboxIgnore` (a different file from `.dropboxignore` — but the
@@ -204,9 +204,9 @@ def test_load_root_finds_and_applies_mixed_case_dropboxignore(
     )
 
     # End-to-end: rules from the mixed-case file must apply via match().
-    # The pre-fix shape (cache key with on-disk casing) silently failed
-    # this assertion on Linux/macOS — file was loaded but match() lookup
-    # via `ancestor / IGNORE_FILENAME` (lowercase) missed.
+    # A cache key with on-disk casing would silently fail this
+    # assertion on Linux/macOS — file would be loaded but match()'s
+    # lookup via `ancestor / IGNORE_FILENAME` (lowercase) would miss.
     assert cache.match(target.resolve()), (
         "rules from the mixed-case file must apply to a matching path"
     )
@@ -327,8 +327,8 @@ def test_load_root_observes_stop_event_in_dropboxignore_free_tree(
 ) -> None:
     """Per-directory cancellation pins the case that a tree with NO
     `.dropboxignore` files but multiple directories must still observe
-    `stop_event` mid-traversal. The prior `rglob`-based check would have
-    visited every directory before returning (zero yields for a no-rules
+    `stop_event` mid-traversal. An `rglob`-based check would visit
+    every directory before returning (zero yields for a no-rules
     tree), blocking SIGTERM observation."""
     import os
     import threading
@@ -422,8 +422,8 @@ def test_reload_file_with_mixed_case_path_updates_canonical_entry(
     the canonical-key cache entry (not create a separate mixed-case-keyed
     entry that match() would never read).
 
-    An earlier implementation did `self._rules.pop(ignore_file.resolve(), None)`
-    which on POSIX uses the on-disk casing. Mixed-case path → mixed-case
+    A bare `self._rules.pop(ignore_file.resolve(), None)` would, on
+    POSIX, use the on-disk casing. Mixed-case path → mixed-case
     cache key → match()'s lookup of canonical key misses the fresh entry
     and continues reading the stale canonical-key entry.
 

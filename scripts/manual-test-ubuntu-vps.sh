@@ -331,7 +331,7 @@ phase_dbxignore_install() {
         # the venv out from under uv orphans the shims and the next
         # `uv tool install` errors with "Executables already exist".
         if bin_dir="$(uv tool dir --bin 2>/dev/null)" && [ -n "$bin_dir" ] && [ -d "$bin_dir" ]; then
-            rm -f "$bin_dir/dbxignore"
+            rm -f "$bin_dir/dbxignore" "$bin_dir/dbxignorew"
         fi
     fi
 

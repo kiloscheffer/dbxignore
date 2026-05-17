@@ -544,3 +544,55 @@ def test_discover_keeps_valid_account_path_skips_invalid_sibling(
     assert any(str(stale) in rec.message for rec in caplog.records), [
         rec.message for rec in caplog.records
     ]
+
+
+# ---- find_containing -----------------------------------------------------
+# `find_containing(path, roots)` returns the most-specific (deepest) root
+# that contains `path`. With nested roots, the inner root is the right
+# answer: rules and markers under it belong to the inner `.dropboxignore`
+# hierarchy, not the outer's. Sibling-only setups (the common shape) have
+# at most one container, so "deepest" collapses to "first match".
+
+
+def test_find_containing_returns_none_when_no_root_contains(tmp_path: Path) -> None:
+    other = tmp_path / "other"
+    target = tmp_path / "elsewhere" / "file"
+    assert roots.find_containing(target, [other]) is None
+
+
+def test_find_containing_returns_single_root_when_it_contains(tmp_path: Path) -> None:
+    root = tmp_path / "Dropbox"
+    target = root / "sub" / "file"
+    assert roots.find_containing(target, [root]) == root
+
+
+def test_find_containing_returns_containing_sibling_root(tmp_path: Path) -> None:
+    personal = tmp_path / "Dropbox"
+    business = tmp_path / "Dropbox (Work)"
+    target = business / "project" / "file"
+    assert roots.find_containing(target, [personal, business]) == business
+
+
+def test_find_containing_picks_inner_root_when_nested_inner_first(tmp_path: Path) -> None:
+    outer = tmp_path / "outer"
+    inner = outer / "inner"
+    target = inner / "deep" / "file"
+    assert roots.find_containing(target, [inner, outer]) == inner
+
+
+def test_find_containing_picks_inner_root_when_nested_outer_first(tmp_path: Path) -> None:
+    """Outer-first iteration must still return the inner root.
+
+    Before the fix, ``find_containing`` returned the first matching root in
+    iteration order, so this case returned ``outer`` — driving the daemon
+    and ``RuleCache.match`` / ``explain`` to evaluate ``target`` against
+    the outer root's ``.dropboxignore`` hierarchy instead of the inner's.
+    """
+    outer = tmp_path / "outer"
+    inner = outer / "inner"
+    target = inner / "deep" / "file"
+    assert roots.find_containing(target, [outer, inner]) == inner
+
+
+def test_find_containing_empty_roots_returns_none(tmp_path: Path) -> None:
+    assert roots.find_containing(tmp_path / "x", []) is None

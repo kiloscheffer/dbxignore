@@ -77,14 +77,25 @@ def _validate_account_paths(account_paths: list[str], source: Path) -> list[Path
 
 
 def find_containing(path: Path, roots: list[Path]) -> Path | None:
-    """Return the first root that contains ``path``, or ``None`` if none do."""
+    """Return the most-specific (deepest) root containing ``path``, or ``None``.
+
+    With nested roots — one Dropbox root inside another, an unusual but
+    representable configuration — ``path.relative_to(outer)`` and
+    ``.relative_to(inner)`` both succeed. The inner root is the right
+    answer because rules and markers under it belong to the inner
+    ``.dropboxignore`` hierarchy, not the outer's. Sibling-only setups
+    (the common shape) have at most one container, so "deepest" collapses
+    to "first match".
+    """
+    best: Path | None = None
     for root in roots:
         try:
             path.relative_to(root)
-            return root
         except ValueError:
             continue
-    return None
+        if best is None or len(root.parts) > len(best.parts):
+            best = root
+    return best
 
 
 def _info_json_paths() -> list[Path]:

@@ -476,6 +476,55 @@ def test_detected_attr_names_writes_both_when_pluginkit_times_out(
     assert mod._detected_attr_names() == [mod.ATTR_LEGACY, mod.ATTR_FILEPROVIDER]
 
 
+def test_detected_attr_names_writes_both_when_extension_allowed_and_no_info_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
+) -> None:
+    """pluginkit reports the extension allowed AND info.json is missing →
+    dual-attribute defensive write.
+
+    Without the dual write, an `allowed`-no-paths host falls through to
+    the legacy default and `set_ignored` writes ``com.dropbox.ignored``
+    only. If the host's Dropbox is actually in File Provider mode but
+    info.json never got written (non-stock install, mid-flight reinstall,
+    ``DBXIGNORE_ROOT`` pointing at a ``~/Library/CloudStorage/`` folder
+    on a host whose ``~/.dropbox/info.json`` doesn't exist), Dropbox is
+    watching ``com.apple.fileprovider.ignore#P`` and silently ignores
+    the marker — the write succeeds but the path stays synced.
+
+    Writing both names defensively makes the active sync stack find its
+    own attribute regardless. The inactive stack carries a stray
+    attribute — the same metadata-cleanliness-vs-correctness trade the
+    ``unknown`` arm already documents.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "subprocess.run",
+        _fake_pluginkit(stdout="     com.getdropbox.dropbox.fileprovider(250.4.3245)\n"),
+    )
+    assert mod._detected_attr_names() == [mod.ATTR_LEGACY, mod.ATTR_FILEPROVIDER]
+
+
+def test_detected_attr_name_legacy_when_extension_allowed_and_paths_exist_but_none_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
+) -> None:
+    """The new `allowed`-no-paths arm must NOT swallow the deliberate
+    "legacy with extension ambient" case: extension allowed, at least one
+    info.json path present, but no path under ``~/Library/CloudStorage/``
+    or ``/Volumes/``. That is a real legacy install with Dropbox.app
+    installed (so the FP extension shows registered in pluginkit) and
+    must stay single-attribute legacy.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    legacy_dropbox = tmp_path / "Dropbox"
+    legacy_dropbox.mkdir()
+    _stage_dropbox_info(tmp_path, str(legacy_dropbox))
+    monkeypatch.setattr(
+        "subprocess.run",
+        _fake_pluginkit(stdout="     com.getdropbox.dropbox.fileprovider(250.4.3245)\n"),
+    )
+    assert mod._detected_attr_names() == [mod.ATTR_LEGACY]
+
+
 # ---- Caching ----------------------------------------------------------------
 
 
@@ -786,6 +835,22 @@ def test_detection_summary_starts_with_both_when_pluginkit_unknown(
     monkeypatch.setattr(
         "subprocess.run",
         _fake_pluginkit(side_effect=FileNotFoundError("pluginkit not found")),
+    )
+
+    summary = mod.detection_summary()
+    assert summary.startswith("both:")
+
+
+def test_detection_summary_starts_with_both_when_extension_allowed_and_no_info_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_attr_cache: None
+) -> None:
+    """The `allowed`-no-paths defensive arm also surfaces as `both:` so
+    `dbxignore status` and daemon-log grep see one stable prefix for
+    every dual-write arm regardless of trigger."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "subprocess.run",
+        _fake_pluginkit(stdout="     com.getdropbox.dropbox.fileprovider(250.4.3245)\n"),
     )
 
     summary = mod.detection_summary()

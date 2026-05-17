@@ -295,23 +295,6 @@ This is narrow — a normal Dropbox install always writes `info.json`, which is 
 
 Touches: `src/dbxignore/_backends/macos_xattr.py:_detect()` (~5 LOC for fix candidate 1); `tests/test_macos_xattr_unit.py` (new test: empty info.json paths + `pluginkit` `allowed` → asserts both attribute names returned).
 
-## 15. `roots.find_containing` returns the first containing root, not the most specific one
-
-`roots.find_containing(path, roots)` (`roots.py`) iterates `roots` and returns the first one that contains `path`. The iteration order is whatever `discover()` produced — for info.json-derived roots that is `data.values()` order from the JSON, which carries no specificity guarantee. If two discovered roots are nested (one Dropbox root inside another), a path under the *inner* root can match the *outer* root: `RuleCache.match` / `explain` and the daemon's event dispatch would then evaluate that path against the outer root's `.dropboxignore` hierarchy instead of the inner root's.
-
-Realistically rare — Dropbox personal and business accounts are normally siblings (`~/Dropbox`, `~/Dropbox (Business)`), not nested — so there is no user-facing report. But the function's contract is "the root that contains `path`," and when two roots both qualify, "first in arbitrary order" is not a defensible answer; "most specific" (longest match) is.
-
-**Fix candidates:**
-
-1. **Sort candidate roots by descending path depth inside `find_containing`, return the first match against the sorted list.** Localized — `find_containing` is the single chokepoint that `rules.RuleCache.match` / `explain` and the daemon all route through. ~3 LOC.
-2. **Return the longest containing root explicitly** — iterate all roots, collect every container, return the deepest. Same result as 1, slightly clearer intent; all call sites pass 1–2 roots so the extra work per call is irrelevant.
-
-Both are cheap and purely defensive.
-
-**Urgency:** low. No observed problem; nested Dropbox roots are an unusual configuration. Bundle with the next `roots.py` edit.
-
-Touches: `src/dbxignore/roots.py:find_containing` (~3 LOC); `tests/test_roots.py` (new test: two nested roots, assert a path under the inner root resolves to the inner root).
-
 ## 16. Two-tier ignore/skip rule structure as an alternative to interleaved negations
 
 The rule model is single-tier: one gitignore-style spec per `.dropboxignore`, with `!pattern` negations the only re-include mechanism. Negations under an ignored ancestor are dropped (`is_dropped`) because Dropbox's folder-inheritance model genuinely cannot express them. An alternative authoring model would split each file into two independent specs — an ignore-spec and a separately-evaluated skip-spec — instead of interleaving negations into one list.
@@ -415,7 +398,7 @@ Touches: `scripts/manual-test-windows.ps1`.
 
 ### Open
 
-Twenty items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Nineteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#1** — Intel Mac (x86_64) Mach-O binary build leg. dbxignore ships arm64-only Mach-O binaries; Intel users install via PyPI. Awaits demand signal.
 - **#2** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #1. Defer until item #1 actually triggers.
@@ -431,7 +414,6 @@ Twenty items. Most are passive (no concrete trigger requires action) — bundle 
 - **#12** — Failed `uv tool uninstall` leaves the venv directory behind; the next `uv tool install` does an incremental update instead of fresh install, producing a hybrid venv (mixed install-event packages). Triggers subtle import / C-extension issues. Recovery is manual `Remove-Item ~\AppData\Roaming\uv\tools\<pkg>`.
 - **#13** — `_DeferredEvents.drain` redispatches serially on the worker thread before Phase 2 starts; a large startup-window burst could delay Phase 2's wall-clock unnecessarily. Mostly redundant with Phase 2 anyway. No observed problem.
 - **#14** — macOS detection defaults to legacy when info.json is missing and pluginkit reports the extension as `allowed`; widening the defensive write-both case is the smallest fix.
-- **#15** — `roots.find_containing` returns the first containing root, not the most specific; defensive sort by descending depth is ~3 LOC.
 - **#16** — Two-tier ignore/skip rule structure as an alternative to interleaved negations. RFC only; does not bypass Dropbox's ancestor-inheritance constraint — purely an authoring-ergonomics question. `is_dropped` is the defensible current answer. Awaiting a concrete UX-insufficiency case.
 - **#17** — Evaluate `igittigitt` as a `pathspec` replacement. 30-min spike (diff both libraries against the rules test corpus) before the next significant rules-layer change; conflict detector + `is_dropped` stay dbxignore-specific regardless, so the simplification ceiling may be modest.
 - **#18** — Confirm watchdog doesn't internally rewalk subtrees on every directory event under burst load. Per-event CPU cost axis, distinct from #7's watch-count axis. Investigation only. Awaiting a beta-tester CPU-spike report during bulk file ops.

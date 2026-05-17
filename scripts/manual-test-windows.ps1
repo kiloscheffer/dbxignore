@@ -157,36 +157,41 @@ function Assert-AdsUnset {
 # `generate` then refuse with "already exists, pass --force." Verify the
 # parameter was actually supplied at the call site.
 
+# Remove-DirWithRetry — defends against the "Dropbox holds a short-lived
+# handle on newly-created files in the sync tree" race on Windows. POSIX
+# scripts don't hit this (unlink-while-open releases the directory entry
+# immediately); Windows blocks `Remove-Item` on any open handle and surfaces
+# the condition as either `IOException` ("file in use") or
+# `UnauthorizedAccessException` (same condition, framed as a permission
+# failure). Retry budget: 20 × 500 ms = 10 s, comfortably above Dropbox's
+# typical scan window (sub-second to ~2 s). Use at every site that wipes a
+# directory inside `$script:DropboxDir`; bare `Remove-Item -Recurse -Force`
+# in those spots flakes under Dropbox-active load.
+function Remove-DirWithRetry {
+    param([Parameter(Mandatory)] [string]$Path)
+    if (-not (Test-Path $Path)) { return }
+    $attempts = 0
+    while ($true) {
+        try {
+            Remove-Item -Path $Path -Recurse -Force -ErrorAction Stop
+            return
+        } catch [System.IO.IOException], [System.UnauthorizedAccessException] {
+            $attempts++
+            if ($attempts -ge 20) {
+                Write-Note "Remove-DirWithRetry: gave up after 10s waiting for handles on $Path to release"
+                throw
+            }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+}
+
 function Reset-TestDir {
     param(
         [Parameter(Mandatory)] [string]$Path,
         [AllowEmptyString()] [string]$DropboxignoreContent
     )
-    if (Test-Path $Path) {
-        # Dropbox's file watcher routinely holds short-lived handles on
-        # newly-created files in the sync tree, and Windows blocks
-        # `Remove-Item` on any open handle. The bash scripts don't hit this
-        # because POSIX unlink-while-open releases the directory entry
-        # immediately. Retry on the two typical Windows lock exceptions
-        # (`IOException` for "file in use"; `UnauthorizedAccessException`
-        # when Windows reports the same condition as a permission failure).
-        # Budget: 20 × 500 ms = 10 s — comfortably above Dropbox's typical
-        # scan window (sub-second to ~2 s).
-        $attempts = 0
-        while ($true) {
-            try {
-                Remove-Item -Path $Path -Recurse -Force -ErrorAction Stop
-                break
-            } catch [System.IO.IOException], [System.UnauthorizedAccessException] {
-                $attempts++
-                if ($attempts -ge 20) {
-                    Write-Note "Reset-TestDir: gave up after 10s waiting for handles on $Path to release"
-                    throw
-                }
-                Start-Sleep -Milliseconds 500
-            }
-        }
-    }
+    Remove-DirWithRetry -Path $Path
     New-Item -ItemType Directory -Path $Path -Force | Out-Null
     if ($PSBoundParameters.ContainsKey('DropboxignoreContent')) {
         Set-Content -Path (Join-Path $Path ".dropboxignore") -Value $DropboxignoreContent -Encoding utf8
@@ -484,7 +489,7 @@ function Test-Reconcile {
 
     # 4d. dropped negation: dir rule + descendant negation
     Write-Note "4d - dropped negation (dir rule + descendant negation)"
-    if (Test-Path $T) { Remove-Item -Path $T -Recurse -Force }
+    Remove-DirWithRetry -Path $T
     New-Item -ItemType Directory -Path "$T\build\keep" -Force | Out-Null
     Set-Content -Path "$T\.dropboxignore" -Value "build/`n!build/keep/" -Encoding utf8
     New-Item -ItemType File -Path "$T\build\keep\inside.txt" -Force | Out-Null
@@ -682,7 +687,7 @@ function Test-ExtendedCli {
     # mask the local `!build/keep/` negation — a real but unrelated effect
     # that the case 4m assertion would mis-attribute as a detector failure.
     Write-Note "4m - conflict detector: case4m_target/* + !case4m_target/keep/ no conflict"
-    Remove-Item -Path $T -Recurse -Force
+    Remove-DirWithRetry -Path $T
     New-Item -ItemType Directory -Path "$T\case4m_target\keep" -Force | Out-Null
     Set-Content -Path "$T\.dropboxignore" -Value "case4m_target/*`n!case4m_target/keep/" -Encoding utf8
     New-Item -ItemType File -Path "$T\case4m_target\keep\inside.txt" -Force | Out-Null
@@ -710,7 +715,7 @@ function Test-ExtendedCli {
     # 4o — dbxignore ignore <path> happy path
     Write-Note "4o - dbxignore ignore (basic)"
     $target4o = Join-Path $script:DropboxDir "dbxignore_test_4o"
-    if (Test-Path $target4o) { Remove-Item -Path $target4o -Recurse -Force }
+    Remove-DirWithRetry -Path $target4o
     New-Item -ItemType Directory -Path $target4o -Force | Out-Null
     $ignoreOut = "$env:TEMP\dbxignore-ignore.out"
     dbxignore ignore $target4o --yes *> $ignoreOut
@@ -734,12 +739,12 @@ function Test-ExtendedCli {
         Write-Pass "4p - rule removed from $rootIgnoreFile"
     }
     Assert-AdsUnset -Path $target4o -Name "4p - marker cleared on target"
-    Remove-Item -Path $target4o -Recurse -Force
+    Remove-DirWithRetry -Path $target4o
 
     # 4q — dbxignore unignore wildcard collision
     Write-Note "4q - dbxignore unignore refuses wildcard blocker"
     $target4q = Join-Path $script:DropboxDir "dbxignore_test_4q"
-    if (Test-Path $target4q) { Remove-Item -Path $target4q -Recurse -Force }
+    Remove-DirWithRetry -Path $target4q
     New-Item -ItemType Directory -Path $target4q -Force | Out-Null
     Add-Content -Path $rootIgnoreFile -Value "dbxignore_test_4q/" -Encoding utf8
     Add-Content -Path $rootIgnoreFile -Value "**/dbxignore_test_4q/" -Encoding utf8
@@ -760,7 +765,7 @@ function Test-ExtendedCli {
             Remove-Item $rootIgnoreFile -Force
         }
     }
-    Remove-Item -Path $target4q -Recurse -Force
+    Remove-DirWithRetry -Path $target4q
 
     # 4r — clear/list exit 2 on nonexistent path
     Write-Note "4r - clear/list error on nonexistent path"

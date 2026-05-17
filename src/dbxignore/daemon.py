@@ -557,7 +557,7 @@ def _acquire_singleton_lock() -> Any | None:
     singleton gate — a state-based check (read state.json →
     check is_daemon_alive(prior.pid)) would have a non-atomic window
     between read and the first state.write, letting two concurrent
-    ``dbxignorew`` launches both decide "no other daemon" and proceed.
+    ``dbxignore`` launches both decide "no other daemon" and proceed.
     """
     lock_path = _singleton_lock_path()
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -667,7 +667,7 @@ def run(stop_event: threading.Event | None = None) -> None:
         # Singleton gate. The OS-level lock is the authoritative check:
         # kernel-released on process exit so a stale lock file is never a
         # problem, and acquisition is atomic so two concurrent
-        # ``dbxignorew`` launches can't both proceed.
+        # ``dbxignore`` launches can't both proceed.
         singleton_lock = _acquire_singleton_lock()
         if singleton_lock is None:
             # Read state.json (best-effort) to recover the existing
@@ -827,7 +827,7 @@ def run(stop_event: threading.Event | None = None) -> None:
                         _redispatch_deferred,
                     ),
                     daemon=False,
-                    name="dbxignorew-initial-sweep",
+                    name="dbxignore-initial-sweep",
                 )
                 worker.start()
 

@@ -59,13 +59,13 @@ def _quote_exec_start_path(exe_path: Path) -> str:
     Two systemd parser concerns:
 
     - ``ExecStart`` splits on whitespace, so a path containing a space
-      (e.g. ``/home/user/My Tools/dbxignorew``) tokenizes incorrectly when
+      (e.g. ``/home/user/My Tools/dbxignore``) tokenizes incorrectly when
       bare. Wrap such paths in double quotes and C-style-escape embedded
       ``"`` and ``\\``.
     - systemd expands ``%X`` specifiers in ``ExecStart`` at unit-load time
       (``%T`` → ``/tmp``, ``%h`` → home, etc.), so a literal ``%`` must
       be doubled to ``%%`` regardless of quoting. Otherwise an install path
-      like ``/home/me/100% Tools/dbxignorew`` is silently rewritten by the
+      like ``/home/me/100% Tools/dbxignore`` is silently rewritten by the
       specifier expander and the unit points at the wrong binary.
 
     A ``$`` in the path is deliberately **not** escaped: systemd only

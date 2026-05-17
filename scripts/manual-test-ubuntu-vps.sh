@@ -331,7 +331,7 @@ phase_dbxignore_install() {
         # the venv out from under uv orphans the shims and the next
         # `uv tool install` errors with "Executables already exist".
         if bin_dir="$(uv tool dir --bin 2>/dev/null)" && [ -n "$bin_dir" ] && [ -d "$bin_dir" ]; then
-            rm -f "$bin_dir/dbxignore" "$bin_dir/dbxignorew"
+            rm -f "$bin_dir/dbxignore"
         fi
     fi
 
@@ -558,7 +558,7 @@ phase_daemon() {
     grep -q "^ExecStart=.*dbxignore daemon" \
         "$HOME/.config/systemd/user/dbxignore.service" \
         && pass "ExecStart uses unified 'dbxignore daemon'" \
-        || fail "ExecStart still references old 'dbxignorew'"
+        || fail "ExecStart does not invoke 'dbxignore daemon'"
 
     sleep 2
     if systemctl --user is-active dbxignore >/dev/null 2>&1; then

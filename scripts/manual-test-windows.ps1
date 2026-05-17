@@ -304,20 +304,40 @@ function Test-InstallDbxignore {
         # in-CLI wait can be defeated by a stale state.json (daemon_pid
         # pointing at a different/non-existent PID makes the poll break
         # immediately while schtasks /End's signal is still propagating to
-        # the real daemon). Without this guard, `uv tool uninstall` races
-        # the daemon's actual death and silently leaves dbxignorew.exe +
-        # pythonw.exe locked in the venv, which then trips the next
-        # `uv tool install` with "Invalid environment".
-        $deadline = (Get-Date).AddSeconds(30)
-        while ((Get-Date) -lt $deadline) {
-            if (-not (Get-Process -Name dbxignore, dbxignorew -ErrorAction SilentlyContinue)) { break }
-            Start-Sleep -Milliseconds 500
-        }
-        $lingering = Get-Process -Name dbxignore, dbxignorew -ErrorAction SilentlyContinue
-        if ($lingering) {
-            Write-Note "daemon did not exit within 30s; force-killing PID(s) $($lingering.Id -join ', ')"
-            $lingering | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
-            Start-Sleep -Milliseconds 500
+        # the real daemon).
+        #
+        # Identify daemon processes by CommandLine, not by process name or
+        # executable path: the daemon trampoline chain on Windows has three
+        # layers (active-gotchas.md "Windows windowless-launcher selection"),
+        # all alive concurrently while the daemon runs:
+        #   1) dbxignorew.exe (the GUI-script trampoline schtasks /Run launches)
+        #   2) <venv>\Scripts\pythonw.exe (uv's launcher shim, re-execs to #3)
+        #   3) <uv managed Python dir>\pythonw.exe (the actual CPython
+        #      interpreter holding the daemon's code + file mappings)
+        # A name-based check (`Get-Process dbxignore, dbxignorew`) catches
+        # only #1; a venv-path check catches #1 and #2 but misses #3 (which
+        # is what holds the locks). Only the full argv (`dbxignorew.exe
+        # ... daemon`) is consistent across all three layers, so match by
+        # `Get-CimInstance Win32_Process` CommandLine. Without this,
+        # `uv tool uninstall` races the real daemon's death and silently
+        # leaves files locked, tripping the next `uv tool install` with
+        # "Invalid environment".
+        $daemonPids = (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+            $_.CommandLine -and $_.CommandLine -match 'dbxignore(w)?\.exe.*\bdaemon\b'
+        }).ProcessId
+        if ($daemonPids) {
+            $deadline = (Get-Date).AddSeconds(30)
+            while ((Get-Date) -lt $deadline) {
+                $alive = $daemonPids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }
+                if (-not $alive) { break }
+                Start-Sleep -Milliseconds 500
+            }
+            $alive = $daemonPids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }
+            if ($alive) {
+                Write-Note "daemon process(es) did not exit within 30s; force-killing PID(s) $($alive -join ', ')"
+                $alive | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+                Start-Sleep -Milliseconds 500
+            }
         }
 
         uv tool uninstall dbxignore 2>$null | Out-Null

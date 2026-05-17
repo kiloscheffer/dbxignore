@@ -231,13 +231,13 @@ def test_discover_non_utf8_bytes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
         dropbox_dir = base / ".dropbox"
         env_var = "HOME"
     dropbox_dir.mkdir(parents=True)
-    # Write raw CP1252-encoded bytes that aren't valid UTF-8 where Dropbox
-    # has historically stored non-ASCII path components on older installs.
+    # Write raw CP1252-encoded bytes that aren't valid UTF-8, mimicking
+    # the non-ASCII path components Dropbox can store on some installs.
     (dropbox_dir / "info.json").write_bytes(b'{"personal": {"path": "C:\\\\Dr\xf6pbox"}}')
     # Clear the OTHER candidate env vars so the fallback path doesn't pick up
     # the test runner's real LOCALAPPDATA (which on Windows can contain a real
-    # Dropbox install) and silently "succeed." Without this, the post-item-5
-    # fallback behavior masks the malformed-bytes case under test.
+    # Dropbox install) and silently "succeed." Without this, the
+    # multi-candidate fallback masks the malformed-bytes case under test.
     _clear_platform_env(monkeypatch)
     monkeypatch.setenv(env_var, str(base))
     assert roots.discover() == []
@@ -345,10 +345,10 @@ def test_discover_falls_back_when_first_candidate_malformed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A stale APPDATA\\Dropbox\\info.json from an uninstalled per-user
-    install used to mask a valid LOCALAPPDATA\\Dropbox\\info.json. Now, if
-    the first existing candidate fails to parse, discover falls through to
-    the next candidate, logs a warning per failed candidate, and returns the
-    first usable result."""
+    install can mask a valid LOCALAPPDATA\\Dropbox\\info.json. If the
+    first existing candidate fails to parse, discover falls through to
+    the next candidate, logs a warning per failed candidate, and returns
+    the first usable result."""
     if sys.platform != "win32":
         import pytest
 
@@ -392,10 +392,10 @@ def test_discover_falls_back_when_first_candidate_parses_to_empty_accounts(
 ) -> None:
     """An info.json that parses cleanly but contains no usable account paths
     (e.g. ``{}`` or ``{"personal": {}}`` from a Dropbox-uninstall residue)
-    used to short-circuit ``discover()`` with the same empty result as if the
-    per-machine candidate didn't exist. Now an empty ``account_paths`` falls
-    through to the next candidate, and the log includes a WARNING naming the
-    empty-but-existing file."""
+    must not short-circuit ``discover()`` with the same empty result as if
+    the per-machine candidate didn't exist. An empty ``account_paths``
+    falls through to the next candidate, and the log includes a WARNING
+    naming the empty-but-existing file."""
     if sys.platform != "win32":
         import pytest
 
@@ -462,10 +462,10 @@ def test_discover_returns_empty_when_all_candidates_malformed(
 
 # ---- info.json account-path validation -----------------------------------
 # A stale info.json entry (account removed, drive unmounted, folder
-# relocated) used to become a configured root unchecked. The daemon then
-# crashed at `observer.schedule()` on the nonexistent path. `discover()`
-# now validates account paths the same way it validates the
-# DBXIGNORE_ROOT override — invalid entries are skipped with a WARNING.
+# relocated) must not become a configured root unchecked — the daemon
+# would then crash at `observer.schedule()` on the nonexistent path.
+# `discover()` validates account paths the same way it validates the
+# DBXIGNORE_ROOT override: invalid entries are skipped with a WARNING.
 
 
 def test_discover_skips_nonexistent_account_path(

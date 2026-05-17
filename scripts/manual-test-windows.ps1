@@ -288,7 +288,99 @@ function Test-InstallDbxignore {
     $existing = uv tool list 2>$null | Select-String '^dbxignore '
     if ($existing) {
         Write-Note "dbxignore already installed via uv tool - uninstalling first for a clean test"
+        # Best-effort CLI teardown. `dbxignore uninstall` runs `schtasks
+        # /End` + waits for the daemon to exit
+        # (install/windows_task.py:uninstall_task), which is the canonical
+        # path for releasing the daemon's file lock on dbxignorew.exe.
+        # Plain `uninstall` (not `--purge`) preserves any existing ignore
+        # markers the tester has set outside this script's test subdir.
+        # The schtasks lines below cover the broken-CLI case (interrupted
+        # earlier install).
+        dbxignore uninstall 2>$null | Out-Null
+        schtasks /End /TN dbxignore 2>$null | Out-Null
+        schtasks /Delete /TN dbxignore /F 2>$null | Out-Null
+
+        # Independently verify the daemon is dead before proceeding. The
+        # in-CLI wait can be defeated by a stale state.json (daemon_pid
+        # pointing at a different/non-existent PID makes the poll break
+        # immediately while schtasks /End's signal is still propagating to
+        # the real daemon).
+        #
+        # Identify daemon processes by CommandLine, not by process name or
+        # executable path: the daemon trampoline chain on Windows has three
+        # layers (active-gotchas.md "Windows windowless-launcher selection"),
+        # all alive concurrently while the daemon runs:
+        #   1) dbxignorew.exe (the GUI-script trampoline schtasks /Run launches)
+        #   2) <venv>\Scripts\pythonw.exe (uv's launcher shim, re-execs to #3)
+        #   3) <uv managed Python dir>\pythonw.exe (the actual CPython
+        #      interpreter holding the daemon's code + file mappings)
+        # A name-based check (`Get-Process dbxignore, dbxignorew`) catches
+        # only #1; a venv-path check catches #1 and #2 but misses #3 (which
+        # is what holds the locks). Only the full argv (`dbxignorew.exe
+        # ... daemon`) is consistent across all three layers, so match by
+        # `Get-CimInstance Win32_Process` CommandLine. Without this,
+        # `uv tool uninstall` races the real daemon's death and silently
+        # leaves files locked, tripping the next `uv tool install` with
+        # "Invalid environment".
+        $daemonPids = (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+            $_.CommandLine -and $_.CommandLine -match 'dbxignore(w)?\.exe.*\bdaemon\b'
+        }).ProcessId
+        if ($daemonPids) {
+            $deadline = (Get-Date).AddSeconds(30)
+            while ((Get-Date) -lt $deadline) {
+                $alive = $daemonPids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }
+                if (-not $alive) { break }
+                Start-Sleep -Milliseconds 500
+            }
+            $alive = $daemonPids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }
+            if ($alive) {
+                Write-Note "daemon process(es) did not exit within 30s; force-killing PID(s) $($alive -join ', ')"
+                $alive | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+                Start-Sleep -Milliseconds 500
+            }
+        }
+
         uv tool uninstall dbxignore 2>$null | Out-Null
+
+        # Force-remove venv residue. With the daemon confirmed dead above,
+        # the only remaining lock source is transient (Dropbox/AV indexing);
+        # retry briefly. Abort loudly on persistent failure rather than
+        # silently corrupting the next `uv tool install`. Derive the path
+        # via `uv tool dir` (which respects `UV_TOOL_DIR`) — same pattern
+        # Phase 5 uses for `pythonw.exe` lookup — instead of hardcoding
+        # `%APPDATA%\uv\tools\dbxignore`, so a tester with a non-default
+        # tool dir isn't bypassed.
+        $toolDir = (uv tool dir 2>$null | Out-String).Trim()
+        if ([string]::IsNullOrWhiteSpace($toolDir)) {
+            Stop-Abort "uv tool dir returned empty; cannot locate venv to clean up"
+        }
+        $venvDir = Join-Path $toolDir 'dbxignore'
+        if (Test-Path $venvDir) {
+            $attempts = 0
+            while ((Test-Path $venvDir) -and ($attempts -lt 10)) {
+                try {
+                    Remove-Item -Recurse -Force $venvDir -ErrorAction Stop
+                } catch {
+                    Start-Sleep -Milliseconds 500
+                    $attempts++
+                }
+            }
+            if (Test-Path $venvDir) {
+                Stop-Abort "could not remove $venvDir after 5s of retries; file may still be locked"
+            }
+        }
+
+        # `uv tool uninstall` removes the trampoline shims at $(uv tool dir
+        # --bin), but only if uv still recognizes the tool. Removing the
+        # venv out from under uv orphans the shims and the next
+        # `uv tool install` errors with "Executables already exist".
+        $binDir = (uv tool dir --bin 2>$null).Trim()
+        if ($binDir -and (Test-Path $binDir)) {
+            foreach ($exe in @('dbxignore.exe', 'dbxignorew.exe')) {
+                $shim = Join-Path $binDir $exe
+                if (Test-Path $shim) { Remove-Item -Force $shim -ErrorAction SilentlyContinue }
+            }
+        }
     }
 
     # Invalidate uv's path-keyed sdist cache for local-source installs.
@@ -582,15 +674,14 @@ function Test-ExtendedCli {
         Write-Fail "4l - did not emit 'Nothing to apply'"
     }
 
-    # 4m — detector regression: case4m_target/* + !case4m_target/keep/ no conflict
+    # 4m — conflict detector: case4m_target/* + !case4m_target/keep/ no conflict
     # Uses `case4m_target` instead of the generic `build` because testers who
     # have run `dbxignore init` at their Dropbox root carry a `build/` rule
     # at the ancestor `.dropboxignore`. Dropbox's directory-inheritance
     # semantic would then mark the test's `build/` via the ancestor rule and
     # mask the local `!build/keep/` negation — a real but unrelated effect
-    # that the case 4m assertion would mis-attribute as "detector fix didn't
-    # apply".
-    Write-Note "4m - detector fix: case4m_target/* + !case4m_target/keep/ no conflict"
+    # that the case 4m assertion would mis-attribute as a detector failure.
+    Write-Note "4m - conflict detector: case4m_target/* + !case4m_target/keep/ no conflict"
     Remove-Item -Path $T -Recurse -Force
     New-Item -ItemType Directory -Path "$T\case4m_target\keep" -Force | Out-Null
     Set-Content -Path "$T\.dropboxignore" -Value "case4m_target/*`n!case4m_target/keep/" -Encoding utf8
@@ -599,14 +690,14 @@ function Test-ExtendedCli {
     dbxignore apply "$T" --yes 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) { Write-Pass "4m - apply (rc=0)" } else { Write-Fail "4m - apply" }
     Assert-AdsSet   -Path "$T\case4m_target\foo.tmp" -Name "4m - case4m_target/foo.tmp marked (case4m_target/* matches)"
-    Assert-AdsUnset -Path "$T\case4m_target\keep"    -Name "4m - case4m_target/keep NOT marked (negation now effective post-fix)"
+    Assert-AdsUnset -Path "$T\case4m_target\keep"    -Name "4m - case4m_target/keep NOT marked (negation effective)"
     Assert-AdsUnset -Path "$T\case4m_target"         -Name "4m - case4m_target/ NOT marked (children-only rule)"
     $statusOut = (dbxignore status 2>&1) -join "`n"
     if ($statusOut -match 'rule conflicts \([1-9]') {
         Write-Note ($statusOut -split "`n" | Select-String -SimpleMatch 'rule conflicts' -Context 0,5 | Out-String)
-        Write-Fail "4m - status reports >=1 conflicts (regression: detector fix didn't apply)"
+        Write-Fail "4m - status reports >=1 conflicts (detector should report none)"
     } else {
-        Write-Pass "4m - status reports no conflicts (detector fix applied)"
+        Write-Pass "4m - status reports no conflicts"
     }
 
     # 4n — dbxignore clear basic; daemon-alive guard tested in phase 5

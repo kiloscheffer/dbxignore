@@ -34,9 +34,9 @@ def test_acquire_singleton_lock_returns_none_when_already_held(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Second acquisition while the first is still held returns None.
-    This is the singleton gate — the prior state-based check had a
-    non-atomic read-then-write window where two concurrent daemon launches
-    could both proceed."""
+    This is the singleton gate — a state-based check (read state.json →
+    is_daemon_alive) would have a non-atomic read-then-write window
+    where two concurrent daemon launches could both proceed."""
     monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
     first = daemon._acquire_singleton_lock()
     assert first is not None
@@ -121,21 +121,20 @@ def test_run_refuses_when_singleton_lock_is_held(
         lock_holder.close()
 
 
-def test_run_refuses_when_legacy_daemon_alive_without_lock(
+def test_run_refuses_when_state_shows_alive_daemon_without_lock(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
     fake_psutil_process: FakePsutilProcess,
 ) -> None:
-    """Migration defense-in-depth: an older daemon wrote state.json but
-    never created daemon.lock. The new daemon's lock-acquire succeeds (no
-    contention from the legacy process), so without a state-check after
-    acquisition two daemons would run on the same Dropbox roots during the
-    migration window.
+    """Defense-in-depth: a state.json points at an alive daemon PID but
+    no daemon.lock is held. The new daemon's lock-acquire succeeds (no
+    contention), so without a state-check after acquisition two daemons
+    would run on the same Dropbox roots.
 
-    Test: write a state.json with a legacy daemon's pid (no
-    daemon_create_time), mock psutil to claim that pid is a live python
-    process, call daemon.run(), assert it refuses and releases the lock.
+    Test: write a state.json with a daemon pid (no daemon_create_time),
+    mock psutil to claim that pid is a live python process, call
+    daemon.run(), assert it refuses and releases the lock.
     """
     monkeypatch.setattr(state, "user_state_dir", lambda: tmp_path)
     monkeypatch.setattr(state, "default_path", lambda: tmp_path / "state.json")
@@ -145,20 +144,20 @@ def test_run_refuses_when_legacy_daemon_alive_without_lock(
     # Pick a pid that's not our own so the self-exclusion branch doesn't
     # short-circuit. 99999 is in the "almost certainly unused" range; the
     # mocked psutil makes its existence claim deterministic regardless.
-    legacy_pid = 99999
-    s = state.State(daemon_pid=legacy_pid)
+    alien_pid = 99999
+    s = state.State(daemon_pid=alien_pid)
     state.write(s, tmp_path / "state.json")
 
     fake_psutil_process(name="python.exe")
 
     caplog.set_level("ERROR", logger="dbxignore.daemon")
 
-    # Run daemon in a background thread so that — in the pre-fix world,
-    # where the daemon would proceed past the (missing) legacy check and
-    # block in the main sweep loop — the test can assert the absence of
-    # the early-refusal exit and clean up via stop_event rather than
-    # hanging until pytest-timeout fires. With the fix in place, the
-    # thread exits in milliseconds.
+    # Run daemon in a background thread so that — if the state-check
+    # were missing and the daemon proceeded past it into the main sweep
+    # loop — the test could assert the absence of the early-refusal exit
+    # and clean up via stop_event rather than hanging until pytest-
+    # timeout fires. With the state-check in place, the thread exits in
+    # milliseconds.
     stop_event = threading.Event()
     t = threading.Thread(target=daemon.run, args=(stop_event,), daemon=True)
     t.start()
@@ -169,18 +168,19 @@ def test_run_refuses_when_legacy_daemon_alive_without_lock(
         t.join(timeout=5.0)
 
     assert daemon_returned_early, (
-        "daemon should have refused on legacy-daemon scenario but instead "
-        "proceeded to the main loop — defense-in-depth state-check missing"
+        "daemon should have refused on alive-daemon-in-state scenario but "
+        "instead proceeded to the main loop — defense-in-depth state-check "
+        "missing"
     )
     assert any("already running" in rec.message.lower() for rec in caplog.records), (
         f"expected refusal log, got: {[r.message for r in caplog.records]}"
     )
 
     # Lock must have been released so a future invocation (after the
-    # legacy daemon dies) can acquire. If we leaked the handle, this
+    # alien daemon dies) can acquire. If we leaked the handle, this
     # acquisition would fail.
     fh = daemon._acquire_singleton_lock()
-    assert fh is not None, "lock must be released after legacy-daemon refusal"
+    assert fh is not None, "lock must be released after refusal"
     fh.close()
 
 
@@ -193,12 +193,12 @@ def test_singleton_lock_not_released_while_worker_alive(
     """Singleton lock must not be released until the initial-sweep worker has
     actually exited — even when the graceful-exit join times out first.
 
-    Regression guard for the path where:
+    Guards the path where:
     1. Inner finally's bounded join times out (worker still alive).
-    2. Before the fix, singleton_lock.close() ran immediately after —
-       a second daemon could acquire the lock and run concurrently.
-    3. After the fix, the outer finally joins the worker first (no
-       timeout) so the lock is released only once the worker is gone.
+    2. Closing singleton_lock immediately after would let a second
+       daemon acquire the lock and run concurrently.
+    3. The outer finally joins the worker first (no timeout) so the
+       lock is released only once the worker is gone.
 
     Mechanics: monkeypatch ``_INITIAL_SWEEP_JOIN_TIMEOUT_S`` to near-zero
     so the inner join fires quickly; use ``BlockingMarkers`` to keep the

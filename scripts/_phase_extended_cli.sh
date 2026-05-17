@@ -156,15 +156,14 @@ phase_extended_cli() {
     fi
     assert_grep /tmp/dbx-noop.out 'Nothing to apply' "4l — emits 'Nothing to apply (rules already in sync)'"
 
-    # 4m — detector regression: case4m_target/* + !case4m_target/keep/ no conflict
+    # 4m — conflict detector: case4m_target/* + !case4m_target/keep/ no conflict
     # Uses `case4m_target` instead of the generic `build` because testers who
     # have run `dbxignore init` at their Dropbox root carry a `build/` rule
     # at the ancestor `.dropboxignore`. Dropbox's directory-inheritance
     # semantic would then mark the test's `build/` via the ancestor rule and
     # mask the local `!build/keep/` negation — a real but unrelated effect
-    # that the case 4m assertion would mis-attribute as "detector fix didn't
-    # apply".
-    note "4m — detector fix: case4m_target/* + !case4m_target/keep/ no conflict"
+    # that the case 4m assertion would mis-attribute as a detector failure.
+    note "4m — conflict detector: case4m_target/* + !case4m_target/keep/ no conflict"
     rm -rf "$T"; mkdir -p "$T/case4m_target/keep"
     printf 'case4m_target/*\n!case4m_target/keep/\n' > "$T/.dropboxignore"
     : > "$T/case4m_target/keep/inside.txt"
@@ -175,15 +174,15 @@ phase_extended_cli() {
         fail "4m — apply"
     fi
     assert_xattr_set   "$T/case4m_target/foo.tmp" "4m — case4m_target/foo.tmp marked (case4m_target/* matches)"
-    assert_xattr_unset "$T/case4m_target/keep"    "4m — case4m_target/keep NOT marked (negation now effective post-fix)"
+    assert_xattr_unset "$T/case4m_target/keep"    "4m — case4m_target/keep NOT marked (negation effective)"
     assert_xattr_unset "$T/case4m_target"         "4m — case4m_target/ NOT marked (children-only rule)"
     # status should report 0 conflicts for this rule set (the negation IS effective).
     local status_out; status_out="$(dbxignore status 2>&1)"
     if printf '%s\n' "$status_out" | grep -qE 'rule conflicts \([1-9]'; then
         note "$(printf '%s\n' "$status_out" | grep -A 5 'rule conflicts')"
-        fail "4m — status reports >=1 conflicts (regression: detector fix didn't apply)"
+        fail "4m — status reports >=1 conflicts (detector should report none)"
     else
-        pass "4m — status reports no conflicts (detector fix applied)"
+        pass "4m — status reports no conflicts"
     fi
 
     # 4n — dbxignore clear basic; daemon-alive guard tested in phase 5

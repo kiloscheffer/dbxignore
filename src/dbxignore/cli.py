@@ -1785,8 +1785,8 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
         uninstall_shell_integration_if_supported(errors=shell_errors)
         # (1) Clear xattr markers. Read and clear arms are split so each
         # failure can be attributed to the specific operation that failed;
-        # the prior shape collapsed both into one `except OSError: pass`
-        # and silently overstated cleanup success.
+        # collapsing both into one `except OSError: pass` would silently
+        # overstate cleanup success.
         discovered = _discover_roots()
         cleared = 0
         errors: list[tuple[Path, str, str]] = []  # (path, operation, message)

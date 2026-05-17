@@ -303,10 +303,11 @@ def write(state: State, path: Path | None = None) -> None:
     # second daemon while the first is still alive.
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(_encode(state), indent=2), encoding="utf-8")
-    # Parse-back guard: a future serializer regression producing malformed JSON
-    # would otherwise be committed by os.replace, and _read_at's JSONDecodeError
-    # arm would silently fall through to "no prior daemon" — the same singleton-
-    # bypass mode the temp-file-plus-replace shape above defends against.
+    # Parse-back guard: a serializer bug producing malformed JSON would
+    # otherwise be committed by os.replace, and _read_at's JSONDecodeError
+    # arm would silently fall through to "no prior daemon" — the same
+    # singleton-bypass mode the temp-file-plus-replace shape above defends
+    # against.
     try:
         json.loads(tmp.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
@@ -322,11 +323,11 @@ def read(path: Path | None = None) -> State | None:
 def _read_at(path: Path) -> State | None:
     # OSError (locked / permission-denied / cloud-placeholder) warns and
     # returns None instead of propagating, so CLI verbs that consult state
-    # best-effort (`status`, `clear`'s daemon-alive guard, daemon legacy-state
-    # migration) don't crash on a stale-or-broken file.
+    # best-effort (`status`, `clear`'s daemon-alive guard) don't crash on a
+    # stale-or-broken file.
     # The middle arm catches the JSON-syntax + shape errors that `_decode`
     # raises (KeyError on missing last_error sub-key; TypeError on non-dict
-    # last_error; ValueError on a stored datetime that no longer parses).
+    # last_error; ValueError on an unparseable stored datetime).
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
         return _decode(raw)
@@ -375,16 +376,16 @@ def _decode(raw: dict[str, Any]) -> State:
         # Raise ValueError here so `_read_at`'s corrupt-state arm catches
         # it and `read()` returns None.
         daemon_pid=_validate_pid(raw.get("daemon_pid")),
-        # `daemon_create_time` is decode-tolerant: older state.json files
-        # lack the field and decode to None, which triggers the
-        # legacy substring-name fallback in is_daemon_alive. But when the
-        # field IS present, it MUST be a number — a hand-edited or shape-
-        # mismatched state file with e.g. a string ``daemon_create_time``
-        # would otherwise propagate to ``is_daemon_alive``'s
+        # `daemon_create_time` is decode-tolerant: a state file missing
+        # the field decodes to None, which triggers the substring-name
+        # fallback in is_daemon_alive. But when the field IS present, it
+        # MUST be a number — a hand-edited or shape-mismatched state file
+        # with e.g. a string ``daemon_create_time`` would otherwise
+        # propagate to ``is_daemon_alive``'s
         # ``abs(live_create_time - create_time)`` arithmetic and raise
-        # TypeError, breaking status / clear / the daemon's legacy-
-        # startup guard. Raise ValueError here so ``_read_at``'s existing
-        # corrupt-state arm catches it and ``read()`` returns None.
+        # TypeError, breaking status / clear / the daemon startup guard.
+        # Raise ValueError here so ``_read_at``'s existing corrupt-state
+        # arm catches it and ``read()`` returns None.
         # ``isinstance(True, int)`` is True (bool subclasses int) so
         # explicit bool exclusion is required to reject hand-edited
         # ``"daemon_create_time": true`` values.
@@ -395,9 +396,9 @@ def _decode(raw: dict[str, Any]) -> State:
         last_sweep_marked=raw.get("last_sweep_marked", 0),
         last_sweep_cleared=raw.get("last_sweep_cleared", 0),
         last_sweep_errors=raw.get("last_sweep_errors", 0),
-        # Decode-tolerant: older state.json files lack this field and
-        # decode to 0, which keeps `status --summary conflicts=0` sane until
-        # the next daemon sweep refreshes the count.
+        # Decode-tolerant: a state file missing this field decodes to 0,
+        # which keeps `status --summary conflicts=0` sane until the next
+        # daemon sweep refreshes the count.
         last_sweep_conflicts=raw.get("last_sweep_conflicts", 0),
         last_error=LastError(
             time=datetime.fromisoformat(raw["last_error"]["time"]),

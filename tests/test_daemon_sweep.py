@@ -26,9 +26,9 @@ def test_sweep_applies_rules_across_multiple_roots(
     monkeypatch: pytest.MonkeyPatch,
     write_file: WriteFile,
 ) -> None:
-    """Multi-root sweep must reconcile every root independently. Regression
-    guard for the phase-split (sequential load, parallel reconcile) — both
-    roots' markers must land on exactly the paths their own rule file names."""
+    """Multi-root sweep must reconcile every root independently. Pins the
+    phase-split (sequential load, parallel reconcile) — both roots'
+    markers must land on exactly the paths their own rule file names."""
     root_a = tmp_path / "root_a"
     root_b = tmp_path / "root_b"
     write_file(root_a / ".dropboxignore", "build/\n")
@@ -138,7 +138,7 @@ def test_sweep_single_root_still_works(
     monkeypatch: pytest.MonkeyPatch,
     write_file: WriteFile,
 ) -> None:
-    """Regression guard: the single-root path (the common case) bypasses the
+    """The single-root path (the common case) bypasses the
     ThreadPoolExecutor and stays simple."""
     write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()

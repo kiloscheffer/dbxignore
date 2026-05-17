@@ -223,15 +223,15 @@ def append_rule(rule_file: Path, rule_line: str) -> bool:
     content to a unique sibling temp file, then ``os.replace`` into place.
     Survives SIGKILL or power loss mid-write — the file is either fully
     updated or unchanged. The temp name is unique (``mkstemp``-generated)
-    rather than the fixed ``<rule_file>.tmp`` that previously could collide
-    with a concurrent CLI mutation, an editor's atomic-save backup, or a
-    user-created temp file. Still doesn't prevent lost updates
-    when two writers race the read-modify-write itself; an advisory lock
-    would be needed for that and is deferred until a concrete failure shows.
+    so it can't collide with a concurrent CLI mutation, an editor's
+    atomic-save backup, or a user-created temp file. Still doesn't
+    prevent lost updates when two writers race the read-modify-write
+    itself; an advisory lock would be needed for that and is deferred
+    until a concrete failure shows.
 
-    Returns True. (The previous return-False idempotent-skip semantics were
-    removed because they masked the override-via-duplicate behavior gitignore
-    requires for negation-override.)
+    Returns True. Idempotent-skip would mask the override-via-duplicate
+    behavior gitignore requires for negation-override, so the duplicate
+    is always appended.
     """
     if rule_file.exists():
         content = rule_file.read_text(encoding="utf-8")
@@ -383,14 +383,12 @@ class _LoadedRules:
 
     ``content_hash`` is a blake2b-128 digest of the file's bytes at load
     time, used by ``_load_if_changed`` to skip reparsing files whose content
-    is unchanged. Replaces the prior ``(mtime_ns, size)`` shortcut, which
-    missed same-size edits with preserved mtimes (common when editors or
-    ``touch -r`` restore the original timestamp after a save).
+    is unchanged. A ``(mtime_ns, size)`` shortcut would miss same-size edits
+    with preserved mtimes (common when editors or ``touch -r`` restore the
+    original timestamp after a save), so the hash is authoritative.
 
     ``mtime_ns`` and ``size`` remain on the dataclass for diagnostic value
-    and to keep the existing private-API touches in
-    ``tests/test_rules_basic.py`` working; they no longer drive the
-    cache-invalidation gate.
+    only — they do not drive the cache-invalidation gate.
     """
 
     lines: list[str]
@@ -702,7 +700,7 @@ class RuleCache:
             # backup process holding the file, brief EIO on a network drive.
             # Keep the prior cached entry — the next sweep retries and the
             # rules recover. Dropping on a transient error would clear the
-            # cache, the next reconcile would treat previously-ignored paths
+            # cache, the next reconcile would treat already-ignored paths
             # as un-rules-covered, and Dropbox would upload them to cloud
             # before the read recovered. A permanent read failure with the
             # file still on disk is unusual and the daemon's convergent

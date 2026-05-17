@@ -288,7 +288,51 @@ phase_dbxignore_install() {
 
     if uv tool list 2>/dev/null | grep -q '^dbxignore '; then
         note "dbxignore already installed via uv tool — uninstalling first for a clean test"
+        # Best-effort CLI teardown. `dbxignore uninstall` stops the
+        # systemd user unit and waits for the daemon to exit
+        # (install/linux_systemd.py:remove_service). Plain `uninstall`
+        # (not `--purge`) preserves ignore markers outside this script's
+        # test subdir. The systemctl + rm lines below cover the
+        # broken-CLI case (interrupted earlier install).
+        dbxignore uninstall >/dev/null 2>&1 || true
+        systemctl --user disable --now dbxignore.service >/dev/null 2>&1 || true
+        rm -f "$HOME/.config/systemd/user/dbxignore.service"
+        systemctl --user daemon-reload >/dev/null 2>&1 || true
+
+        # Independently verify the daemon is dead before proceeding. The
+        # in-CLI wait can be defeated by a stale state.json (daemon_pid
+        # pointing at a different/non-existent PID makes the poll break
+        # immediately). On POSIX the orphaned-daemon doesn't lock files
+        # (unlink-while-open is fine), but it will continue writing to
+        # state.json and reacting to filesystem events during the test.
+        # Match `dbxignore daemon` specifically to avoid hitting the test
+        # script's own process (which contains "dbxignore" in its path).
+        deadline=$(( $(date +%s) + 30 ))
+        while [ "$(date +%s)" -lt "$deadline" ]; do
+            if ! pgrep -f 'dbxignore daemon' >/dev/null 2>&1; then break; fi
+            sleep 0.5
+        done
+        if pgrep -f 'dbxignore daemon' >/dev/null 2>&1; then
+            note "daemon did not exit within 30s; force-killing"
+            pkill -9 -f 'dbxignore daemon' >/dev/null 2>&1 || true
+            sleep 0.5
+        fi
+
         uv tool uninstall dbxignore >/dev/null 2>&1 || true
+
+        # Force-remove venv residue (defensive; rare on POSIX). Guard
+        # against empty `uv tool dir` (would become `rm -rf /dbxignore`).
+        if tool_dir="$(uv tool dir 2>/dev/null)" && [ -n "$tool_dir" ] && [ -d "$tool_dir/dbxignore" ]; then
+            rm -rf "$tool_dir/dbxignore"
+        fi
+
+        # `uv tool uninstall` removes the trampoline shims at $(uv tool
+        # dir --bin), but only if uv still recognizes the tool. Removing
+        # the venv out from under uv orphans the shims and the next
+        # `uv tool install` errors with "Executables already exist".
+        if bin_dir="$(uv tool dir --bin 2>/dev/null)" && [ -n "$bin_dir" ] && [ -d "$bin_dir" ]; then
+            rm -f "$bin_dir/dbxignore" "$bin_dir/dbxignorew"
+        fi
     fi
 
     clean_uv_cache_for_dbxignore_if_local
@@ -431,7 +475,7 @@ phase_reconcile() {
 #   - apply --dry-run previews without mutating
 #   - apply prompts before mutating; --yes skips the prompt
 #   - apply on already-converged state says "Nothing to apply"
-#   - detector regression — build/* + !build/keep/ no longer flagged
+#   - conflict detector — build/* + !build/keep/ not flagged
 #   - dbxignore clear (basic; daemon-alive guard tested in phase 5)
 # ---------------------------------------------------------------------------
 
@@ -514,7 +558,7 @@ phase_daemon() {
     grep -q "^ExecStart=.*dbxignore daemon" \
         "$HOME/.config/systemd/user/dbxignore.service" \
         && pass "ExecStart uses unified 'dbxignore daemon'" \
-        || fail "ExecStart still references old 'dbxignored'"
+        || fail "ExecStart does not invoke 'dbxignore daemon'"
 
     sleep 2
     if systemctl --user is-active dbxignore >/dev/null 2>&1; then

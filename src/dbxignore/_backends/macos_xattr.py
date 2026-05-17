@@ -5,11 +5,10 @@ attribute with a non-empty value.  Two different attribute names exist
 because Dropbox itself runs in two different sync modes on macOS:
 
 - **Legacy mode** — Dropbox folder at ``~/Dropbox``, synced by Dropbox's
-  own daemon. Watches for ``com.dropbox.ignored``. The historic mode;
-  still in use by some installs that haven't migrated.
+  own daemon. Watches for ``com.dropbox.ignored``.
 - **File Provider mode** — Dropbox folder at
   ``~/Library/CloudStorage/Dropbox/``, synced by Apple's File Provider
-  extension via ``DropboxFileProvider.appex``. Default for new installs
+  extension via ``DropboxFileProvider.appex``. Default for installs
   since 2023. Watches for ``com.apple.fileprovider.ignore#P``. The
   ``#P`` suffix is Apple's "persistent across reboots" marker convention
   for File Provider attributes.
@@ -217,9 +216,9 @@ def _detect() -> tuple[list[str], str]:
          File Provider; Dropbox falls back to legacy sync (or doesn't sync
          at all) regardless of where info.json's path points.
        - **Any path under** ``~/Library/CloudStorage/`` → File Provider.
-         The common case for users who migrated.  Apple's File Provider
-         framework manages this folder; if Dropbox is syncing there, it's
-         in File Provider mode for that account.
+         The common case for File Provider accounts.  Apple's File
+         Provider framework manages this folder; if Dropbox is syncing
+         there, it's in File Provider mode for that account.
        - **Path elsewhere + extension allowed** → File Provider (external
          drive).  Dropbox supports File Provider on mounted external
          drives via an eligibility-gated feature; the sync folder is on
@@ -239,9 +238,9 @@ def _detect() -> tuple[list[str], str]:
     Why path-primary rather than pluginkit-primary: PluginKit registration
     is a *system-level* fact (does macOS know about ``DropboxFileProvider.appex``?).
     The user-level fact (which mode is *this account* in?) lives in
-    ``info.json``'s path field.  An earlier implementation conflated the two and
-    misdetected users who had Dropbox.app installed but had declined the
-    File Provider migration.  Path-primary fixes that.
+    ``info.json``'s path field.  Pluginkit-primary would misdetect users
+    who have Dropbox.app installed but have declined the File Provider
+    migration; path-primary handles that case correctly.
 
     Cached on first call.  The race between concurrent first-callers
     under the daemon's ``ThreadPoolExecutor`` is benign — both compute
@@ -285,11 +284,11 @@ def _detect() -> tuple[list[str], str]:
     # External-drive File Provider: path on `/Volumes/...` + extension allowed.
     # Scoped narrowly to the /Volumes prefix so we don't false-positive on
     # users who have Dropbox.app installed (so the extension is registered
-    # in PluginKit) but who declined the File Provider migration and are
-    # still on legacy sync from their home dir. Per Dropbox docs, File
-    # Provider doesn't permit relocation outside `~/Library/CloudStorage/`
-    # except for the eligibility-gated external-drive feature, which puts
-    # the folder on a mounted `/Volumes/<DriveName>/...` path.
+    # in PluginKit) but whose account is in legacy sync mode from their
+    # home dir. Per Dropbox docs, File Provider doesn't permit relocation
+    # outside `~/Library/CloudStorage/` except for the eligibility-gated
+    # external-drive feature, which puts the folder on a mounted
+    # `/Volumes/<DriveName>/...` path.
     if extension_state == "allowed":
         for p in paths:
             try:

@@ -213,11 +213,11 @@ def test_uninstall_agent_raises_on_bootout_nonzero_rc(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """bootout returning non-zero rc with a non-'not loaded' stderr signals
-    a real failure (e.g. ``Boot-out failed: 5: Input/output error``). The
-    prior shape discarded rc and stderr — the plist got unlinked
-    unconditionally and ``dbxignore uninstall`` reported success while the
-    daemon survived. Now: surface as RuntimeError and preserve plist so the
-    user can investigate."""
+    a real failure (e.g. ``Boot-out failed: 5: Input/output error``).
+    Discarding rc and stderr would unlink the plist unconditionally and
+    let ``dbxignore uninstall`` report success while the daemon survived.
+    Contract: surface as RuntimeError and preserve plist so the user
+    can investigate."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr("os.getuid", lambda: 501, raising=False)
 
@@ -251,7 +251,7 @@ def test_uninstall_agent_raises_on_bootout_nonzero_rc(
         # macos_launchd._NOT_LOADED_STDERR_PATTERNS. Removing any of the
         # three tuple entries below ("no such process", "could not find
         # service", "not loaded") makes one of these parametrize cases
-        # fail — that's the regression-guard role this test plays.
+        # fail — that's the coverage role this test plays.
         # "could not find specified service" is intentionally NOT
         # separately tested: it's a strict suffix of "could not find
         # service" so any stderr matching the longer phrase also matches

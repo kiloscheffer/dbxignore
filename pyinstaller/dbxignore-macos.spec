@@ -30,11 +30,11 @@ def _analysis():
         # `_cffi_backend` is a top-level C extension that ships alongside
         # `cffi` (sibling on disk, not a submodule). The macOS xattr backend
         # imports `xattr` → `cffi` → `_cffi_backend`; the contrib hook for
-        # cffi normally bundles it, but an earlier macOS build shipped
-        # without it ("ModuleNotFoundError: No module named '_cffi_backend'"
-        # on first launch). Listing it explicitly belts-and-suspenders the
-        # contrib hook so a future version drift can't silently re-introduce
-        # the regression.
+        # cffi normally bundles it, but the hook can miss this top-level
+        # sibling and the bundle ships without it
+        # ("ModuleNotFoundError: No module named '_cffi_backend'" on first
+        # launch). Listing it explicitly belts-and-suspenders the contrib
+        # hook so a future version drift can't silently drop it.
         hiddenimports=[
             "watchdog.observers.fsevents",
             "_cffi_backend",

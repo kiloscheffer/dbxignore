@@ -45,7 +45,7 @@ def test_unit_content_has_no_environment_line_by_default() -> None:
     from dbxignore.install import linux_systemd
 
     content = linux_systemd.build_unit_content(
-        Path("/usr/local/bin/dbxignored"),
+        Path("/usr/local/bin/dbxignorew"),
     )
     assert "Environment=" not in content
 
@@ -56,7 +56,7 @@ def test_unit_content_emits_environment_before_exec_start() -> None:
     from dbxignore.install import linux_systemd
 
     content = linux_systemd.build_unit_content(
-        Path("/usr/local/bin/dbxignored"),
+        Path("/usr/local/bin/dbxignorew"),
         environment={"DBXIGNORE_ROOT": "/home/kilo/dbx"},
     )
     assert 'Environment="DBXIGNORE_ROOT=/home/kilo/dbx"' in content
@@ -74,7 +74,7 @@ def test_unit_content_quotes_environment_value_with_spaces() -> None:
     from dbxignore.install import linux_systemd
 
     content = linux_systemd.build_unit_content(
-        Path("/usr/local/bin/dbxignored"),
+        Path("/usr/local/bin/dbxignorew"),
         environment={"DBXIGNORE_ROOT": "/home/u/My Dropbox"},
     )
     assert 'Environment="DBXIGNORE_ROOT=/home/u/My Dropbox"' in content
@@ -86,7 +86,7 @@ def test_unit_content_escapes_backslash_and_quote_in_environment_value() -> None
     from dbxignore.install import linux_systemd
 
     content = linux_systemd.build_unit_content(
-        Path("/usr/local/bin/dbxignored"),
+        Path("/usr/local/bin/dbxignorew"),
         environment={"DBXIGNORE_ROOT": r'/path with "quote" and \slash'},
     )
     assert r'Environment="DBXIGNORE_ROOT=/path with \"quote\" and \\slash"' in content
@@ -94,16 +94,16 @@ def test_unit_content_escapes_backslash_and_quote_in_environment_value() -> None
 
 def test_unit_content_quotes_exec_start_path_with_whitespace() -> None:
     """systemd splits ExecStart on whitespace; an executable path containing
-    a space (e.g. ``/home/user/My Tools/dbxignored``) would be tokenized into
+    a space (e.g. ``/home/user/My Tools/dbxignorew``) would be tokenized into
     two separate args, breaking the unit. Wrap the path in double quotes so
     systemd's parser treats it as one token."""
     from dbxignore.install import linux_systemd
 
     content = linux_systemd.build_unit_content(
-        Path("/home/user/My Tools/dbxignored"),
+        Path("/home/user/My Tools/dbxignorew"),
         "",
     )
-    assert 'ExecStart="/home/user/My Tools/dbxignored"' in content
+    assert 'ExecStart="/home/user/My Tools/dbxignorew"' in content
 
 
 def test_unit_content_quotes_exec_start_path_with_whitespace_and_arguments() -> None:
@@ -126,10 +126,10 @@ def test_unit_content_escapes_backslash_and_quote_in_exec_start_path() -> None:
     from dbxignore.install import linux_systemd
 
     content = linux_systemd.build_unit_content(
-        Path(r'/home/user/odd "path"/dbxignored'),
+        Path(r'/home/user/odd "path"/dbxignorew'),
         "",
     )
-    assert r'ExecStart="/home/user/odd \"path\"/dbxignored"' in content
+    assert r'ExecStart="/home/user/odd \"path\"/dbxignorew"' in content
 
 
 def test_unit_content_escapes_percent_in_environment_value() -> None:
@@ -141,7 +141,7 @@ def test_unit_content_escapes_percent_in_environment_value() -> None:
     from dbxignore.install import linux_systemd
 
     content = linux_systemd.build_unit_content(
-        Path("/usr/local/bin/dbxignored"),
+        Path("/usr/local/bin/dbxignorew"),
         "",
         environment={"XDG_STATE_HOME": "/home/me/100%state"},
     )
@@ -157,10 +157,10 @@ def test_unit_content_escapes_percent_in_quoted_exec_start_path() -> None:
     from dbxignore.install import linux_systemd
 
     content = linux_systemd.build_unit_content(
-        Path("/home/me/100% Tools/dbxignored"),
+        Path("/home/me/100% Tools/dbxignorew"),
         "",
     )
-    assert 'ExecStart="/home/me/100%% Tools/dbxignored"' in content
+    assert 'ExecStart="/home/me/100%% Tools/dbxignorew"' in content
 
 
 def test_unit_content_escapes_percent_in_bare_exec_start_path() -> None:
@@ -169,10 +169,10 @@ def test_unit_content_escapes_percent_in_bare_exec_start_path() -> None:
     from dbxignore.install import linux_systemd
 
     content = linux_systemd.build_unit_content(
-        Path("/home/me/100%Tools/dbxignored"),
+        Path("/home/me/100%Tools/dbxignorew"),
         "",
     )
-    assert "ExecStart=/home/me/100%%Tools/dbxignored\n" in content
+    assert "ExecStart=/home/me/100%%Tools/dbxignorew\n" in content
     assert 'ExecStart="' not in content
 
 
@@ -185,10 +185,10 @@ def test_unit_content_preserves_dollar_in_quoted_exec_start_path() -> None:
     from dbxignore.install import linux_systemd
 
     content = linux_systemd.build_unit_content(
-        Path("/home/me/$TOOLS folder/dbxignored"),
+        Path("/home/me/$TOOLS folder/dbxignorew"),
         "",
     )
-    assert 'ExecStart="/home/me/$TOOLS folder/dbxignored"' in content
+    assert 'ExecStart="/home/me/$TOOLS folder/dbxignorew"' in content
 
 
 def test_unit_content_preserves_dollar_in_bare_exec_start_path() -> None:
@@ -196,10 +196,10 @@ def test_unit_content_preserves_dollar_in_bare_exec_start_path() -> None:
     from dbxignore.install import linux_systemd
 
     content = linux_systemd.build_unit_content(
-        Path("/home/me/$TOOLS/dbxignored"),
+        Path("/home/me/$TOOLS/dbxignorew"),
         "",
     )
-    assert "ExecStart=/home/me/$TOOLS/dbxignored\n" in content
+    assert "ExecStart=/home/me/$TOOLS/dbxignorew\n" in content
     assert 'ExecStart="' not in content
 
 
@@ -210,10 +210,10 @@ def test_unit_content_leaves_simple_exec_start_path_unquoted() -> None:
     from dbxignore.install import linux_systemd
 
     content = linux_systemd.build_unit_content(
-        Path("/usr/local/bin/dbxignored"),
+        Path("/usr/local/bin/dbxignorew"),
         "",
     )
-    assert "ExecStart=/usr/local/bin/dbxignored\n" in content
+    assert "ExecStart=/usr/local/bin/dbxignorew\n" in content
     assert 'ExecStart="' not in content
 
 
@@ -222,7 +222,7 @@ def test_unit_content_accepts_none_environment() -> None:
     from dbxignore.install import linux_systemd
 
     content = linux_systemd.build_unit_content(
-        Path("/usr/local/bin/dbxignored"),
+        Path("/usr/local/bin/dbxignorew"),
         environment=None,
     )
     assert "Environment=" not in content
@@ -413,7 +413,7 @@ def test_install_raises_when_executable_not_found(
     monkeypatch.setenv("HOME", str(tmp_path))
 
     def _raise_not_found() -> None:
-        raise RuntimeError("dbxignored not on PATH; run `uv tool install .`")
+        raise RuntimeError("dbxignorew not on PATH; run `uv tool install .`")
 
     monkeypatch.setattr(
         "dbxignore.install.linux_systemd.detect_invocation",
@@ -422,7 +422,7 @@ def test_install_raises_when_executable_not_found(
 
     from dbxignore.install import linux_systemd
 
-    with pytest.raises(RuntimeError, match="dbxignored not on PATH"):
+    with pytest.raises(RuntimeError, match="dbxignorew not on PATH"):
         linux_systemd.install_unit()
 
 

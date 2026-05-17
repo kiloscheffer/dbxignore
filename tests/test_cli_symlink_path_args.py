@@ -2,16 +2,17 @@
 
 Verifies that ``apply``, ``clear``, ``list``, ``explain`` and ``check-ignore``
 operate on the symlink OBJECT (not the resolved target) when handed a
-symlink argument. Pre-fix, all five called ``path.resolve()`` and operated
-on the link target. (``explain`` and ``check-ignore`` share the ``_explain``
-body, so this is really four code paths surfacing as five CLI verbs.)
+symlink argument. ``path.resolve()`` would operate on the link target;
+the verbs must instead keep the lexical link path. (``explain`` and
+``check-ignore`` share the ``_explain`` body, so this is really four
+code paths surfacing as five CLI verbs.)
 
 Why a raw-argument spy instead of ``fake_markers``: ``FakeMarkers`` in
 ``tests/conftest.py`` calls ``path.resolve()`` inside ``is_ignored``,
 ``set_ignored``, ``clear_ignored`` before recording. That resolution
 erases the distinction between "CLI passed the link" and "CLI passed the
-target," which is exactly the bug surface this PR is about. The spy
-records the raw argument the CLI hands to the markers module.
+target," which is exactly the surface under test. The spy records the
+raw argument the CLI hands to the markers module.
 
 Why not ``legacy_mode``: that fixture lives in
 ``tests/test_macos_xattr_unit.py`` (not ``conftest.py``) and pins the
@@ -176,8 +177,8 @@ def test_case2_link_under_dropbox_target_outside(
     symlink_capable: None,
 ) -> None:
     """Link object is in-Dropbox; target lives outside. Containment passes
-    on the link's lexical path (was rejected pre-fix because resolve()
-    switched containment to the external target)."""
+    on the link's lexical path; a `resolve()`-based containment check
+    would switch to the external target and reject."""
     external_target = external_dir / "external-file.txt"
     external_target.touch()
     link = dropbox_root / "link-to-external"
@@ -203,7 +204,7 @@ def test_case3_broken_symlink(
     symlink_capable: None,
 ) -> None:
     """Link object exists; target does not. ``lexists`` accepts; the four
-    verbs must too (apply was the only one that rejected pre-fix)."""
+    verbs must too."""
     link = dropbox_root / "broken-link"
     os.symlink(dropbox_root / "nonexistent-target", link)
 

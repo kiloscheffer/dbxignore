@@ -84,7 +84,7 @@ def test_read_unreadable_returns_none(
     to ``None`` with a WARNING, matching the corrupt-state contract. Without
     catching OSError, ``state.read()`` would propagate the error and crash
     every CLI verb that consults state (``status``, ``clear``'s daemon-alive
-    guard, daemon legacy-state migration)."""
+    guard)."""
     p = tmp_path / "state.json"
     p.write_text("{}", encoding="utf-8")
 
@@ -100,8 +100,8 @@ def test_read_unreadable_returns_none(
 
 def test_read_missing_does_not_warn(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """Truly-absent state.json (the first-run common case) must not log a
-    WARNING. Regression guard against accidentally promoting missing-file
-    to the ``OSError`` warning arm."""
+    WARNING. Pins the missing-file branch as silent, separate from the
+    ``OSError`` warning arm."""
     with caplog.at_level("WARNING", logger="dbxignore.state"):
         assert state.read(tmp_path / "does_not_exist.json") is None
     assert not caplog.records
@@ -129,8 +129,8 @@ def test_write_overwrites_stale_tmp(tmp_path: Path) -> None:
 def test_write_parse_back_rejects_invalid_json(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A future serializer regression that produces malformed JSON must not
-    reach state.json — parse-back validation should raise and unlink the tmp,
+    """A serializer bug producing malformed JSON must not reach
+    state.json — parse-back validation raises and unlinks the tmp,
     leaving any prior state.json untouched."""
     p = tmp_path / "state.json"
     state.write(state.State(daemon_pid=1), p)
@@ -174,8 +174,8 @@ def test_read_string_daemon_create_time_returns_none(tmp_path: Path) -> None:
     corrupt-state fallback. Without strict validation at decode time,
     the bad value would propagate to ``is_daemon_alive``'s
     ``abs(live_create_time - create_time)`` arithmetic and raise
-    TypeError, breaking ``status`` / ``clear`` / the daemon's legacy-
-    startup guard."""
+    TypeError, breaking ``status`` / ``clear`` / the daemon startup
+    guard."""
     p = tmp_path / "state.json"
     p.write_text(
         '{"daemon_pid": 1234, "daemon_create_time": "not-a-number"}',
@@ -270,33 +270,13 @@ def test_is_daemon_alive_python_process_returns_true(
     assert state.is_daemon_alive(12345) is True
 
 
-def test_is_daemon_alive_dbxignored_process_returns_false(
-    fake_psutil_process: FakePsutilProcess,
-) -> None:
-    """Older frozen install: the process was named dbxignored.exe. The guard
-    no longer accepts this name — the daemon binary was renamed to
-    dbxignore.exe and 'dbxignored' was dropped from the guard tuple."""
-    fake_psutil_process(name="dbxignored.exe")
-    assert state.is_daemon_alive(12345) is False
-
-
 def test_is_daemon_alive_recognizes_dbxignore_process_name(
     fake_psutil_process: FakePsutilProcess,
 ) -> None:
-    """The current frozen daemon is named `dbxignore.exe`. The
-    process-name guard tuple must accept it."""
+    """The frozen daemon is named `dbxignore.exe`. The process-name
+    guard tuple must accept it."""
     fake_psutil_process(name="dbxignore.exe")
     assert state.is_daemon_alive(12345) is True
-
-
-def test_is_daemon_alive_no_longer_recognizes_dbxignored(
-    fake_psutil_process: FakePsutilProcess,
-) -> None:
-    """The older `dbxignored` name is intentionally dropped from the guard.
-    A surviving daemon with that name surfaces as not-alive, prompting the
-    migration. Surfacing stale state is the desired behavior."""
-    fake_psutil_process(name="dbxignored.exe")
-    assert state.is_daemon_alive(12345) is False
 
 
 def test_is_daemon_alive_accepts_dbxignorew_process_name(
@@ -371,7 +351,7 @@ def test_is_daemon_alive_psutil_unavailable_os_kill_succeeds_returns_true(
 ) -> None:
     """psutil import fails, os.kill bare-existence probe succeeds → True.
 
-    The legacy fallback path for systems without psutil. Real psutil is
+    The fallback path for systems without psutil. Real psutil is
     installed in dev/CI, so simulate its absence via `sys.modules[None]`
     (the Python idiom for poisoning a module import).
     """
@@ -430,8 +410,8 @@ def test_is_daemon_alive_psutil_unavailable_system_error_returns_false_with_warn
     """psutil unavailable, os.kill raises SystemError → False + WARNING.
 
     CPython wraps an os.kill OSError as SystemError when called while
-    another exception is still being handled. Without the fix,
-    `dbxignore uninstall --purge` crashed with an opaque
+    another exception is still being handled. Catching only OSError
+    would let `dbxignore uninstall --purge` crash with an opaque
     `SystemError: <built-in function kill> returned a result with an
     exception set` rather than treating the indeterminate PID probe as
     "not alive". Catching SystemError alongside OSError gives callers

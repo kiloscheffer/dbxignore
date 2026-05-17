@@ -31,18 +31,19 @@ def test_generate_file_arg_writes_sibling(tmp_path: Path) -> None:
 
 def test_generate_preserves_bytes_lf_on_every_platform(tmp_path: Path) -> None:
     """`generate`'s documented byte-for-byte invariant requires LF line
-    endings on every platform. An earlier implementation wrote via
-    `target.write_text(..., encoding="utf-8")` without `newline=""`, so
-    Python's default text-mode write translated `\\n` → `\\r\\n` on Windows;
-    source `.gitignore` files with pure-LF bytes (which is canonical for
-    gitignore-style files) produced CRLF-converted `.dropboxignore` and
-    the read_bytes() comparison diverged.
+    endings on every platform. Writing via
+    `target.write_text(..., encoding="utf-8")` without `newline=""` would
+    let Python's default text-mode write translate `\\n` → `\\r\\n` on
+    Windows; source `.gitignore` files with pure-LF bytes (which is
+    canonical for gitignore-style files) would then produce a CRLF-
+    converted `.dropboxignore` and the read_bytes() comparison would
+    diverge.
 
     Pin the LF invariant at the byte level so the test is platform-
     sensitive: `read_bytes()` doesn't do universal-newlines translation
     the way `read_text()` does, so a Windows-CRLF regression would
-    show up here even though existing text-comparison tests would
-    silently pass."""
+    show up here even though text-comparison tests would silently
+    pass."""
     source = tmp_path / ".gitignore"
     source_bytes = b"build/\n*.log\n"
     source.write_bytes(source_bytes)
@@ -200,9 +201,9 @@ def test_generate_warns_when_no_roots_discovered(
 ) -> None:
     """No Dropbox roots at all → out-of-root warning must still fire.
 
-    Sibling of ``test_generate_target_outside_roots_warns_but_writes``: the
-    earlier guard short-circuited the warning when ``_discover_roots()``
-    returned ``[]``, which is precisely when the warning is most important
+    Sibling of ``test_generate_target_outside_roots_warns_but_writes``:
+    short-circuiting the warning when ``_discover_roots()`` returns
+    ``[]`` would suppress it precisely when it is most important
     ("your file won't be observed" is true both when target is outside
     discovered roots AND when no roots were found at all).
     """

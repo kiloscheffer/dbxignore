@@ -253,8 +253,8 @@ def detect_cli_invocation() -> str:
         sibling = exe.parent / cli_name
         if sibling.exists():
             return f'"{sibling}"'
-        # Fall through — shipped frozen installs always have the sibling,
-        # but defend against truncated bundles by falling through.
+        # Fall through — frozen bundles always have the sibling, but
+        # defend against truncated bundles by falling through.
     shim = shutil.which("dbxignore")
     if shim:
         return f'"{shim}"'

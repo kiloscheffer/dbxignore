@@ -2,9 +2,9 @@
 hash matches the cached digest. The sweep is still the safety net — rglob
 finds new files — but already-cached files stay put.
 
-Previously the gate used ``(mtime_ns, size)`` from stat; the content-hash
-form also catches same-size edits with preserved mtimes — a real edge case
-when editors or ``touch -r`` restore the timestamp."""
+A ``(mtime_ns, size)`` gate from stat would miss same-size edits with
+preserved mtimes — a real edge case when editors or ``touch -r``
+restore the timestamp — so the content hash is authoritative."""
 
 from __future__ import annotations
 
@@ -60,8 +60,9 @@ def test_load_root_reloads_when_mtime_changes_but_size_matches(
     tmp_path: Path, write_file: WriteFile
 ) -> None:
     """Same byte count, different content, later mtime — the content-hash
-    gate catches this. (Also caught by the prior ``(mtime_ns, size)`` gate
-    because mtime differs; this test pins the common editor-save case.)"""
+    gate catches this. (A ``(mtime_ns, size)`` gate would also catch
+    it because mtime differs; this test pins the common editor-save
+    case.)"""
     ignore = write_file(tmp_path / ".dropboxignore", "build/\n")  # 7 bytes
 
     cache = RuleCache()
@@ -92,9 +93,9 @@ def test_load_root_drops_cache_on_non_utf8_overwrite(tmp_path: Path, write_file:
     edit. Keeping stale rules would let reconcile keep marking paths the
     user already changed their mind about.
 
-    An earlier implementation using ``read_text("utf-8")`` directly would
-    have raised an uncaught ``UnicodeDecodeError`` and crashed the sweep —
-    strictly worse than either drop-cache or keep-cache."""
+    Using ``read_text("utf-8")`` directly would raise an uncaught
+    ``UnicodeDecodeError`` and crash the sweep — strictly worse than
+    either drop-cache or keep-cache."""
     ignore = write_file(tmp_path / ".dropboxignore", "build/\n")
 
     cache = RuleCache()
@@ -186,8 +187,8 @@ def test_load_root_prune_leaves_other_roots_intact(tmp_path: Path, write_file: W
 
 
 def test_load_root_picks_up_newly_created_file(tmp_path: Path, write_file: WriteFile) -> None:
-    """Regression guard: the stat-check optimization must not break the
-    rglob sweep's job of discovering files the cache doesn't know about."""
+    """The stat-check optimization must not break the rglob sweep's job
+    of discovering files the cache doesn't know about."""
     write_file(tmp_path / ".dropboxignore", "build/\n")
     cache = RuleCache()
     cache.load_root(tmp_path)
@@ -207,11 +208,11 @@ def test_load_root_picks_up_newly_created_file(tmp_path: Path, write_file: Write
 def test_load_root_drops_cached_entry_when_file_becomes_invalid(
     tmp_path: Path, write_file: WriteFile
 ) -> None:
-    """A previously valid .dropboxignore that's later edited into an
-    unparseable state must NOT keep its old rules active. Without this,
-    the daemon would continue applying stale ignore markers to paths
-    the user already changed their mind about, propagating cloud-sync
-    deletions for paths the rules no longer cover."""
+    """A valid .dropboxignore that's later edited into an unparseable
+    state must NOT keep its old rules active. Without this, the daemon
+    would continue applying stale ignore markers to paths the user
+    already changed their mind about, propagating cloud-sync deletions
+    for paths the rules no longer cover."""
     ignore = write_file(tmp_path / ".dropboxignore", "build/\n")
     (tmp_path / "build").mkdir()
 
@@ -275,11 +276,11 @@ def test_load_root_preserves_cached_entry_on_transient_read_error(
     """A transient read error (editor lock, antivirus scan, brief EIO on a
     network drive) must NOT drop the cached entry. Dropping would treat
     every flap as confirmed corruption, the next reconcile would see the
-    rule file as empty, and Dropbox would upload previously-ignored paths
-    to cloud before the read recovered. Recovery should happen naturally
-    on the next sweep when the read succeeds again — convergent design.
-    The original drop-on-OSError shape was found to be worse than the
-    staleness it was meant to fix."""
+    rule file as empty, and Dropbox would upload already-ignored paths
+    to cloud before the read recovered. Recovery happens naturally on
+    the next sweep when the read succeeds again — convergent design.
+    A drop-on-OSError shape would be worse than the staleness it would
+    try to fix."""
     import errno
 
     ignore = write_file(tmp_path / ".dropboxignore", "build/\n")

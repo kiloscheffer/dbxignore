@@ -48,8 +48,8 @@ def reconcile_subtree(
 
     Both ``root`` and ``subdir`` MUST be absolute and normalized at the
     CLI/daemon boundary — the daemon resolves roots upfront via
-    ``_discover_roots()`` (avoiding a per-walk ``Path.resolve()`` syscall
-    that previously dominated sweep wall-clock on Windows). The CLI's
+    ``_discover_roots()`` so a per-walk ``Path.resolve()`` syscall (which
+    would dominate sweep wall-clock on Windows) is unnecessary. The CLI's
     path-taking verbs may pass symlink-preserving normalized paths:
     containment check below is purely lexical and tolerates either
     form. The ``ValueError`` raised on out-of-root ``subdir`` is the

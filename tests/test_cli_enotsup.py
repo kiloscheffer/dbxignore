@@ -26,9 +26,9 @@ def test_list_survives_enotsup(
     """A file whose is_ignored raises OSError(ENOTSUP) does not crash the walk.
 
     The marked good.txt is still listed on stdout; the unreadable bad.txt is
-    surfaced via stderr (scan errors: 1) and the command exits 2 — previously
-    the read error was swallowed, hiding partial-failure scans from scripted
-    callers. Pins the post-item-7 contract.
+    surfaced via stderr (scan errors: 1) and the command exits 2 —
+    swallowing the read error would hide partial-failure scans from
+    scripted callers.
     """
     root = tmp_path
     good = write_file(root / "good.txt")

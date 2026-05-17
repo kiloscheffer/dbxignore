@@ -307,7 +307,7 @@ def test_detect_cli_invocation_frozen_uses_sibling_exe(
     """
     if sys.platform == "win32":
         pytest.skip("Windows frozen path tested separately via dbxignorew sibling tests")
-    daemon_exe = tmp_path / "dbxignored"
+    daemon_exe = tmp_path / "dbxignorew"
     daemon_exe.write_text("")
     cli_exe = tmp_path / "dbxignore"
     cli_exe.write_text("")

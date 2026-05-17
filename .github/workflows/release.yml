@@ -39,11 +39,12 @@ jobs:
           uv run --with pyinstaller pyinstaller pyinstaller/dbxignorew.spec
 
       - name: Smoke test Windows binaries
-        # --help fails-fast on missing-bundled-module regressions (an
-        # earlier macOS _cffi_backend shape). --version fails-fast on
-        # missing dist-info metadata regressions (PyInstaller surfaces this
-        # as "RuntimeError: <pkg> is not installed" when importlib.metadata
-        # can't find the wheel inside the frozen bundle).
+        # --help fails-fast on missing-bundled-module errors (e.g. a
+        # _cffi_backend that didn't make it into the bundle). --version
+        # fails-fast on missing dist-info metadata (PyInstaller surfaces
+        # this as "RuntimeError: <pkg> is not installed" when
+        # importlib.metadata can't find the wheel inside the frozen
+        # bundle).
         # Both binaries: dbxignore.exe (console=True) is straightforward;
         # dbxignorew.exe (console=False) needs --version captured via the
         # bash assignment to force synchronous wait, since GUI-subsystem
@@ -104,11 +105,13 @@ jobs:
       - name: Smoke test macOS binaries
         # `--help` exercises the full import chain (cli → markers →
         # _backends/macos_xattr → xattr → cffi → _cffi_backend) without
-        # starting the daemon. Catches an earlier missing-`_cffi_backend`
-        # regression class before the artifact ships. `--version` additionally
-        # exercises the `copy_metadata("dbxignore")` bundling in the .spec
-        # (RuntimeError: 'dbxignore' is not installed if dist-info is missing),
-        # matching the Windows leg's `--help` + `--version` coverage shape.
+        # starting the daemon, catching missing-bundled-module errors
+        # (e.g. a `_cffi_backend` that didn't make it into the bundle)
+        # before the artifact ships. `--version` additionally exercises
+        # the `copy_metadata("dbxignore")` bundling in the .spec
+        # (RuntimeError: 'dbxignore' is not installed if dist-info is
+        # missing), matching the Windows leg's `--help` + `--version`
+        # coverage shape.
         # PyInstaller sets +x on output binaries, so no chmod needed.
         shell: bash
         run: |
@@ -131,7 +134,7 @@ jobs:
     # tag or a pre-release tag?". GitHub Actions expressions don't have
     # regex, and PEP 440 doesn't use a hyphen separator (alphas are
     # `0.4.0a1`, not `0.4.0-a1`), so a `contains(github.ref, '-a')` check
-    # is wrong — that's the earlier misfire.
+    # would not fire on real pre-release tags.
     #
     # Recognized pre-release suffixes: `aN`, `bN`, `rcN`, `.devN`.
     # `.postN` (post-release) is NOT a pre-release per PEP 440 and

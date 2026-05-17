@@ -23,8 +23,8 @@ class EventKind(enum.Enum):
 
 # Role discriminator on the debounce key. `"single"` is the default for any
 # event whose dedupe identity is just the path (DIR_CREATE, OTHER, and most
-# RULES events). The other two roles disambiguate the two RULES sub-shapes
-# that previously collided under a single string-keyed model:
+# RULES events). The other two roles disambiguate two RULES sub-shapes that
+# would otherwise collide under a string-only key:
 #
 #   - `"moved-out"` — moved event whose src is a `.dropboxignore` (the
 #     rule file is moving away from its parent directory).
@@ -34,10 +34,8 @@ class EventKind(enum.Enum):
 #
 # Without the role discriminator a move-out `A/.dropboxignore` -> `B/...`
 # and a created/modified event for `A/.dropboxignore` within the 100ms
-# RULES debounce window both keyed on `str(A/.dropboxignore).lower()`, and
-# the Debouncer's last-wins overwrite would drop one event's dispatch.
-# The previous string-prefix (e.g. `"moved-into:"`) scheme addressed only
-# the moved-out vs moved-into half of the disambiguation.
+# RULES debounce window would both key on `str(A/.dropboxignore).lower()`,
+# and the Debouncer's last-wins overwrite would drop one event's dispatch.
 DebounceRole = Literal["single", "moved-out", "moved-into"]
 DebounceKey = tuple[DebounceRole, str]
 

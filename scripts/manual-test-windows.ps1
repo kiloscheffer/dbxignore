@@ -325,8 +325,16 @@ function Test-InstallDbxignore {
         # Force-remove venv residue. With the daemon confirmed dead above,
         # the only remaining lock source is transient (Dropbox/AV indexing);
         # retry briefly. Abort loudly on persistent failure rather than
-        # silently corrupting the next `uv tool install`.
-        $venvDir = Join-Path $env:APPDATA 'uv\tools\dbxignore'
+        # silently corrupting the next `uv tool install`. Derive the path
+        # via `uv tool dir` (which respects `UV_TOOL_DIR`) — same pattern
+        # Phase 5 uses for `pythonw.exe` lookup — instead of hardcoding
+        # `%APPDATA%\uv\tools\dbxignore`, so a tester with a non-default
+        # tool dir isn't bypassed.
+        $toolDir = (uv tool dir 2>$null | Out-String).Trim()
+        if ([string]::IsNullOrWhiteSpace($toolDir)) {
+            Stop-Abort "uv tool dir returned empty; cannot locate venv to clean up"
+        }
+        $venvDir = Join-Path $toolDir 'dbxignore'
         if (Test-Path $venvDir) {
             $attempts = 0
             while ((Test-Path $venvDir) -and ($attempts -lt 10)) {

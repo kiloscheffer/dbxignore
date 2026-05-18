@@ -67,11 +67,18 @@ def _install_icon() -> Path:
     version upgrade). The parent directory is created with ``parents=True``
     if missing. Any ``OSError`` propagates so the caller's cleanup arm
     fires.
+
+    Writes via temp file + ``Path.replace`` (atomic on NTFS for same-
+    volume renames) so Explorer's lazy reads of the ``Icon`` registry
+    value during a re-install never see a half-written .ico. Mirrors the
+    invariant ``state.write()`` follows for ``state.json``.
     """
     src_resource = files("dbxignore._resources").joinpath(_ICON_RESOURCE_NAME)
     dst = _icon_install_path()
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_bytes(src_resource.read_bytes())
+    tmp = dst.parent / (dst.name + ".tmp")
+    tmp.write_bytes(src_resource.read_bytes())
+    tmp.replace(dst)
     return dst
 
 

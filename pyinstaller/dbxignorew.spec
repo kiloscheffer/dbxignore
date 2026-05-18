@@ -20,6 +20,7 @@ click's --version callback can resolve the version via
 importlib.metadata at runtime. (Mirror of dbxignore.spec.)
 """
 
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import copy_metadata
@@ -27,13 +28,30 @@ from PyInstaller.utils.hooks import copy_metadata
 SRC = Path("src").resolve()
 ENTRY = SRC / "dbxignore" / "__main__.py"
 
+# Shared VERSIONINFO factory; see the matching block in dbxignore.spec.
+sys.path.insert(0, SPECPATH)
+from _pe_metadata import make_version_info  # noqa: E402
+
+from dbxignore import __version__  # noqa: E402
+
 
 a = Analysis(
     [str(ENTRY)],
     pathex=[str(SRC)],
     binaries=[],
-    datas=copy_metadata("dbxignore"),
-    hiddenimports=["watchdog.observers.winapi", "watchdog.observers.read_directory_changes"],
+    # context-menu.ico ships inside the bundle so install_shell_integration
+    # (when invoked through this GUI helper — e.g. an Explorer-launched
+    # "dbxignorew install" wrapper) can copy it to %LOCALAPPDATA%\dbxignore\
+    # icons\. Mirrors dbxignore.spec; see that spec's comment for the
+    # hiddenimport rationale.
+    datas=copy_metadata("dbxignore") + [
+        (str(SRC / "dbxignore" / "_resources" / "context-menu.ico"), "dbxignore/_resources"),
+    ],
+    hiddenimports=[
+        "watchdog.observers.winapi",
+        "watchdog.observers.read_directory_changes",
+        "dbxignore._resources",
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -64,4 +82,11 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(Path("pyinstaller/dbxignore-app.ico").resolve()),
+    version=make_version_info(
+        version=__version__,
+        internal_name="dbxignorew",
+        file_description="Hierarchical .dropboxignore for Dropbox (GUI helper)",
+        original_filename="dbxignorew.exe",
+    ),
 )

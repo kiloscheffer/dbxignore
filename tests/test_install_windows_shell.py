@@ -24,6 +24,7 @@ if sys.platform != "win32":
 
 import winreg  # noqa: E402  # safe — module-level skip above blocks import on non-Windows
 
+from dbxignore import state  # noqa: E402
 from dbxignore.install import windows_shell  # noqa: E402
 from dbxignore.install.windows_shell import _IGNORE_VERB, _RESTORE_VERB  # noqa: E402
 
@@ -46,6 +47,22 @@ def isolated_reg_base(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
         _delete_subtree_silently(
             winreg.HKEY_CURRENT_USER, f"Software\\Classes\\DbxignoreTest\\{test_id}"
         )
+
+
+@pytest.fixture(autouse=True)
+def isolated_state_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Redirect state.user_state_dir to a per-test tmp dir.
+
+    Autouse because install_shell_integration copies an icon under
+    ``state.user_state_dir() / "icons"`` and uninstall_shell_integration
+    removes from the same place; without the redirect, every test in this
+    module would touch the real ``%LOCALAPPDATA%\\dbxignore\\icons\\``.
+    Tests that need to inspect the redirected path declare the fixture as
+    a parameter; others receive it transparently as a side effect.
+    """
+    state_dir = tmp_path / "dbxignore-state"
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    return state_dir
 
 
 @pytest.fixture
@@ -180,18 +197,23 @@ def test_install_overwrites_existing_keys(
 
 def test_install_partial_write_failure_cleans_up(
     isolated_reg_base: str,
+    isolated_state_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
     stub_cli_invocation: None,
     caplog: pytest.LogCaptureFixture,
     tmp_path: Path,
 ) -> None:
-    """SetValueEx raising mid-install: no DbxignoreIgnore/DbxignoreRestore keys remain."""
+    """SetValueEx raising mid-install: no verb keys remain, icon file also cleaned up."""
     call_count = {"n": 0}
     real_set = winreg.SetValueEx
 
     def flaky_set(key: int, name: str, *args: object) -> None:
         call_count["n"] += 1
-        if call_count["n"] == 3:  # After Ignore verb's MUIVerb + AppliesTo, before command.
+        # Fail on the 3rd SetValueEx — the Icon write inside the Ignore verb,
+        # after MUIVerb + AppliesTo have already landed. Exercises the
+        # mid-verb cleanup path: partial Ignore key + copied icon file both
+        # need to disappear.
+        if call_count["n"] == 3:
             raise OSError(13, "Access denied (simulated)")
         real_set(key, name, *args)  # type: ignore[call-overload, unused-ignore]
 
@@ -204,6 +226,11 @@ def test_install_partial_write_failure_cleans_up(
     for verb in (_IGNORE_VERB, _RESTORE_VERB):
         with pytest.raises(FileNotFoundError):
             winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"{isolated_reg_base}\\{verb}")
+
+    # Icon file copied by _install_icon() before the registry loop should
+    # be removed by the cleanup arm too — anything else would leave a
+    # dangling file under %LOCALAPPDATA% that no registry key references.
+    assert not (isolated_state_dir / "icons" / "context-menu.ico").exists()
 
     assert any("install failed mid-write" in r.message for r in caplog.records)
 
@@ -278,5 +305,161 @@ def test_uninstall_other_oserror_routes_to_errors_or_warning(
     else:
         assert any(
             "shell-integration uninstall" in r.message and "Access denied" in r.message
+            for r in caplog.records
+        )
+
+
+# ---------------------------------------------------------------------------
+# Verb-icon delivery: copy to %LOCALAPPDATA%\dbxignore\icons\ + Icon REG_SZ
+# ---------------------------------------------------------------------------
+
+
+def test_install_copies_icon_to_per_user_state_dir(
+    isolated_reg_base: str,
+    isolated_state_dir: Path,
+    stub_cli_invocation: None,
+    tmp_path: Path,
+) -> None:
+    """install_shell_integration copies the bundled icon to <state>/icons/."""
+    windows_shell.install_shell_integration([tmp_path])
+
+    icon_path = isolated_state_dir / "icons" / "context-menu.ico"
+    assert icon_path.exists(), f"expected icon at {icon_path}"
+    # Sanity check: ICO container's reserved-zero + image-type fields are the
+    # first 4 bytes; image-type is 1 for .ico (vs 2 for .cur). Skipping a
+    # full ICO parse — this prefix check is enough to assert "an .ico landed
+    # here, not random bytes."
+    assert icon_path.read_bytes()[:4] == b"\x00\x00\x01\x00"
+
+
+def test_install_writes_icon_value_on_both_verbs(
+    isolated_reg_base: str,
+    isolated_state_dir: Path,
+    stub_cli_invocation: None,
+    tmp_path: Path,
+) -> None:
+    """Both verb keys have an Icon REG_SZ pointing at the copied file."""
+    windows_shell.install_shell_integration([tmp_path])
+
+    expected = str(isolated_state_dir / "icons" / "context-menu.ico")
+    assert _read_value(isolated_reg_base, _IGNORE_VERB, "Icon") == expected
+    assert _read_value(isolated_reg_base, _RESTORE_VERB, "Icon") == expected
+
+
+def test_install_overwrites_existing_icon(
+    isolated_reg_base: str,
+    isolated_state_dir: Path,
+    stub_cli_invocation: None,
+    tmp_path: Path,
+) -> None:
+    """Re-install replaces the existing icon contents (version upgrade)."""
+    icon_path = isolated_state_dir / "icons" / "context-menu.ico"
+    icon_path.parent.mkdir(parents=True)
+    icon_path.write_bytes(b"stale-icon-contents-from-prior-version")
+
+    windows_shell.install_shell_integration([tmp_path])
+
+    # Stale sentinel must be gone — the bundled .ico has the standard
+    # ICO header, not our stale payload.
+    assert icon_path.read_bytes()[:4] == b"\x00\x00\x01\x00"
+
+
+def test_uninstall_removes_icon_file_and_empty_dir(
+    isolated_reg_base: str,
+    isolated_state_dir: Path,
+    stub_cli_invocation: None,
+    tmp_path: Path,
+) -> None:
+    """Clean install + clean uninstall: icon file + icons/ dir both gone."""
+    windows_shell.install_shell_integration([tmp_path])
+    icon_path = isolated_state_dir / "icons" / "context-menu.ico"
+    assert icon_path.exists()  # precondition
+
+    windows_shell.uninstall_shell_integration()
+
+    assert not icon_path.exists()
+    assert not icon_path.parent.exists()  # empty dir removed too
+
+
+def test_uninstall_preserves_nonempty_icons_dir(
+    isolated_reg_base: str,
+    isolated_state_dir: Path,
+    stub_cli_invocation: None,
+    tmp_path: Path,
+) -> None:
+    """A stray file alongside the icon prevents the icons/ dir removal."""
+    windows_shell.install_shell_integration([tmp_path])
+    stray = isolated_state_dir / "icons" / "user-dropped-this.txt"
+    stray.write_text("not ours", encoding="utf-8")
+
+    windows_shell.uninstall_shell_integration()
+
+    # Icon itself removed; dir + stray file survive.
+    assert not (isolated_state_dir / "icons" / "context-menu.ico").exists()
+    assert stray.exists()
+    assert (isolated_state_dir / "icons").exists()
+
+
+def test_uninstall_idempotent_when_icon_missing(
+    isolated_reg_base: str,
+    isolated_state_dir: Path,
+) -> None:
+    """No error when uninstall runs against a state dir with no icon."""
+    # Neither install nor manual setup — _uninstall_icon() must swallow
+    # the missing-file case without raising.
+    windows_shell.uninstall_shell_integration()
+    windows_shell.uninstall_shell_integration(errors=[])
+
+
+@pytest.mark.parametrize("with_errors_list", [True, False])
+def test_uninstall_icon_oserror_routes_to_errors_or_warning(
+    isolated_reg_base: str,
+    isolated_state_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_cli_invocation: None,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+    with_errors_list: bool,
+) -> None:
+    """Non-FileNotFoundError OSError on icon unlink: routed to errors or WARNING.
+
+    Mirrors the contract test_uninstall_other_oserror_routes_to_errors_or_warning
+    enforces for the registry-key arm.
+    """
+    windows_shell.install_shell_integration([tmp_path])
+    icon_path = isolated_state_dir / "icons" / "context-menu.ico"
+
+    # Monkeypatch Path.unlink so the icon-removal arm raises a non-vanished
+    # OSError. Patching the method (not the instance) is the cleanest way
+    # to intercept the unlink call without involving real FS perms.
+    real_unlink = Path.unlink
+
+    def flaky_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        if self == icon_path:
+            raise OSError(13, "Icon unlink denied (simulated)")
+        real_unlink(self, *args, **kwargs)  # type: ignore[arg-type, unused-ignore]
+
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+
+    errors: list[tuple[str, str]] | None = [] if with_errors_list else None
+    with caplog.at_level("WARNING"):
+        windows_shell.uninstall_shell_integration(errors=errors)
+
+    # The icon file is still there (unlink failed) but the registry keys
+    # were removed normally — the icon arm runs AFTER the registry sweep
+    # and never short-circuits the earlier work.
+    assert icon_path.exists()
+    for verb in (_IGNORE_VERB, _RESTORE_VERB):
+        with pytest.raises(FileNotFoundError):
+            winreg.OpenKey(winreg.HKEY_CURRENT_USER, f"{isolated_reg_base}\\{verb}")
+
+    if with_errors_list:
+        assert errors is not None and len(errors) == 1
+        assert errors[0][0] == str(icon_path)
+        assert "Icon unlink denied" in errors[0][1]
+        assert not any("shell-integration uninstall" in r.message for r in caplog.records)
+    else:
+        assert any(
+            "shell-integration uninstall" in r.message and "Icon unlink denied" in r.message
             for r in caplog.records
         )

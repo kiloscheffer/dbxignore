@@ -403,15 +403,23 @@ function Test-InstallDbxignore {
         # removal can't terminate it, so the daemon-kill block below has
         # to run defensively. See PR #266.
         #
-        # Venv-presence is the discriminator for shim cleanup. uv tool dir
-        # --bin commonly resolves to $env:USERPROFILE\.local\bin (or other
-        # shared user bin dirs), which can also host dbxignore/dbxignorew
-        # binaries installed by pip --user, pipx, or other tools. When
-        # $(uv tool dir)/dbxignore exists, any matching shims are
-        # unambiguously uv's — safe to remove. When ONLY shims exist (no
-        # matching venv), the binaries could be a uv pure-shim-orphan OR a
-        # competing install — abort with diagnostic instructions rather
-        # than risk deleting a tester's pip/pipx-installed dbxignore.
+        # Venv-presence drives the recovery strategy. uv tool dir --bin
+        # commonly resolves to $env:USERPROFILE\.local\bin (or another
+        # shared user bin dir), which can also host dbxignore/dbxignorew
+        # binaries installed by pip --user, pipx, or other tools. So:
+        #
+        # - $(uv tool dir)/dbxignore EXISTS → the venv is unambiguously
+        #   uv's. Auto-recover (daemon-kill + service-unit teardown + venv
+        #   removal). Shims at $(uv tool dir --bin) are NOT auto-removed
+        #   even in this case — venv presence doesn't prove shim ownership
+        #   (a prior `uv tool install` could have created the venv and
+        #   then failed at the shim step because pipx had already put a
+        #   binary at the same path). Any surviving shims surface to the
+        #   tester via the next `uv tool install` "Executables already
+        #   exist" error.
+        # - ONLY shims exist (no venv) → ambiguous origin. Abort with
+        #   diagnostic instructions rather than risk deleting a tester's
+        #   pip/pipx-installed dbxignore.
         $toolDir = (uv tool dir 2>$null | Out-String).Trim()
         $binDir  = (uv tool dir --bin 2>$null | Out-String).Trim()
         $orphanVenv = if ($toolDir) { Join-Path $toolDir 'dbxignore' } else { $null }
@@ -497,20 +505,19 @@ then re-run this script.
             if (Test-Path $orphanVenv) {
                 Stop-Abort "could not remove orphan venv $orphanVenv after 5s of retries; manual cleanup needed: Remove-Item -Recurse -Force $orphanVenv"
             }
-            # Shim removal: defense-in-depth against the daemon-kill above not
-            # actually terminating the process (e.g. Stop-Process -Force is
-            # asynchronous; a hung-in-kernel process may persist long enough
-            # to keep dbxignorew.exe memory-mapped). Abort with diagnostic if
-            # so, rather than the SilentlyContinue swallow that would let the
-            # next uv tool install fail opaquely with "Executables already
-            # exist".
-            foreach ($shim in $orphanShims) {
-                Write-Note "  removing orphan shim at $shim"
-                try {
-                    Remove-Item -Force $shim -ErrorAction Stop
-                } catch {
-                    Stop-Abort "could not remove orphan shim ${shim}: $($_.Exception.Message); a long-running daemon may still hold it mapped — kill the daemon process (Get-CimInstance Win32_Process | Where-Object CommandLine -match 'dbxignore.*daemon' | ForEach-Object { Stop-Process -Id `$_.ProcessId -Force }) and re-run"
-                }
+            # Shim cleanup intentionally NOT done here. Venv presence proves
+            # the venv is uv's, but shims at $(uv tool dir --bin) sit in a
+            # shared user bin dir (e.g. $env:USERPROFILE\.local\bin) that
+            # also hosts pip/pipx binaries; deleting them would silently
+            # break a tester's pipx install whose binaries landed here
+            # before the failed uv tool install left the venv orphan. If
+            # leftover shims exist after venv removal, the next uv tool
+            # install errors with "Executables already exist" — that surfaces
+            # the conflict for the tester to resolve (manually inspect
+            # origin, then `pipx uninstall` / `Remove-Item` as appropriate),
+            # rather than auto-acting on ambiguous ownership.
+            if ($orphanShims.Count -gt 0) {
+                Write-Note "  note: leaving $($orphanShims.Count) shim(s) in $binDir untouched (ownership ambiguous in shared bin dir; uv tool install will surface any conflict)"
             }
             Write-Note "orphan cleanup complete; proceeding with fresh install"
         }

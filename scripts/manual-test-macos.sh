@@ -267,15 +267,23 @@ phase_dbxignore_install() {
         # holding the singleton lock during the rest of the test — so the
         # daemon-kill block below has to run defensively. See PR #266.
         #
-        # Venv-presence is the discriminator for shim cleanup. `uv tool
-        # dir --bin` commonly resolves to $HOME/.local/bin, which can also
-        # host dbxignore/dbxignorew binaries installed by pip --user,
-        # pipx, or other tools. When $(uv tool dir)/dbxignore exists, any
-        # matching shims are unambiguously uv's — safe to remove. When
-        # ONLY shims exist (no matching venv), the binaries could be a
-        # uv pure-shim-orphan OR a competing install — abort with
-        # diagnostic instructions rather than risk deleting a tester's
-        # pip/pipx-installed dbxignore.
+        # Venv-presence drives the recovery strategy. `uv tool dir --bin`
+        # commonly resolves to $HOME/.local/bin, which can also host
+        # dbxignore/dbxignorew binaries installed by pip --user, pipx, or
+        # other tools. So:
+        #
+        # - $(uv tool dir)/dbxignore EXISTS → the venv is unambiguously
+        #   uv's. Auto-recover (daemon-kill + service-unit teardown + venv
+        #   removal). Shims at $(uv tool dir --bin) are NOT auto-removed
+        #   even in this case — venv presence doesn't prove shim ownership
+        #   (a prior `uv tool install` could have created the venv and
+        #   then failed at the shim step because pipx had already put a
+        #   binary at the same path). Any surviving shims surface to the
+        #   tester via the next `uv tool install` "Executables already
+        #   exist" error.
+        # - ONLY shims exist (no venv) → ambiguous origin. Abort with
+        #   diagnostic instructions rather than risk deleting a tester's
+        #   pip/pipx-installed dbxignore.
         local orphan_tool_dir orphan_bin_dir orphan_venv
         local -a orphan_shims=()
         orphan_tool_dir="$(uv tool dir 2>/dev/null)" || orphan_tool_dir=""
@@ -347,11 +355,19 @@ EOF
 
             note "  removing orphan venv at $orphan_venv"
             rm -rf "$orphan_venv"
+            # Shim cleanup intentionally NOT done here. Venv presence proves
+            # the venv is uv's, but shims at $(uv tool dir --bin) sit in a
+            # shared user bin dir ($HOME/.local/bin) that also hosts
+            # pip/pipx binaries; deleting them would silently break a
+            # tester's pipx install whose binaries landed here before the
+            # failed uv tool install left the venv orphan. If leftover
+            # shims exist after venv removal, the next `uv tool install`
+            # errors with "Executables already exist" — that surfaces the
+            # conflict for the tester to resolve (manually inspect origin,
+            # then `pipx uninstall` / `rm -f` as appropriate), rather than
+            # auto-acting on ambiguous ownership.
             if [ "${#orphan_shims[@]}" -gt 0 ]; then
-                for shim in "${orphan_shims[@]}"; do
-                    note "  removing orphan shim at $shim"
-                    rm -f "$shim"
-                done
+                note "  note: leaving ${#orphan_shims[@]} shim(s) in $orphan_bin_dir untouched (ownership ambiguous in shared bin dir; uv tool install will surface any conflict)"
             fi
             note "orphan cleanup complete; proceeding with fresh install"
         fi

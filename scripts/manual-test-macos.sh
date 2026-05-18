@@ -201,7 +201,9 @@ print(acct['path'])
 phase_dbxignore_install() {
     phase "Phase 2 — install dbxignore (spec: $DBXIGNORE_INSTALL_SPEC)"
 
-    if uv tool list 2>/dev/null | grep -q '^dbxignore '; then
+    local uv_tool_list
+    uv_tool_list="$(uv tool list 2>/dev/null || true)"
+    if printf '%s\n' "$uv_tool_list" | grep -q '^dbxignore '; then
         note "dbxignore already installed via uv tool — uninstalling first for a clean test"
         # Best-effort CLI teardown. `dbxignore uninstall` runs `launchctl
         # bootout` and waits for the daemon to exit
@@ -284,7 +286,13 @@ phase_cli_surface() {
         fail "dbxignore daemon --help Usage line: $usage_line"
     fi
 
-    dbxignore --help 2>&1 | grep -q 'apply' && pass "dbxignore --help lists subcommands" || fail "dbxignore --help missing subcommands"
+    local help_out
+    help_out="$(dbxignore --help 2>&1 || true)"
+    if printf '%s\n' "$help_out" | grep -q 'apply'; then
+        pass "dbxignore --help lists subcommands"
+    else
+        fail "dbxignore --help missing subcommands"
+    fi
 
     if dbxignore status >/tmp/dbxignore-status.out 2>&1; then
         pass "dbxignore status (rc=0)"
@@ -355,11 +363,13 @@ phase_reconcile() {
     dbxignore apply "$T" --yes >/dev/null 2>&1 && pass "apply 4d" || fail "apply 4d"
     assert_xattr_set   "$T/build"      "4d — build/ marked (parent dir rule wins)"
     assert_xattr_unset "$T/build/keep" "4d — descendant not visited (subtree pruned)"
-    if dbxignore explain "$T/build/keep" 2>&1 | grep -qF '[dropped]'; then
+    local explain_4d_out
+    explain_4d_out="$(dbxignore explain "$T/build/keep" 2>&1 || true)"
+    if printf '%s\n' "$explain_4d_out" | grep -qF '[dropped]'; then
         pass "4d — explain annotates dropped negation on build/keep/"
     else
         note "explain output:"
-        dbxignore explain "$T/build/keep" 2>&1 | sed 's/^/    /'
+        printf '%s\n' "$explain_4d_out" | sed 's/^/    /'
         fail "4d — explain did not annotate dropped negation"
     fi
 
@@ -388,7 +398,9 @@ phase_reconcile() {
 
     # 4f. explain on a marked file returns the matching rule
     note "4f — explain returns matching rule"
-    if dbxignore explain "$TS/real.log" 2>&1 | grep -q '\*\.log'; then
+    local explain_4f_out
+    explain_4f_out="$(dbxignore explain "$TS/real.log" 2>&1 || true)"
+    if printf '%s\n' "$explain_4f_out" | grep -q '\*\.log'; then
         pass "4f — explain cites *.log"
     else
         fail "4f — explain did not cite *.log"

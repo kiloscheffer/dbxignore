@@ -70,10 +70,14 @@ phase_extended_cli() {
 
     # 4g — init refuses an unwritable target dir with exit 2 + a clean
     # "cannot write" message rather than an unhandled OSError traceback.
+    # chmod 555 (not 000) so the dir is still readable+searchable — otherwise
+    # click.Path's default readable=True check fires first with "is not
+    # readable" and the command body's OSError arm never runs. Mirrors the
+    # Windows variant, which denies only Write Data + Append Data via icacls.
     note "4g — dbxignore init on an unwritable directory"
     local ro_dir="$T/init-readonly"
     mkdir -p "$ro_dir"
-    chmod 000 "$ro_dir"
+    chmod 555 "$ro_dir"
     dbxignore init "$ro_dir" >/tmp/dbx-init-ro.out 2>&1 && rc=0 || rc=$?
     chmod 755 "$ro_dir"
     if [ "$rc" -eq 2 ]; then

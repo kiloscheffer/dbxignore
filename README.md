@@ -1,6 +1,6 @@
 # dbxignore
 
-Hierarchical `.dropboxignore` files for Dropbox. Drop a `.dropboxignore` into any folder under your Dropbox root and matching paths get the Dropbox ignore marker set automatically — no more `node_modules/` cluttering your sync. Windows (NTFS alternate data streams), Linux (`user.*` xattrs), and macOS (xattrs) supported.
+dbxignore applies the Dropbox ignore marker to paths that match a `.dropboxignore` file. `.dropboxignore` files use gitignore syntax and can be placed in any folder under a Dropbox root; matching paths are excluded from Dropbox sync. Markers are written using NTFS alternate data streams on Windows and extended attributes on Linux and macOS.
 
 ## Contents
 

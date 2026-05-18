@@ -245,19 +245,6 @@ The honest scope: this does **not** bypass the ancestor-inheritance constraint (
 
 Touches: `src/dbxignore/rules.py` (parse + match model); `src/dbxignore/rules_conflicts.py` (skip-spec changes the conflict surface); `README.md` (rule-syntax docs).
 
-## 17. Evaluate `igittigitt` as a `pathspec` replacement
-
-Rule matching is built on `pathspec` (a `GitIgnoreSpecPattern` subclass) plus dbxignore's own `rules_conflicts.py` static conflict detector and `is_dropped` annotation machinery. `igittigitt` is another gitignore-matching library; if its hierarchical-file and negation handling is at parity, some of the home-grown machinery around `pathspec` might collapse.
-
-**Fix candidates:**
-
-1. **30-minute spike** — run the existing rules test corpus through both libraries, diff the match results. If `igittigitt` diverges on any case dbxignore relies on, stop there; the answer is "no".
-2. If parity holds, scope a follow-up RFC for the actual migration — but note the conflict detector and `is_dropped` are dbxignore-specific regardless of the underlying matcher, so the simplification ceiling may be lower than it looks.
-
-**Urgency:** low. Awaiting trigger: the next time the rules layer needs significant work, do the spike first rather than extending `pathspec`-based code blind.
-
-Touches: spike only — no production files until the spike says go.
-
 ## 18. Confirm watchdog doesn't rewalk subtrees on every directory event under burst load
 
 The daemon uses watchdog's recursive observer. Some recursive-watch implementations re-walk a subtree on every Create/Rename/Remove event to keep their watch set current — a per-event cost that compounds badly under burst workloads (`git checkout` of a large branch, `npm install`). It's unconfirmed whether watchdog's Linux inotify backend does this internally.
@@ -317,7 +304,7 @@ Touches: `src/dbxignore/daemon.py` (`_capture_create_time` helper + `daemon.run`
 
 ### Open
 
-Fifteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Fourteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#1** — Intel Mac (x86_64) Mach-O binary build leg. dbxignore ships arm64-only Mach-O binaries; Intel users install via PyPI. Awaits demand signal.
 - **#2** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #1. Defer until item #1 actually triggers.
@@ -331,7 +318,6 @@ Fifteen items. Most are passive (no concrete trigger requires action) — bundle
 - **#10** — `FileNotFoundError`-before-`OSError` 'vanished path' idiom now repeats across `reconcile._reconcile_path` (2 sites), `state._read_at` (1 site), and `cli.uninstall --purge` (4 sites). Filed for design-tension record (precedent: #4, #5, #9); current per-site shape is defensible because the local response action varies (return None / set flag / continue / pass) and no generic helper fits all seven sites.
 - **#13** — `_DeferredEvents.drain` redispatches serially on the worker thread before Phase 2 starts; a large startup-window burst could delay Phase 2's wall-clock unnecessarily. Mostly redundant with Phase 2 anyway. No observed problem.
 - **#16** — Two-tier ignore/skip rule structure as an alternative to interleaved negations. RFC only; does not bypass Dropbox's ancestor-inheritance constraint — purely an authoring-ergonomics question. `is_dropped` is the defensible current answer. Awaiting a concrete UX-insufficiency case.
-- **#17** — Evaluate `igittigitt` as a `pathspec` replacement. 30-min spike (diff both libraries against the rules test corpus) before the next significant rules-layer change; conflict detector + `is_dropped` stay dbxignore-specific regardless, so the simplification ceiling may be modest.
 - **#18** — Confirm watchdog doesn't internally rewalk subtrees on every directory event under burst load. Per-event CPU cost axis, distinct from #7's watch-count axis. Investigation only. Awaiting a beta-tester CPU-spike report during bulk file ops.
 - **#19** — Finer-grained intra-root sweep parallelism below #6's top-level-subdir fan-out granularity. Matters only for trees where one subtree dominates wall-clock after the existing fan-out. Awaiting a profiled lopsided-tree case.
 - **#20** — Observer/callback hook on `RuleCache` mutations. Not needed until a TUI/GUI surface wants live rule state; callbacks must not re-enter the `_rules` lock. Awaiting TUI/GUI work.

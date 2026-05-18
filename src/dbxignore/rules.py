@@ -289,10 +289,10 @@ def _atomic_write_rule_file(rule_file: Path, new_content: str) -> None:
 
     Uses ``tempfile.mkstemp`` to pick a non-colliding name in ``rule_file``'s
     parent directory (same filesystem, so ``os.replace`` is atomic), then
-    closes and ``os.replace``s into place. The unique temp name prevents
-    collisions that the old fixed ``.dropboxignore.tmp`` name caused: two
+    closes and ``os.replace``s into place. A unique temp name is required
+    because a fixed name like ``.dropboxignore.tmp`` would collide with two
     concurrent CLI mutations, an editor's backup, or a stray user-created
-    file could all race it.
+    file.
 
     ``mkstemp`` creates its temp at mode ``0o600`` on POSIX (a sensible
     default for sensitive temp files), so the write happens, then
@@ -452,14 +452,13 @@ class RuleCache:
             seen: set[Path] = set()
             for current_dir, _dirnames, filenames in os.walk(root, followlinks=False):
                 # Cooperative cancellation per directory visited.
-                # The previous shape used `root.rglob(IGNORE_FILENAME)` and
-                # checked between yields — fine for trees with many rule
-                # files, but coarse for trees with many directories and few
-                # rule files (rglob's internal traversal between yields can
-                # do thousands of stat calls before the next yield, blocking
-                # SIGTERM observation for tens of seconds). os.walk yields
-                # one tuple per directory regardless of whether any rule
-                # file is present, so the check fires every directory.
+                # os.walk is used rather than `root.rglob(IGNORE_FILENAME)`
+                # because rglob's internal traversal between yields can do
+                # thousands of stat calls before the next yield on trees
+                # with many directories and few rule files, blocking SIGTERM
+                # observation for tens of seconds. os.walk yields one tuple
+                # per directory regardless of whether any rule file is
+                # present, so the cancellation check fires every directory.
                 # Returning here skips the stale-purge step intentionally —
                 # purging against an incomplete `seen` set would corrupt the
                 # cache by dropping entries that simply weren't reached.

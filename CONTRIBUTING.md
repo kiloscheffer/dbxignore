@@ -23,7 +23,7 @@ Marker I/O is platform-dispatched via `dbxignore.markers`, which at import time 
 
 `rules.RuleCache` stores one `_LoadedRules(lines, entries, mtime_ns, size)` per `.dropboxignore`. `entries` is a list of `(source_line_index, pathspec.Pattern)` pairs and is the single source of truth for both `match()` and `explain()`.
 
-The static conflict detector lives in `rules_conflicts.py` (extracted from `rules.py`); `RuleCache._recompute_conflicts` is its sole production caller. Public symbols (`Conflict`, `_detect_conflicts`) are re-exported from `rules.py` for back-compat.
+The static conflict detector lives in `rules_conflicts.py`; `RuleCache._recompute_conflicts` is its sole production caller. Public symbols (`Conflict`, `_detect_conflicts`) are re-exported from `rules.py` so callers can import from either module.
 
 `rules._load_if_changed` skips reparse when a `.dropboxignore`'s `mtime_ns` and `size` both match the cached values — that's why `_LoadedRules` carries stat fields. The sweep path (`load_root`) uses it; watchdog-driven `reload_file` bypasses it because an explicit event is authoritative.
 

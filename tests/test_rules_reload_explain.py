@@ -301,7 +301,7 @@ def test_rulecache_flags_glob_prefix_negation_under_dir_marking_glob_include(
     at ``rules_conflicts.py:237-238``); the glob-prefix branch runs
     alongside it for the directory-targeting case.
 
-    This test is the real-pathspec lock-down for the new behavior; the
+    This test is the real-pathspec lock-down for this behavior; the
     synthetic-shim counterpart lives at
     ``test_rules_conflicts.py::test_detect_glob_prefix_negation_under_directory_marking_glob_include``.
     """

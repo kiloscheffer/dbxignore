@@ -914,10 +914,10 @@ def _walk_marked_paths(target: Path) -> tuple[list[Path], list[tuple[Path, str]]
     Marker-read OSErrors are collected into the returned ``errors`` list
     rather than swallowed: on filesystems that don't support markers
     (ENOTSUP from `getxattr`) or transient I/O failures (EIO on a flaky
-    network drive), the previous bare ``pass`` produced "No markers to
-    clear" / empty list output, hiding the fact that the scan itself
-    couldn't determine marker state. Callers surface the count and exit 2
-    when any errors occur.
+    network drive), a bare ``pass`` would produce "No markers to clear" /
+    empty list output, hiding the fact that the scan itself couldn't
+    determine marker state. Callers surface the count and exit 2 when any
+    errors occur.
     """
     found: list[Path] = []
     errors: list[tuple[Path, str]] = []

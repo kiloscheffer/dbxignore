@@ -600,10 +600,10 @@ def _capture_create_time() -> float | None:
     Returns the float on success, ``None`` on caught failure. The catch is
     intentionally narrow — ``(ImportError, psutil.Error, OSError, SystemError)``
     — and every caught branch logs a WARNING with the exception type+message.
-    Per backlog #21, the previous bare ``except Exception`` swallowed the cause
-    silently so the next ``daemon_create_time: null`` observation in the wild
-    left no diagnostic data; the WARNING is what unblocks root-cause analysis
-    of the intermittent Windows null observations.
+    A bare ``except Exception`` here would swallow the cause silently, leaving
+    no diagnostic data when an intermittent ``daemon_create_time: null`` is
+    written on Windows; the WARNING is what enables root-cause analysis of
+    such null observations.
 
     Unanticipated exception types propagate up ``daemon.run``, releasing
     the singleton lock via the outer ``try/finally`` and aborting startup

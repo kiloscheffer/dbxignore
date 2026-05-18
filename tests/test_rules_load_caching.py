@@ -119,7 +119,7 @@ def test_load_root_reloads_when_size_and_mtime_match_but_content_differs(
     tmp_path: Path, write_file: WriteFile
 ) -> None:
     """Same byte count, content swap, AND mtime restored to its original
-    value. The old ``(mtime_ns, size)`` gate would silently skip the reparse
+    value. An ``(mtime_ns, size)``-only gate would silently skip the reparse
     and leave stale rules active; the content-hash gate catches the swap.
 
     This is a real edge case — editors that preserve mtime on save, or

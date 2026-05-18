@@ -294,11 +294,10 @@ def test_clear_surfaces_scan_errors_when_no_markers_found(
     tmp_path: Path, fake_markers: FakeMarkers, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """When the scan errored on every walked path AND no markers were
-    found, the previous shape fell through into either the "No markers
-    to clear" message (in the `not to_clear and not scan_errors` arm)
-    or the confirmation prompt, both swallowing the partial-scan-failure
-    surface. The scan-error report and exit 2 must fire regardless of
-    how many markers landed."""
+    found, neither the "No markers to clear" message (in the
+    `not to_clear and not scan_errors` arm) nor the confirmation prompt
+    may swallow the partial-scan-failure surface. The scan-error report
+    and exit 2 must fire regardless of how many markers landed."""
     import errno
 
     root = tmp_path

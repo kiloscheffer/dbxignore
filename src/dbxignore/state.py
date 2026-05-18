@@ -438,9 +438,9 @@ def _validate_pid(value: Any) -> int | None:
 def _validate_create_time(value: Any) -> float | None:
     """Coerce a JSON-decoded ``daemon_create_time`` to a float or raise.
 
-    Accepts None (field absent in older state.json files) and numeric values
-    (int or float). Rejects bool (a Python int subclass), strings, lists,
-    dicts, and anything else. ValueError surfaces through ``_read_at``'s
+    Accepts None for entries that omit the field, plus numeric values (int
+    or float). Rejects bool (a Python int subclass), strings, lists, dicts,
+    and anything else. ValueError surfaces through ``_read_at``'s
     corrupt-state arm so ``read()`` returns None on a hand-edited or
     shape-mismatched record.
     """

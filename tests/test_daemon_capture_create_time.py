@@ -7,16 +7,16 @@ missing, OSError from low-level OS probes, ``psutil.Error`` subclasses like
 NoSuchProcess on the platform-specific OpenProcess path on Windows) can be
 tested without spinning up the full daemon.
 
-Backlog reference: #21 (Windows daemon occasionally writes
-``daemon_create_time: null``). Before this helper landed, the capture was
-inlined in ``daemon.run`` with a bare ``except Exception`` that swallowed
-the exception silently — no log line, no traceback, no diagnostic data when
-the null state appeared. The narrowed catch + WARNING ensures the next null
-observation in the wild leaves forensic evidence in ``daemon.log``;
-unanticipated exception types now propagate up ``daemon.run`` (releasing the
-singleton lock via the outer ``try/finally`` and aborting startup before the
-observer or initial-sweep worker are created) instead of silently
-mis-initializing the daemon with a misleading None record.
+This helper exists because Windows daemons occasionally write
+``daemon_create_time: null`` to ``state.json`` (non-deterministic; observed
+on Windows). Inlining the capture in ``daemon.run`` with a bare
+``except Exception`` would swallow the exception silently — no log line, no
+traceback, no diagnostic data when the null state appears. The narrow catch
++ WARNING ensures any null observation in the wild leaves forensic evidence
+in ``daemon.log``; unanticipated exception types propagate up ``daemon.run``
+(releasing the singleton lock via the outer ``try/finally`` and aborting
+startup before the observer or initial-sweep worker are created) instead of
+silently mis-initializing the daemon with a misleading None record.
 """
 
 from __future__ import annotations
@@ -111,15 +111,15 @@ def test_capture_create_time_returns_none_and_warns_on_oserror(
 def test_capture_create_time_propagates_unexpected_exception(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The pre-#21 bare ``except Exception`` was a forensic dead-end: every
-    exception type was swallowed silently, including types nobody
+    """A bare ``except Exception`` here would be a forensic dead-end: every
+    exception type would be swallowed silently, including types nobody
     anticipated (TypeError from a malformed psutil shim, RuntimeError from
-    a third-party hook, etc.). The narrowed catch handles only the
-    anticipated set ((ImportError, psutil.Error, OSError, SystemError));
-    other exceptions propagate up ``daemon.run`` (releasing the singleton
-    lock via the outer ``try/finally`` and aborting startup before the
-    observer or initial-sweep worker are created) — preferable to silently
-    mis-initializing the daemon with a misleading None record.
+    a third-party hook, etc.). The catch handles only the anticipated set
+    ((ImportError, psutil.Error, OSError, SystemError)); other exceptions
+    propagate up ``daemon.run`` (releasing the singleton lock via the outer
+    ``try/finally`` and aborting startup before the observer or initial-sweep
+    worker are created) — preferable to silently mis-initializing the daemon
+    with a misleading None record.
     """
 
     class _RaisingProc:

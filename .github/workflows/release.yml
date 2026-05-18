@@ -291,7 +291,10 @@ jobs:
           path: dist/
 
       - name: Exclude Windows binaries (PyPI distribution only)
-        run: rm -f dist/*.exe
+        # PyPI only accepts wheels and sdists; drop the standalone .exe
+        # binaries and the .zip archive (the latter would otherwise be
+        # mis-parsed by twine as an sdist and rejected as malformed).
+        run: rm -f dist/*.exe dist/*.zip
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1

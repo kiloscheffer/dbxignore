@@ -23,7 +23,7 @@ dbxignore applies the Dropbox ignore marker to paths that match a `.dropboxignor
 
 - **Windows 10/11** (NTFS), **or** a modern Linux distro with a systemd user session, **or** macOS (Apple Silicon for pre-built binaries; Intel via PyPI)
 - Dropbox desktop client installed
-- Python ≥ 3.11 with [`uv`](https://docs.astral.sh/uv/). The [Scoop bucket](https://github.com/kiloscheffer/scoop-dbxignore) (Windows) and pre-built binaries (Windows `.exe`, macOS arm64 Mach-O) are alternatives that don't require Python.
+- Python ≥ 3.11 with [`uv`](https://docs.astral.sh/uv/). The [Scoop bucket](https://github.com/kiloscheffer/scoop-dbxignore) (Windows) and pre-built binaries (Windows `.exe`, macOS arm64 Mach-O, Linux x86_64 `.tar.gz`) are alternatives that don't require Python.
 
 ## Install (Windows, Scoop)
 

@@ -217,22 +217,6 @@ Surfaced during a review cycle (the third site needing the idiom was identified 
 
 Touches: `src/dbxignore/cli.py`, `src/dbxignore/state.py`, `src/dbxignore/reconcile.py` (one helper added, ~3-7 call sites updated depending on which extraction shape is picked).
 
-## 12. Stale uv tool venv survives failed uninstall, partial state on next install
-
-When `uv tool uninstall dbxignore` fails mid-cleanup (e.g. the Windows daemon is still running and holds `dbxignorew.exe` mapped), the tool venv at `%APPDATA%\uv\tools\dbxignore` (or platform equivalent) is left behind in a partially-cleaned state — the entry-point shims under `~/.local/bin/` may be removed but the venv's `site-packages/` survives. A subsequent `uv tool install .` detects the existing venv and does an *incremental update* rather than a fresh install: only changed packages get reinstalled, others (psutil, watchdog, etc.) are retained from the prior install. Result: a hybrid venv with packages from two different install events that can produce subtle compatibility issues — partially-initialized module errors on Python 3.14, daemon hangs during initial sweep, etc.
-
-Surfaced when a Phase 7 `uv tool uninstall` failed (daemon-running race) and the follow-up `uv tool install .` produced a venv where freshly-installed dbxignore + click/colorama/pathspec/markdown-it-py/mdurl coexisted with carryover psutil 7.2.2 + watchdog + pygments + rich + rich-click from the prior install. The daemon hung silently after the slow-sweep WARNING (likely a watchdog C-extension state issue), and `uninstall --purge` raised an opaque `SystemError` chain rooted in a `psutil` circular import.
-
-**Fix candidates:**
-
-- (1) Add a Phase 0 sanity check: if `~/.local/bin/dbxignore.exe` exists but `uv tool list | grep dbxignore` returns empty, the previous install was partially cleaned. Abort with instructions to remove the orphan venv directory.
-- (2) Force `uv tool install --reinstall .` in Phase 2 (overrides incremental-update behavior). Trades fresh-build cost on every test run for hygiene.
-- (3) Document recovery sequence in script docstring: `Remove-Item %APPDATA%\uv\tools\dbxignore -Recurse -Force` after a failed uninstall before next install attempt.
-
-**Urgency:** low. Occurs only when a prior test run aborted mid-cleanup (script-internal precondition). Each manual-test run is supposed to leave a clean state on the happy path. But contributors hitting the failure mode lose substantial debugging time.
-
-Touches: `scripts/manual-test-windows.ps1` (Phase 0), `scripts/manual-test-{ubuntu-vps,macos}.sh`.
-
 ## 13. `_DeferredEvents.drain` redispatches serially on the worker thread; large bursts could delay Phase 2
 
 `daemon._sweep_once`'s drain block (`daemon.py:946-953`) iterates `deferred.drain()` and calls `redispatch(event)` synchronously per event before Phase 2 reconcile begins. Each `redispatch` runs `_dispatch` which can call `reconcile_subtree` synchronously. If a burst of N OTHER events lands during the ~50s initial-sweep window on a large tree, the drain's wall-clock becomes `N × per-event reconcile cost` — directly delaying Phase 2's start.
@@ -333,7 +317,7 @@ Touches: `src/dbxignore/daemon.py` (`_capture_create_time` helper + `daemon.run`
 
 ### Open
 
-Sixteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Fifteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#1** — Intel Mac (x86_64) Mach-O binary build leg. dbxignore ships arm64-only Mach-O binaries; Intel users install via PyPI. Awaits demand signal.
 - **#2** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #1. Defer until item #1 actually triggers.
@@ -345,7 +329,6 @@ Sixteen items. Most are passive (no concrete trigger requires action) — bundle
 - **#8** — macOS sync-mode detection is process-global; mixed legacy/File-Provider account setups may need per-root or write-both behavior.
 - **#9** — `dropbox_root` fixture from `test_cli_symlink_path_args.py` packages the ~27-site inline `monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])` pattern across `test_cli_apply.py` / `test_cli_clear.py` / `test_cli_status_list_explain.py`. Filed for design-tension record (precedent: #4, #5); current dual shape is defensible.
 - **#10** — `FileNotFoundError`-before-`OSError` 'vanished path' idiom now repeats across `reconcile._reconcile_path` (2 sites), `state._read_at` (1 site), and `cli.uninstall --purge` (4 sites). Filed for design-tension record (precedent: #4, #5, #9); current per-site shape is defensible because the local response action varies (return None / set flag / continue / pass) and no generic helper fits all seven sites.
-- **#12** — Failed `uv tool uninstall` leaves the venv directory behind; the next `uv tool install` does an incremental update instead of fresh install, producing a hybrid venv (mixed install-event packages). Triggers subtle import / C-extension issues. Recovery is manual `Remove-Item ~\AppData\Roaming\uv\tools\<pkg>`.
 - **#13** — `_DeferredEvents.drain` redispatches serially on the worker thread before Phase 2 starts; a large startup-window burst could delay Phase 2's wall-clock unnecessarily. Mostly redundant with Phase 2 anyway. No observed problem.
 - **#16** — Two-tier ignore/skip rule structure as an alternative to interleaved negations. RFC only; does not bypass Dropbox's ancestor-inheritance constraint — purely an authoring-ergonomics question. `is_dropped` is the defensible current answer. Awaiting a concrete UX-insufficiency case.
 - **#17** — Evaluate `igittigitt` as a `pathspec` replacement. 30-min spike (diff both libraries against the rules test corpus) before the next significant rules-layer change; conflict detector + `is_dropped` stay dbxignore-specific regardless, so the simplification ceiling may be modest.

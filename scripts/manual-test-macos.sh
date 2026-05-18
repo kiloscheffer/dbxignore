@@ -250,6 +250,124 @@ phase_dbxignore_install() {
         if bin_dir="$(uv tool dir --bin 2>/dev/null)" && [ -n "$bin_dir" ] && [ -d "$bin_dir" ]; then
             rm -f "$bin_dir/dbxignore" "$bin_dir/dbxignorew"
         fi
+    else
+        # Orphan-install detection. A prior `uv tool uninstall` that failed
+        # mid-cleanup can leave the venv at $(uv tool dir)/dbxignore behind
+        # even though `uv tool list` no longer shows dbxignore. The next
+        # `uv tool install` then does an incremental update (only changed
+        # packages reinstall; others survive, producing a hybrid venv with
+        # subtly broken C-extension state). Detect the orphan venv here
+        # and clean it up so the next install is fresh. See PR #266.
+        #
+        # State machine, derived across four review rounds:
+        #
+        # - venv exists AND no shims at $(uv tool dir --bin)
+        #     → BACKLOG #12's documented case. Auto-recover (daemon-kill
+        #       + service-unit teardown + venv removal). Mirrors the
+        #       known-install teardown above, minus the `dbxignore
+        #       uninstall` CLI call. Daemon-kill is defensive: POSIX
+        #       unlink-while-open lets a daemon process predating the
+        #       partial uninstall survive venv removal, so it'd keep
+        #       writing state.json / holding the singleton lock during
+        #       the rest of the test.
+        #
+        # - shims exist (with or without venv)
+        #     → Ambiguous origin: `uv tool dir --bin` commonly resolves
+        #       to $HOME/.local/bin (or another shared user bin dir) that
+        #       also hosts pip/pipx binaries. Even when the venv is uv's,
+        #       the shims could be from a competing install that landed
+        #       at the same paths before the uv venv was created (or
+        #       after a partial uv uninstall). Auto-removing would
+        #       silently break the tester's other install; leaving them
+        #       in place lets `uv tool install` fail later with
+        #       "Executables already exist" (uv doesn't overwrite shims
+        #       it doesn't recognize). Abort here with a diagnostic
+        #       listing the paths and resolution options instead.
+        #
+        # - nothing exists → no-op (fresh install path).
+        local orphan_tool_dir orphan_bin_dir orphan_venv
+        local -a orphan_shims=()
+        orphan_tool_dir="$(uv tool dir 2>/dev/null)" || orphan_tool_dir=""
+        orphan_bin_dir="$(uv tool dir --bin 2>/dev/null)" || orphan_bin_dir=""
+        orphan_venv="${orphan_tool_dir:+$orphan_tool_dir/dbxignore}"
+        if [ -n "$orphan_bin_dir" ]; then
+            for exe in dbxignore dbxignorew; do
+                if [ -e "$orphan_bin_dir/$exe" ]; then
+                    orphan_shims+=("$orphan_bin_dir/$exe")
+                fi
+            done
+        fi
+        local venv_exists=0
+        if [ -n "$orphan_venv" ] && [ -d "$orphan_venv" ]; then venv_exists=1; fi
+        if [ "${#orphan_shims[@]}" -gt 0 ]; then
+            # Ambiguous origin in shared bin dir. Don't auto-act.
+            local shim_list venv_clause
+            shim_list="$(printf '  %s\n' "${orphan_shims[@]}")"
+            if [ "$venv_exists" -eq 1 ]; then
+                venv_clause="An orphan uv tool venv ALSO exists at $orphan_venv — if the shims are confirmed uv's (option (a) below), remove the venv too with \`rm -rf $orphan_venv\`."
+            else
+                venv_clause="The matching uv tool venv at $orphan_venv does not exist, so the shims may have outlived it."
+            fi
+            abort "$(cat <<EOF
+found dbxignore/dbxignorew shim(s) in the uv tool bin dir:
+
+$shim_list
+
+$venv_clause
+
+Possible origins:
+
+  (a) a previous uv tool install/uninstall that left shims uv didn't track
+      anymore (e.g. uv tool install created the venv but failed at shim-write
+      because something was already there; or uv tool uninstall failed
+      partway through). Safe to remove the shims if confirmed.
+  (b) a competing dbxignore install via pip, pipx, or another tool that writes
+      to the same bin dir ($orphan_bin_dir).
+
+Auto-removing would silently break case (b). Manually verify and clean up:
+
+  pipx uninstall dbxignore           # if pipx-installed (case b)
+  pip uninstall dbxignore            # if pip-installed (case b)
+  rm -f ${orphan_shims[*]}    # if confirmed uv (case a)
+
+then re-run this script.
+EOF
+)"
+        fi
+        if [ "$venv_exists" -eq 1 ]; then
+            # venv-only orphan: BACKLOG #12's documented case. Auto-recover.
+            note "${Y}WARNING:${X} orphan install detected — prior uv tool uninstall partially failed"
+
+            # Service-unit teardown (best-effort: no-ops when nothing exists,
+            # which is the common case in the orphan state since `dbxignore
+            # uninstall` may have run earlier and removed the agent before
+            # the venv cleanup failed).
+            launchctl bootout "gui/$(id -u)/com.kiloscheffer.dbxignore" >/dev/null 2>&1 || true
+            rm -f "$HOME/Library/LaunchAgents/com.kiloscheffer.dbxignore.plist"
+
+            # Poll-for-exit then force-kill — same shape as the known-install
+            # branch above. Without this, the orphan daemon keeps running
+            # against a deleted venv (loaded modules survive) and interferes
+            # with the rest of the test by writing state.json and holding
+            # the singleton lock at $DBXIGNORE_STATE_DIR/daemon.lock.
+            if pgrep -f 'dbxignore daemon' >/dev/null 2>&1; then
+                note "  found running daemon process; waiting up to 30s for exit"
+                deadline=$(( $(date +%s) + 30 ))
+                while [ "$(date +%s)" -lt "$deadline" ]; do
+                    if ! pgrep -f 'dbxignore daemon' >/dev/null 2>&1; then break; fi
+                    sleep 0.5
+                done
+                if pgrep -f 'dbxignore daemon' >/dev/null 2>&1; then
+                    note "  daemon did not exit within 30s; force-killing"
+                    pkill -9 -f 'dbxignore daemon' >/dev/null 2>&1 || true
+                    sleep 0.5
+                fi
+            fi
+
+            note "  removing orphan venv at $orphan_venv"
+            rm -rf "$orphan_venv"
+            note "orphan cleanup complete; proceeding with fresh install"
+        fi
     fi
 
     clean_uv_cache_for_dbxignore_if_local

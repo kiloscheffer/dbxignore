@@ -5,6 +5,7 @@ dbxignore applies the Dropbox ignore marker to paths that match a `.dropboxignor
 ## Contents
 
 - [Requirements](#requirements)
+- [Install (Windows, Scoop)](#install-windows-scoop)
 - [Install (Windows, from source)](#install-windows-from-source)
 - [Install (Linux)](#install-linux)
 - [Install (macOS)](#install-macos)
@@ -22,7 +23,18 @@ dbxignore applies the Dropbox ignore marker to paths that match a `.dropboxignor
 
 - **Windows 10/11** (NTFS), **or** a modern Linux distro with a systemd user session, **or** macOS (Apple Silicon for pre-built binaries; Intel via PyPI)
 - Dropbox desktop client installed
-- Python ≥ 3.11 with [`uv`](https://docs.astral.sh/uv/). Pre-built binaries (Windows `.exe`, macOS arm64 Mach-O) are alternatives.
+- Python ≥ 3.11 with [`uv`](https://docs.astral.sh/uv/). The [Scoop bucket](https://github.com/kiloscheffer/scoop-dbxignore) (Windows) and pre-built binaries (Windows `.exe`, macOS arm64 Mach-O) are alternatives that don't require Python.
+
+## Install (Windows, Scoop)
+
+```powershell
+scoop bucket add dbxignore https://github.com/kiloscheffer/scoop-dbxignore
+scoop install dbxignore/dbxignore
+dbxignore install                    # registers Task Scheduler entry
+dbxignore status                     # verify: daemon running and watching Dropbox
+```
+
+The bucket repo is at [`kiloscheffer/scoop-dbxignore`](https://github.com/kiloscheffer/scoop-dbxignore). Run `dbxignore uninstall` before `scoop uninstall dbxignore` so the Task Scheduler entry is removed cleanly.
 
 ## Install (Windows, from source)
 

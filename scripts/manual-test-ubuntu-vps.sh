@@ -338,22 +338,30 @@ phase_dbxignore_install() {
         fi
     else
         # Orphan-install detection. A prior `uv tool uninstall` that failed
-        # mid-cleanup can leave the venv at $(uv tool dir)/dbxignore AND/OR
-        # the shims at $(uv tool dir --bin) behind even though `uv tool list`
-        # no longer shows dbxignore. The next `uv tool install` then either
-        # does an incremental update (venv-orphan: only changed packages
-        # reinstall; others survive, producing a hybrid venv with subtly
-        # broken C-extension state) or refuses outright with "Executables
-        # already exist" (shim-orphan). Detect both shapes and clean them
-        # up here so the next install is fresh. Mirrors the known-install
-        # teardown above, minus the `dbxignore uninstall` CLI call (orphan
-        # state means dbxignore isn't on PATH). The daemon may or may not
-        # still be running: POSIX unlink-while-open lets a daemon process
-        # started before the partial uninstall survive venv/shim removal as
-        # long as its loaded modules + open file descriptors stay alive,
-        # and it'll continue writing state.json / holding the singleton
-        # lock during the rest of the test — so the daemon-kill block below
-        # has to run defensively. See PR #266.
+        # mid-cleanup can leave the venv at $(uv tool dir)/dbxignore behind
+        # even though `uv tool list` no longer shows dbxignore. The next
+        # `uv tool install` then does an incremental update (only changed
+        # packages reinstall; others survive, producing a hybrid venv with
+        # subtly broken C-extension state). Detect the orphan venv here
+        # and clean it up so the next install is fresh. Mirrors the
+        # known-install teardown above, minus the `dbxignore uninstall`
+        # CLI call (orphan state means dbxignore isn't on PATH). The
+        # daemon may or may not still be running: POSIX unlink-while-open
+        # lets a daemon process started before the partial uninstall
+        # survive venv removal as long as its loaded modules + open file
+        # descriptors stay alive, and it'll continue writing state.json /
+        # holding the singleton lock during the rest of the test — so the
+        # daemon-kill block below has to run defensively. See PR #266.
+        #
+        # Venv-presence is the discriminator for shim cleanup. `uv tool
+        # dir --bin` commonly resolves to $HOME/.local/bin, which can also
+        # host dbxignore/dbxignorew binaries installed by pip --user,
+        # pipx, or other tools. When $(uv tool dir)/dbxignore exists, any
+        # matching shims are unambiguously uv's — safe to remove. When
+        # ONLY shims exist (no matching venv), the binaries could be a
+        # uv pure-shim-orphan OR a competing install — abort with
+        # diagnostic instructions rather than risk deleting a tester's
+        # pip/pipx-installed dbxignore.
         local orphan_tool_dir orphan_bin_dir orphan_venv
         local -a orphan_shims=()
         orphan_tool_dir="$(uv tool dir 2>/dev/null)" || orphan_tool_dir=""
@@ -366,7 +374,35 @@ phase_dbxignore_install() {
                 fi
             done
         fi
-        if { [ -n "$orphan_venv" ] && [ -d "$orphan_venv" ]; } || [ "${#orphan_shims[@]}" -gt 0 ]; then
+        local venv_exists=0
+        if [ -n "$orphan_venv" ] && [ -d "$orphan_venv" ]; then venv_exists=1; fi
+        if [ "$venv_exists" -eq 0 ] && [ "${#orphan_shims[@]}" -gt 0 ]; then
+            # Pure-shim-no-venv: ambiguous origin. Don't auto-act.
+            local shim_list
+            shim_list="$(printf '  %s\n' "${orphan_shims[@]}")"
+            abort "$(cat <<EOF
+found dbxignore/dbxignorew shim(s) but no matching uv tool venv:
+
+$shim_list
+
+The matching venv at $orphan_venv does not exist, so these shims may be from:
+
+  (a) a previous uv tool uninstall that removed the venv but failed to remove
+      the shims (rare — uv typically removes shims first), OR
+  (b) a competing dbxignore install via pip, pipx, or another tool that writes
+      to the same bin dir ($orphan_bin_dir).
+
+Auto-removing them would silently break case (b). Manually verify and clean up:
+
+  pipx uninstall dbxignore           # if pipx-installed
+  pip uninstall dbxignore            # if pip-installed (--user or otherwise)
+  rm -f ${orphan_shims[*]}    # if confirmed uv pure-shim-orphan
+
+then re-run this script.
+EOF
+)"
+        fi
+        if [ "$venv_exists" -eq 1 ]; then
             note "${Y}WARNING:${X} orphan install detected — prior uv tool uninstall partially failed"
 
             # Service-unit teardown (best-effort: no-ops when nothing exists,
@@ -396,10 +432,8 @@ phase_dbxignore_install() {
                 fi
             fi
 
-            if [ -n "$orphan_venv" ] && [ -d "$orphan_venv" ]; then
-                note "  removing orphan venv at $orphan_venv"
-                rm -rf "$orphan_venv"
-            fi
+            note "  removing orphan venv at $orphan_venv"
+            rm -rf "$orphan_venv"
             if [ "${#orphan_shims[@]}" -gt 0 ]; then
                 for shim in "${orphan_shims[@]}"; do
                     note "  removing orphan shim at $shim"

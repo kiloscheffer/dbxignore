@@ -389,20 +389,29 @@ function Test-InstallDbxignore {
     } else {
         # Orphan-install detection. A prior uv tool uninstall that failed
         # mid-cleanup (e.g. daemon still running and holding dbxignorew.exe
-        # mapped) can leave the venv at $(uv tool dir)/dbxignore AND/OR the
-        # shims at $(uv tool dir --bin) behind even though uv tool list no
-        # longer shows dbxignore. The next uv tool install then either does
-        # an incremental update (venv-orphan: only changed packages reinstall;
-        # others survive from the prior install, producing a hybrid venv with
-        # subtly broken C-extension state) or refuses outright with
-        # "Executables already exist" (shim-orphan). Detect both shapes and
-        # clean them up here so the next install is fresh. Mirrors the
-        # known-install teardown above, minus the `dbxignore uninstall` CLI
-        # call (orphan state means dbxignore.exe isn't on PATH). The daemon
-        # may or may not still be running: a Task Scheduler launch that
-        # predates the partial uninstall keeps pythonw.exe + dbxignorew.exe
-        # memory-mapped indefinitely — venv/shim removal can't terminate it,
-        # so the daemon-kill block below has to run defensively. See PR #266.
+        # mapped) can leave the venv at $(uv tool dir)/dbxignore behind even
+        # though uv tool list no longer shows dbxignore. The next uv tool
+        # install then does an incremental update (only changed packages
+        # reinstall; others survive from the prior install, producing a
+        # hybrid venv with subtly broken C-extension state). Detect the
+        # orphan venv here and clean it up so the next install is fresh.
+        # Mirrors the known-install teardown above, minus the `dbxignore
+        # uninstall` CLI call (orphan state means dbxignore.exe isn't on
+        # PATH). The daemon may or may not still be running: a Task
+        # Scheduler launch that predates the partial uninstall keeps
+        # pythonw.exe + dbxignorew.exe memory-mapped indefinitely — venv
+        # removal can't terminate it, so the daemon-kill block below has
+        # to run defensively. See PR #266.
+        #
+        # Venv-presence is the discriminator for shim cleanup. uv tool dir
+        # --bin commonly resolves to $env:USERPROFILE\.local\bin (or other
+        # shared user bin dirs), which can also host dbxignore/dbxignorew
+        # binaries installed by pip --user, pipx, or other tools. When
+        # $(uv tool dir)/dbxignore exists, any matching shims are
+        # unambiguously uv's — safe to remove. When ONLY shims exist (no
+        # matching venv), the binaries could be a uv pure-shim-orphan OR a
+        # competing install — abort with diagnostic instructions rather
+        # than risk deleting a tester's pip/pipx-installed dbxignore.
         $toolDir = (uv tool dir 2>$null | Out-String).Trim()
         $binDir  = (uv tool dir --bin 2>$null | Out-String).Trim()
         $orphanVenv = if ($toolDir) { Join-Path $toolDir 'dbxignore' } else { $null }
@@ -414,7 +423,31 @@ function Test-InstallDbxignore {
             }
         }
         $venvExists = $orphanVenv -and (Test-Path $orphanVenv)
-        if ($venvExists -or $orphanShims.Count -gt 0) {
+        if (-not $venvExists -and $orphanShims.Count -gt 0) {
+            # Pure-shim-no-venv: ambiguous origin. Don't auto-act.
+            $shimList = ($orphanShims -join "`n  ")
+            Stop-Abort @"
+found dbxignore/dbxignorew shim(s) but no matching uv tool venv:
+
+  $shimList
+
+The matching venv at $orphanVenv does not exist, so these shims may be from:
+
+  (a) a previous uv tool uninstall that removed the venv but failed to remove
+      the shims (rare — uv typically removes shims first), OR
+  (b) a competing dbxignore install via pip, pipx, or another tool that
+      writes to the same bin dir ($binDir).
+
+Auto-removing them would silently break case (b). Manually verify and clean up:
+
+  pipx uninstall dbxignore           # if pipx-installed
+  pip uninstall dbxignore            # if pip-installed (--user or otherwise)
+  Remove-Item -Force '$($orphanShims -join "', '")'    # if confirmed uv pure-shim-orphan
+
+then re-run this script.
+"@
+        }
+        if ($venvExists) {
             Write-Note "${Y}WARNING:${X} orphan install detected - prior uv tool uninstall partially failed"
 
             # Service-unit teardown (best-effort: schtasks returns non-zero
@@ -451,30 +484,28 @@ function Test-InstallDbxignore {
                 }
             }
 
-            if ($venvExists) {
-                Write-Note "  removing orphan venv at $orphanVenv"
-                $attempts = 0
-                while ((Test-Path $orphanVenv) -and ($attempts -lt 10)) {
-                    try {
-                        Remove-Item -Recurse -Force $orphanVenv -ErrorAction Stop
-                    } catch {
-                        Start-Sleep -Milliseconds 500
-                        $attempts++
-                    }
-                }
-                if (Test-Path $orphanVenv) {
-                    Stop-Abort "could not remove orphan venv $orphanVenv after 5s of retries; manual cleanup needed: Remove-Item -Recurse -Force $orphanVenv"
+            Write-Note "  removing orphan venv at $orphanVenv"
+            $attempts = 0
+            while ((Test-Path $orphanVenv) -and ($attempts -lt 10)) {
+                try {
+                    Remove-Item -Recurse -Force $orphanVenv -ErrorAction Stop
+                } catch {
+                    Start-Sleep -Milliseconds 500
+                    $attempts++
                 }
             }
+            if (Test-Path $orphanVenv) {
+                Stop-Abort "could not remove orphan venv $orphanVenv after 5s of retries; manual cleanup needed: Remove-Item -Recurse -Force $orphanVenv"
+            }
+            # Shim removal: defense-in-depth against the daemon-kill above not
+            # actually terminating the process (e.g. Stop-Process -Force is
+            # asynchronous; a hung-in-kernel process may persist long enough
+            # to keep dbxignorew.exe memory-mapped). Abort with diagnostic if
+            # so, rather than the SilentlyContinue swallow that would let the
+            # next uv tool install fail opaquely with "Executables already
+            # exist".
             foreach ($shim in $orphanShims) {
                 Write-Note "  removing orphan shim at $shim"
-                # SilentlyContinue would hide the pure-shim-orphan case where a
-                # daemon process started before an earlier venv removal is still
-                # running with dbxignorew.exe memory-mapped (PE images are
-                # always mapped; the trampoline-chain shim stays mapped for the
-                # daemon's lifetime). Removal then fails and the next
-                # uv tool install errors with "Executables already exist" —
-                # surface that here with a clear orphan-state message instead.
                 try {
                     Remove-Item -Force $shim -ErrorAction Stop
                 } catch {

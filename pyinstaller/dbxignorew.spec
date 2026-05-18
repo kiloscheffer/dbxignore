@@ -32,8 +32,19 @@ a = Analysis(
     [str(ENTRY)],
     pathex=[str(SRC)],
     binaries=[],
-    datas=copy_metadata("dbxignore"),
-    hiddenimports=["watchdog.observers.winapi", "watchdog.observers.read_directory_changes"],
+    # context-menu.ico ships inside the bundle so install_shell_integration
+    # (when invoked through this GUI helper — e.g. an Explorer-launched
+    # "dbxignorew install" wrapper) can copy it to %LOCALAPPDATA%\dbxignore\
+    # icons\. Mirrors dbxignore.spec; see that spec's comment for the
+    # hiddenimport rationale.
+    datas=copy_metadata("dbxignore") + [
+        (str(SRC / "dbxignore" / "_resources" / "context-menu.ico"), "dbxignore/_resources"),
+    ],
+    hiddenimports=[
+        "watchdog.observers.winapi",
+        "watchdog.observers.read_directory_changes",
+        "dbxignore._resources",
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -64,4 +75,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(Path("pyinstaller/dbxignore-app.ico").resolve()),
 )

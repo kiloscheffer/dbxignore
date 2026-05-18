@@ -1518,6 +1518,24 @@ function Test-Daemon {
         } else {
             Write-Fail "5g - restore command shape unexpected: $restoreCmd"
         }
+
+        # 5g - verb icon installed to %LOCALAPPDATA%\dbxignore\icons\ and
+        # both verb keys' Icon REG_SZ point at it. Explorer reads the Icon
+        # value lazily on every menu render, so the on-disk file must exist
+        # outside any dbxignore process lifetime.
+        $iconPath = Join-Path $env:LOCALAPPDATA "dbxignore\icons\context-menu.ico"
+        if (Test-Path $iconPath) {
+            Write-Pass "5g - icon file copied to $iconPath"
+        } else {
+            Write-Fail "5g - icon file missing at $iconPath"
+        }
+        $ignoreIcon = (Get-ItemProperty -Path $ignoreKey -Name "Icon" -ErrorAction SilentlyContinue).Icon
+        $restoreIcon = (Get-ItemProperty -Path $restoreKey -Name "Icon" -ErrorAction SilentlyContinue).Icon
+        if ($ignoreIcon -eq $iconPath -and $restoreIcon -eq $iconPath) {
+            Write-Pass "5g - both verbs' Icon value points at the installed icon file"
+        } else {
+            Write-Fail "5g - Icon REG_SZ mismatch: ignore='$ignoreIcon' restore='$restoreIcon' expected='$iconPath'"
+        }
     } else {
         Write-Fail "5g - verb keys missing after default install (skipping registry-property assertions)"
     }
@@ -1677,6 +1695,30 @@ function Test-Uninstall {
         Write-Pass "6c - both verb keys removed"
     } else {
         Write-Fail "6c - verb keys persisted after plain uninstall"
+    }
+
+    # 6c - verb icon file + icons/ subdir removed by default uninstall.
+    # `_uninstall_icon` runs after the registry sweep; if registry passes
+    # but the icon survives, Explorer would render a phantom icon path
+    # the next install can't reach.
+    $iconPath = Join-Path $env:LOCALAPPDATA "dbxignore\icons\context-menu.ico"
+    $iconDir = Split-Path -Parent $iconPath
+    if (-not (Test-Path $iconPath)) {
+        Write-Pass "6c - icon file removed"
+    } else {
+        Write-Fail "6c - icon file persisted at $iconPath"
+    }
+    if (-not (Test-Path $iconDir)) {
+        Write-Pass "6c - empty icons/ dir removed"
+    } else {
+        # A non-empty icons/ dir (user-dropped sibling files) is a valid
+        # outcome — preserve, not fail. Otherwise it's a regression.
+        $remaining = Get-ChildItem -Force -Path $iconDir -ErrorAction SilentlyContinue
+        if ($remaining) {
+            Write-Note "6c - icons/ retained (non-empty): $($remaining.Name -join ', ')"
+        } else {
+            Write-Fail "6c - empty icons/ dir persisted at $iconDir"
+        }
     }
 
     # re-install briefly, then --purge

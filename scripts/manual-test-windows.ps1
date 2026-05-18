@@ -834,7 +834,7 @@ function Test-ExtendedCli {
         # tree setup, dbxignore apply, the deny ACE, or any of the test commands.
         Set-Content -Path $stateJson4s -Value "{}" -Encoding utf8 -NoNewline
 
-        Remove-Item -Recurse -Force $T -ErrorAction SilentlyContinue
+        Remove-DirWithRetry -Path $T
         New-Item -ItemType Directory -Force -Path $T | Out-Null
         Set-Content -Path "$T\.dropboxignore" -Value "*.tmp" -Encoding utf8
         New-Item -ItemType File -Force -Path "$T\foo.tmp" | Out-Null
@@ -890,7 +890,7 @@ function Test-ExtendedCli {
     # `_normalize_under_root` rejects the path up-front. One verb (explain) suffices —
     # the guard lives in the shared validator and unit tests cover all 5 verbs.
     Write-Note "4t - explain refuses '..-after-symlink' path"
-    Remove-Item -Recurse -Force $T -ErrorAction SilentlyContinue
+    Remove-DirWithRetry -Path $T
     New-Item -ItemType Directory -Force -Path $T | Out-Null
     $linkTarget4t = Join-Path $T "target-dir"
     New-Item -ItemType Directory -Force -Path $linkTarget4t | Out-Null
@@ -940,7 +940,7 @@ function Test-ExtendedCli {
     # invocation. The injected runs mutate nothing (clear refuses once the scan
     # fails), so recovery is a plain clear.
     Write-Note "4v - clear/list exit 2 on injected marker-read failure"
-    Remove-Item -Recurse -Force $T -ErrorAction SilentlyContinue
+    Remove-DirWithRetry -Path $T
     New-Item -ItemType Directory -Force -Path $T | Out-Null
     Set-Content -Path (Join-Path $T ".dropboxignore") -Value "*.tmp" -Encoding utf8 -NoNewline
     New-Item -ItemType File -Force -Path (Join-Path $T "foo.tmp") | Out-Null
@@ -984,7 +984,7 @@ function Test-ExtendedCli {
 
     # Recovery: clear the marker without the fail point so later phases start clean.
     dbxignore clear $T --yes *> $null
-    Remove-Item -Recurse -Force $T -ErrorAction SilentlyContinue
+    Remove-DirWithRetry -Path $T
 }
 
 # ---------------------------------------------------------------------------
@@ -1839,8 +1839,17 @@ function Test-Cleanup {
 
     $T = Join-Path $script:DropboxDir $TestSubdir
     if (Test-Path $T) {
-        Remove-Item -Path $T -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Note "test fixtures removed from Dropbox folder"
+        # Wrap in try/catch: this is the LAST phase, and subsequent cleanup
+        # steps below (slow-sweep marker, 5g sibling, uv tool uninstall) need
+        # to run even if the $T removal exhausts Remove-DirWithRetry's 10s
+        # retry budget. The helper's own Write-Note logs the exhaustion;
+        # this catch just keeps Phase 7 moving.
+        try {
+            Remove-DirWithRetry -Path $T
+            Write-Note "test fixtures removed from Dropbox folder"
+        } catch {
+            Write-Note "Phase 7: $T removal failed (left for manual cleanup): $_"
+        }
     }
 
     # (Phase 5-pre is now a static PE-header check — no file manipulation,

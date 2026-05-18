@@ -396,10 +396,13 @@ function Test-InstallDbxignore {
         # others survive from the prior install, producing a hybrid venv with
         # subtly broken C-extension state) or refuses outright with
         # "Executables already exist" (shim-orphan). Detect both shapes and
-        # clean them up here so the next install is fresh. Symmetric with the
-        # known-install teardown above, minus the daemon-kill prologue: in
-        # the orphan case the schtasks-launched daemon is already dead
-        # because either its venv or its shim is gone. See PR #266.
+        # clean them up here so the next install is fresh. Mirrors the
+        # known-install teardown above, minus the `dbxignore uninstall` CLI
+        # call (orphan state means dbxignore.exe isn't on PATH). The daemon
+        # may or may not still be running: a Task Scheduler launch that
+        # predates the partial uninstall keeps pythonw.exe + dbxignorew.exe
+        # memory-mapped indefinitely — venv/shim removal can't terminate it,
+        # so the daemon-kill block below has to run defensively. See PR #266.
         $toolDir = (uv tool dir 2>$null | Out-String).Trim()
         $binDir  = (uv tool dir --bin 2>$null | Out-String).Trim()
         $orphanVenv = if ($toolDir) { Join-Path $toolDir 'dbxignore' } else { $null }
@@ -413,6 +416,41 @@ function Test-InstallDbxignore {
         $venvExists = $orphanVenv -and (Test-Path $orphanVenv)
         if ($venvExists -or $orphanShims.Count -gt 0) {
             Write-Note "${Y}WARNING:${X} orphan install detected - prior uv tool uninstall partially failed"
+
+            # Service-unit teardown (best-effort: schtasks returns non-zero
+            # when the task isn't registered, which is the common case in the
+            # orphan state — `dbxignore uninstall` may have run earlier and
+            # removed the task before the venv/shim cleanup failed).
+            schtasks /End /TN dbxignore 2>$null | Out-Null
+            schtasks /Delete /TN dbxignore /F 2>$null | Out-Null
+
+            # CommandLine-based daemon detection + 30s poll + force-kill.
+            # Same shape as the known-install branch above (see that block's
+            # comment for why a process-name check misses the python.exe layer
+            # of the trampoline chain). Without this, the orphan venv removal
+            # below either spends 5s spinning on a locked pythonw.exe and
+            # aborts, or the daemon survives the cleanup entirely and goes
+            # on writing state.json / holding the singleton lock during the
+            # rest of the test.
+            $daemonPids = (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+                $_.CommandLine -and $_.CommandLine -match 'dbxignore(w)?\.exe.*\bdaemon\b'
+            }).ProcessId
+            if ($daemonPids) {
+                Write-Note "  found running daemon process(es): $($daemonPids -join ', '); waiting up to 30s for exit"
+                $deadline = (Get-Date).AddSeconds(30)
+                while ((Get-Date) -lt $deadline) {
+                    $alive = $daemonPids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }
+                    if (-not $alive) { break }
+                    Start-Sleep -Milliseconds 500
+                }
+                $alive = $daemonPids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }
+                if ($alive) {
+                    Write-Note "  daemon did not exit within 30s; force-killing PID(s) $($alive -join ', ')"
+                    $alive | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+                    Start-Sleep -Milliseconds 500
+                }
+            }
+
             if ($venvExists) {
                 Write-Note "  removing orphan venv at $orphanVenv"
                 $attempts = 0

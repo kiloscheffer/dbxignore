@@ -259,10 +259,15 @@ phase_dbxignore_install() {
         # reinstall; others survive, producing a hybrid venv with subtly
         # broken C-extension state) or refuses outright with "Executables
         # already exist" (shim-orphan). Detect both shapes and clean them
-        # up here so the next install is fresh. Symmetric with the
-        # known-install teardown above, minus the daemon-kill prologue:
-        # in the orphan case the launchd-launched daemon is already dead
-        # because either its venv or its shim is gone. See PR #266.
+        # up here so the next install is fresh. Mirrors the known-install
+        # teardown above, minus the `dbxignore uninstall` CLI call (orphan
+        # state means dbxignore isn't on PATH). The daemon may or may not
+        # still be running: POSIX unlink-while-open lets a daemon process
+        # started before the partial uninstall survive venv/shim removal as
+        # long as its loaded modules + open file descriptors stay alive,
+        # and it'll continue writing state.json / holding the singleton
+        # lock during the rest of the test — so the daemon-kill block below
+        # has to run defensively. See PR #266.
         local orphan_tool_dir orphan_bin_dir orphan_venv
         local -a orphan_shims=()
         orphan_tool_dir="$(uv tool dir 2>/dev/null)" || orphan_tool_dir=""
@@ -277,6 +282,33 @@ phase_dbxignore_install() {
         fi
         if { [ -n "$orphan_venv" ] && [ -d "$orphan_venv" ]; } || [ "${#orphan_shims[@]}" -gt 0 ]; then
             note "${Y}WARNING:${X} orphan install detected — prior uv tool uninstall partially failed"
+
+            # Service-unit teardown (best-effort: no-ops when nothing exists,
+            # which is the common case in the orphan state since `dbxignore
+            # uninstall` may have run earlier and removed the agent before
+            # the venv/shim cleanup failed).
+            launchctl bootout "gui/$(id -u)/com.kiloscheffer.dbxignore" >/dev/null 2>&1 || true
+            rm -f "$HOME/Library/LaunchAgents/com.kiloscheffer.dbxignore.plist"
+
+            # Poll-for-exit then force-kill — same shape as the known-install
+            # branch above. Without this, the orphan daemon keeps running
+            # against a deleted venv (loaded modules survive) and interferes
+            # with the rest of the test by writing state.json and holding
+            # the singleton lock at $DBXIGNORE_STATE_DIR/daemon.lock.
+            if pgrep -f 'dbxignore daemon' >/dev/null 2>&1; then
+                note "  found running daemon process; waiting up to 30s for exit"
+                deadline=$(( $(date +%s) + 30 ))
+                while [ "$(date +%s)" -lt "$deadline" ]; do
+                    if ! pgrep -f 'dbxignore daemon' >/dev/null 2>&1; then break; fi
+                    sleep 0.5
+                done
+                if pgrep -f 'dbxignore daemon' >/dev/null 2>&1; then
+                    note "  daemon did not exit within 30s; force-killing"
+                    pkill -9 -f 'dbxignore daemon' >/dev/null 2>&1 || true
+                    sleep 0.5
+                fi
+            fi
+
             if [ -n "$orphan_venv" ] && [ -d "$orphan_venv" ]; then
                 note "  removing orphan venv at $orphan_venv"
                 rm -rf "$orphan_venv"

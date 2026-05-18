@@ -206,12 +206,11 @@ def test_sweep_does_not_descend_into_top_level_symlink(
 
     ``os.walk(path, followlinks=False)`` follows the symlink when the
     symlink is the *starting* path — ``followlinks`` only applies to
-    symlinks encountered as subdirectories during the walk. The previous
-    sweep shape (one ``os.walk`` covering the whole root) saw symlinks
-    only as ``dirnames`` entries, where ``followlinks=False`` did protect
-    against descent. The per-subdir fan-out has to recover that protection
-    at the work-list build by submitting symlink children with
-    ``descend=False``.
+    symlinks encountered as subdirectories during the walk. A whole-root
+    ``os.walk`` sees symlinks only as ``dirnames`` entries, where
+    ``followlinks=False`` protects against descent. The per-subdir
+    fan-out has to recover that protection at the work-list build by
+    submitting symlink children with ``descend=False``.
     """
     root = tmp_path / "root"
     root.mkdir()

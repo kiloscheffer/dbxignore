@@ -204,8 +204,6 @@ The idiom is recognizable at each site, but the **response action** after the FN
 - A `suppress_vanished()` context manager — fits the silent-pass purge clear arms cleanly, but loses the read arms' need to set local state (`root_marked = False`) or jump to the next iteration (`continue`). Those sites would still need their own try/except, defeating the dedup.
 - A wrapper function like `read_marker_or_none(path) -> bool | None` — specific enough to fit one caller's shape (the purge read loop), but would need a different signature for each call site (state.py wants `State | None`; reconcile wants the read tuple).
 
-Surfaced during a review cycle (the third site needing the idiom was identified by an automated review on the purge loop).
-
 **Fix candidates:**
 
 - **Extract a `suppress_vanished()` context manager** and apply it at the silent-pass sites only. Pros: removes two-line `except FileNotFoundError: pass` boilerplate at the purge clear arms. Cons: the read sites cannot use it (they need to set a flag or `continue`), so the helper would only apply to a minority of the seven sites.
@@ -217,7 +215,7 @@ Surfaced during a review cycle (the third site needing the idiom was identified 
 
 Touches: `src/dbxignore/cli.py`, `src/dbxignore/state.py`, `src/dbxignore/reconcile.py` (one helper added, ~3-7 call sites updated depending on which extraction shape is picked).
 
-## 13. `_DeferredEvents.drain` redispatches serially on the worker thread; large bursts could delay Phase 2
+## 11. `_DeferredEvents.drain` redispatches serially on the worker thread; large bursts could delay Phase 2
 
 `daemon._sweep_once`'s drain block (`daemon.py:946-953`) iterates `deferred.drain()` and calls `redispatch(event)` synchronously per event before Phase 2 reconcile begins. Each `redispatch` runs `_dispatch` which can call `reconcile_subtree` synchronously. If a burst of N OTHER events lands during the ~50s initial-sweep window on a large tree, the drain's wall-clock becomes `N × per-event reconcile cost` — directly delaying Phase 2's start.
 
@@ -233,7 +231,7 @@ Practical bound: Phase 2 follows immediately after drain and reconciles every ro
 
 Touches: `src/dbxignore/daemon.py` `_DeferredEvents` class (~10 LOC for cap if fix candidate 1); `tests/test_daemon_synthetic_events.py` (new overflow test).
 
-## 16. Two-tier ignore/skip rule structure as an alternative to interleaved negations
+## 12. Two-tier ignore/skip rule structure as an alternative to interleaved negations
 
 The rule model is single-tier: one gitignore-style spec per `.dropboxignore`, with `!pattern` negations the only re-include mechanism. Negations under an ignored ancestor are dropped (`is_dropped`) because Dropbox's folder-inheritance model genuinely cannot express them. An alternative authoring model would split each file into two independent specs — an ignore-spec and a separately-evaluated skip-spec — instead of interleaving negations into one list.
 
@@ -245,11 +243,11 @@ The honest scope: this does **not** bypass the ancestor-inheritance constraint (
 
 Touches: `src/dbxignore/rules.py` (parse + match model); `src/dbxignore/rules_conflicts.py` (skip-spec changes the conflict surface); `README.md` (rule-syntax docs).
 
-## 18. Confirm watchdog doesn't rewalk subtrees on every directory event under burst load
+## 13. Confirm watchdog doesn't rewalk subtrees on every directory event under burst load
 
 The daemon uses watchdog's recursive observer. Some recursive-watch implementations re-walk a subtree on every Create/Rename/Remove event to keep their watch set current — a per-event cost that compounds badly under burst workloads (`git checkout` of a large branch, `npm install`). It's unconfirmed whether watchdog's Linux inotify backend does this internally.
 
-This is a different axis from #7 (which is about the *number* of inotify watches, one per directory). #18 is about per-event *CPU cost* during bursts, regardless of watch count.
+This is a different axis from #7 (which is about the *number* of inotify watches, one per directory). This item is about per-event *CPU cost* during bursts, regardless of watch count.
 
 **Fix candidates:** investigation only — instrument `_dispatch` event-rate and wall-clock during a synthetic burst (create/rename/delete thousands of files under a watched root), and read watchdog's inotify-emitter source to confirm or rule out an internal rewalk. If a rewalk exists and is costly, the fix is a separate item.
 
@@ -257,7 +255,7 @@ This is a different axis from #7 (which is about the *number* of inotify watches
 
 Touches: investigation — `src/dbxignore/daemon.py` (`_dispatch`, `_WatchdogHandler`) instrumentation; no production change until findings land.
 
-## 19. Finer-grained intra-root parallelism for the initial/recovery sweep
+## 14. Finer-grained intra-root parallelism for the initial/recovery sweep
 
 #6's existing per-subdir fan-out parallelizes the sweep by fanning `reconcile_subtree` out across top-level subdirs (one worker per subdir). A tree with one very large top-level subdir and many small ones still bottlenecks on the single worker handling the big one — the fan-out granularity is "top-level subdir", not "directory frame".
 
@@ -270,7 +268,7 @@ Touches: investigation — `src/dbxignore/daemon.py` (`_dispatch`, `_WatchdogHan
 
 Touches: `src/dbxignore/daemon.py` (`_sweep_once` fan-out); `src/dbxignore/reconcile.py` (`reconcile_subtree` would need a parallel-walk variant or an injectable executor).
 
-## 20. Observer/callback hook on `RuleCache` mutations
+## 15. Observer/callback hook on `RuleCache` mutations
 
 `RuleCache` mutations (`load_root`, `reload_file`, `remove_file`) have no notification mechanism — a consumer that wants to react to rule changes has to poll. Not needed today: the daemon's reconcile is the only consumer and it's driven by watchdog events, not by observing cache state. A future TUI/GUI surface displaying live rule state would need this.
 
@@ -280,23 +278,23 @@ Touches: `src/dbxignore/daemon.py` (`_sweep_once` fan-out); `src/dbxignore/recon
 
 Touches: `src/dbxignore/rules.py` (`RuleCache` mutation methods); whatever consumer triggers the need.
 
-## 21. Windows daemon occasionally writes `daemon_create_time: null` to `state.json`
+## 16. Windows daemon occasionally writes `daemon_create_time: null` to `state.json`
 
-While diagnosing a manual-test Phase 2 race, `state.json` was observed with `daemon_create_time: null` despite a populated `daemon_pid`. A subsequent observation in the same session showed `daemon_create_time` populated as a normal float (e.g. `1778913203.7717907`). Non-deterministic; both observations were on Windows. Not confirmed on Linux/macOS.
+On Windows, `state.json` is occasionally written with `daemon_create_time: null` despite a populated `daemon_pid`; subsequent writes in the same session can populate it normally as a float (e.g. `1778913203.7717907`). Non-deterministic; not reproduced on Linux/macOS.
 
 `state.is_daemon_alive(pid, create_time)` falls back to a PID-only check when `create_time` is None, silently disabling the PID-reuse-race protection that the create-time comparison provides. A recycled PID claimed by an unrelated process would register as alive in that mode. Happy-path liveness still works (the PID check covers it), so this doesn't surface as a user-visible bug — it just removes a safety net.
 
-The same null-create_time state also defeats `install/windows_task.py:uninstall_task`'s wait loop: when state.json's PID is stale (different from the actual daemon), `is_daemon_alive(stale_pid, create_time=None)` returns False on the first poll, the loop breaks immediately, and `schtasks /Delete /F` runs while `schtasks /End` is still asynchronously stopping the real daemon. That race is what surfaced the symptom; the create_time-null path is the underlying enabler.
+The same null-create_time state also defeats `install/windows_task.py:uninstall_task`'s wait loop: when state.json's PID is stale (different from the actual daemon), `is_daemon_alive(stale_pid, create_time=None)` returns False on the first poll, the loop breaks immediately, and `schtasks /Delete /F` runs while `schtasks /End` is still asynchronously stopping the real daemon. The create_time-null path is the underlying enabler.
 
-**Diagnostic instrumentation landed (PR #265):** the previous inline `try / except Exception` at `daemon.run`'s create_time capture site was extracted to `daemon._capture_create_time()`. The catch was narrowed to `(ImportError, psutil.Error, OSError, SystemError)` and every caught arm logs a WARNING with the exception type+message. Unanticipated exception types now propagate up `daemon.run` (releasing the singleton lock via the outer `try/finally` and aborting startup before the observer or initial-sweep worker are created) instead of being swallowed silently. **The next `daemon_create_time: null` observation in the wild will leave forensic data in `daemon.log`** — fix candidate 1 below is unblocked pending that data; candidates 2 and 3 remain deferred until candidate 1 either confirms the failure is transient (then 2 helps) or persistent (then 3 helps).
+**Diagnostic instrumentation in place:** `daemon._capture_create_time()` wraps the `psutil.Process(os.getpid()).create_time()` call with a narrow `(ImportError, psutil.Error, OSError, SystemError)` catch; every caught arm logs a WARNING with the exception type+message. Unanticipated exception types propagate up `daemon.run` (releasing the singleton lock via the outer `try/finally` and aborting startup before the observer or initial-sweep worker are created) instead of being swallowed silently. **Any `daemon_create_time: null` observation in the wild leaves forensic data in `daemon.log`** — fix candidate 1 below is unblocked pending that data; candidates 2 and 3 remain deferred until candidate 1 either confirms the failure is transient (then 2 helps) or persistent (then 3 helps).
 
 **Fix candidates:**
 
-1. **Trace why `psutil.Process(os.getpid()).create_time()` returns or is captured as None on the daemon's first `state.write()` call.** ~~Candidate causes: a transient psutil import-state issue on Python 3.14 (related to the symptom class in #12); a call-site path in `state.write()` where `create_time` isn't queried before the first early write; a `state.read` codepath that drops the field while round-tripping.~~ Unblocked by the diagnostic above: the next null observation will pin the exception type. Awaiting next occurrence.
+1. **Trace why `psutil.Process(os.getpid()).create_time()` returns or is captured as None on the daemon's first `state.write()` call.** Unblocked by the diagnostic above: a null observation will pin the exception type. Awaiting an occurrence.
 2. **Retry on null capture.** If the create_time read can legitimately fail, retry once after a brief delay; log a WARNING and write what's available so existing PID-only checks continue to work. Defer until candidate 1's data confirms the failure is transient.
 3. **Reject stale-PID writes earlier.** Independent of root cause — when `state.write()` updates `daemon_pid`, treat a None `daemon_create_time` as a write-error and skip persisting until both fields are available; the next sweep tick will retry. Defer until candidate 1's data confirms the failure is persistent.
 
-**Urgency:** low. Doesn't surface as a user-visible bug on its own; affects only PID-reuse-race protection plus the `uninstall_task` wait when state.json is stale. Awaiting trigger: an actual PID-reuse incident, or a null observation that now carries the exception type in `daemon.log`.
+**Urgency:** low. Doesn't surface as a user-visible bug on its own; affects only PID-reuse-race protection plus the `uninstall_task` wait when state.json is stale. Awaiting trigger: an actual PID-reuse incident, or a null observation that carries the exception type in `daemon.log`.
 
 Touches: `src/dbxignore/daemon.py` (`_capture_create_time` helper + `daemon.run`'s call site); `src/dbxignore/state.py` (`State.write`, `is_daemon_alive` if behavior changes once root cause is known); `tests/test_daemon_capture_create_time.py` (diagnostic helper).
 
@@ -304,7 +302,7 @@ Touches: `src/dbxignore/daemon.py` (`_capture_create_time` helper + `daemon.run`
 
 ### Open
 
-Fourteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Sixteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#1** — Intel Mac (x86_64) Mach-O binary build leg. dbxignore ships arm64-only Mach-O binaries; Intel users install via PyPI. Awaits demand signal.
 - **#2** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #1. Defer until item #1 actually triggers.
@@ -316,9 +314,9 @@ Fourteen items. Most are passive (no concrete trigger requires action) — bundl
 - **#8** — macOS sync-mode detection is process-global; mixed legacy/File-Provider account setups may need per-root or write-both behavior.
 - **#9** — `dropbox_root` fixture from `test_cli_symlink_path_args.py` packages the ~27-site inline `monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])` pattern across `test_cli_apply.py` / `test_cli_clear.py` / `test_cli_status_list_explain.py`. Filed for design-tension record (precedent: #4, #5); current dual shape is defensible.
 - **#10** — `FileNotFoundError`-before-`OSError` 'vanished path' idiom now repeats across `reconcile._reconcile_path` (2 sites), `state._read_at` (1 site), and `cli.uninstall --purge` (4 sites). Filed for design-tension record (precedent: #4, #5, #9); current per-site shape is defensible because the local response action varies (return None / set flag / continue / pass) and no generic helper fits all seven sites.
-- **#13** — `_DeferredEvents.drain` redispatches serially on the worker thread before Phase 2 starts; a large startup-window burst could delay Phase 2's wall-clock unnecessarily. Mostly redundant with Phase 2 anyway. No observed problem.
-- **#16** — Two-tier ignore/skip rule structure as an alternative to interleaved negations. RFC only; does not bypass Dropbox's ancestor-inheritance constraint — purely an authoring-ergonomics question. `is_dropped` is the defensible current answer. Awaiting a concrete UX-insufficiency case.
-- **#18** — Confirm watchdog doesn't internally rewalk subtrees on every directory event under burst load. Per-event CPU cost axis, distinct from #7's watch-count axis. Investigation only. Awaiting a beta-tester CPU-spike report during bulk file ops.
-- **#19** — Finer-grained intra-root sweep parallelism below #6's top-level-subdir fan-out granularity. Matters only for trees where one subtree dominates wall-clock after the existing fan-out. Awaiting a profiled lopsided-tree case.
-- **#20** — Observer/callback hook on `RuleCache` mutations. Not needed until a TUI/GUI surface wants live rule state; callbacks must not re-enter the `_rules` lock. Awaiting TUI/GUI work.
-- **#21** — Windows daemon occasionally writes `daemon_create_time: null` to `state.json`; non-deterministic, both observations on Windows. Silently disables PID-reuse-race protection in `is_daemon_alive` AND defeats `uninstall_task`'s wait loop when state.json's PID is stale (the underlying enabler of the manual-test Phase 2 race fixed in `fix/manual-test-phase2-cleanup`). Diagnostic instrumentation landed in PR #265 (`daemon._capture_create_time` helper, narrowed catch, WARNING with exception type+message). Awaiting trigger: the next null observation now carries forensic data in `daemon.log`.
+- **#11** — `_DeferredEvents.drain` redispatches serially on the worker thread before Phase 2 starts; a large startup-window burst could delay Phase 2's wall-clock unnecessarily. Mostly redundant with Phase 2 anyway. No observed problem.
+- **#12** — Two-tier ignore/skip rule structure as an alternative to interleaved negations. RFC only; does not bypass Dropbox's ancestor-inheritance constraint — purely an authoring-ergonomics question. `is_dropped` is the defensible current answer. Awaiting a concrete UX-insufficiency case.
+- **#13** — Confirm watchdog doesn't internally rewalk subtrees on every directory event under burst load. Per-event CPU cost axis, distinct from #7's watch-count axis. Investigation only. Awaiting a beta-tester CPU-spike report during bulk file ops.
+- **#14** — Finer-grained intra-root sweep parallelism below #6's top-level-subdir fan-out granularity. Matters only for trees where one subtree dominates wall-clock after the existing fan-out. Awaiting a profiled lopsided-tree case.
+- **#15** — Observer/callback hook on `RuleCache` mutations. Not needed until a TUI/GUI surface wants live rule state; callbacks must not re-enter the `_rules` lock. Awaiting TUI/GUI work.
+- **#16** — Windows daemon occasionally writes `daemon_create_time: null` to `state.json`; non-deterministic, observed only on Windows. Silently disables PID-reuse-race protection in `is_daemon_alive` AND defeats `uninstall_task`'s wait loop when state.json's PID is stale. `daemon._capture_create_time` wraps the capture with a narrow catch + WARNING; a null observation in the wild carries forensic data in `daemon.log`.

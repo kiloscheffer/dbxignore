@@ -556,8 +556,8 @@ def test_dispatch_moved_rules_to_non_rules_does_not_reload_backup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Editor save-via-rename step: `.dropboxignore` -> `.dropboxignore~`.
-    Dispatch must drop the old rule file from the cache and must NOT call
-    `cache.reload_file` on the backup. Pins the dispatch contract only;
+    Dispatch must drop the renamed rule file from the cache and must NOT
+    call `cache.reload_file` on the backup. Pins the dispatch contract only;
     the downstream `_build_sequence` cleanliness is a consequence covered
     by the rule-cache layer."""
     root = tmp_path.resolve()
@@ -995,8 +995,8 @@ def test_resolve_under_roots_drops_path_that_escapes_via_symlink(tmp_path: Path)
         pytest.skip(f"cannot create symlink in this environment: {exc}")
 
     # Event reports the link path. Lexical-first returns the link path
-    # itself (under root); the previous code resolved it and would have
-    # returned `outside`, which is not under root.
+    # itself (under root); resolving it would return `outside`, which is
+    # not under root.
     result = daemon._resolve_under_roots(str(link), [root])
     assert result is not None
     out_root, out_path = result

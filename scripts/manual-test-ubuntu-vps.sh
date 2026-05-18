@@ -343,19 +343,18 @@ phase_dbxignore_install() {
         # `uv tool install` then does an incremental update (only changed
         # packages reinstall; others survive, producing a hybrid venv with
         # subtly broken C-extension state). Detect the orphan venv here
-        # and clean it up so the next install is fresh. See PR #266.
+        # and clean it up so the next install is fresh.
         #
-        # State machine, derived across four review rounds:
+        # State machine:
         #
         # - venv exists AND no shims at $(uv tool dir --bin)
-        #     → BACKLOG #12's documented case. Auto-recover (daemon-kill
-        #       + service-unit teardown + venv removal). Mirrors the
-        #       known-install teardown above, minus the `dbxignore
-        #       uninstall` CLI call. Daemon-kill is defensive: POSIX
-        #       unlink-while-open lets a daemon process predating the
-        #       partial uninstall survive venv removal, so it'd keep
-        #       writing state.json / holding the singleton lock during
-        #       the rest of the test.
+        #     → Auto-recoverable case. Daemon-kill + service-unit
+        #       teardown + venv removal. Mirrors the known-install
+        #       teardown above, minus the `dbxignore uninstall` CLI
+        #       call. Daemon-kill is defensive: POSIX unlink-while-open
+        #       lets a daemon process predating the partial uninstall
+        #       survive venv removal, so it'd keep writing state.json /
+        #       holding the singleton lock during the rest of the test.
         #
         # - shims exist (with or without venv)
         #     → Ambiguous origin: `uv tool dir --bin` commonly resolves
@@ -421,7 +420,7 @@ EOF
 )"
         fi
         if [ "$venv_exists" -eq 1 ]; then
-            # venv-only orphan: BACKLOG #12's documented case. Auto-recover.
+            # venv-only orphan: auto-recoverable case.
             note "${Y}WARNING:${X} orphan install detected — prior uv tool uninstall partially failed"
 
             # Service-unit teardown (best-effort: no-ops when nothing exists,

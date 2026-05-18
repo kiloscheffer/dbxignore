@@ -395,15 +395,14 @@ function Test-InstallDbxignore {
         # reinstall; others survive from the prior install, producing a
         # hybrid venv with subtly broken C-extension state). Detect the
         # orphan venv here and clean it up so the next install is fresh.
-        # See PR #266.
         #
-        # State machine, derived across four review rounds:
+        # State machine:
         #
         # - venv exists AND no shims at $(uv tool dir --bin)
-        #     → BACKLOG #12's documented case. Auto-recover (daemon-kill +
-        #       service-unit teardown + venv removal). Mirrors the known-
-        #       install teardown above, minus the `dbxignore uninstall`
-        #       CLI call. Daemon-kill is defensive: a Task Scheduler
+        #     → Auto-recoverable case. Daemon-kill + service-unit
+        #       teardown + venv removal. Mirrors the known-install
+        #       teardown above, minus the `dbxignore uninstall` CLI
+        #       call. Daemon-kill is defensive: a Task Scheduler
         #       launch predating the partial uninstall keeps pythonw.exe
         #       / dbxignorew.exe memory-mapped, so venv removal can fail
         #       on the lock unless the process is gone first.
@@ -467,7 +466,7 @@ then re-run this script.
 "@
         }
         if ($venvExists) {
-            # venv-only orphan: BACKLOG #12's documented case. Auto-recover.
+            # venv-only orphan: auto-recoverable case.
             Write-Note "${Y}WARNING:${X} orphan install detected - prior uv tool uninstall partially failed"
 
             # Service-unit teardown (best-effort: schtasks returns non-zero

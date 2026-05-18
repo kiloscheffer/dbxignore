@@ -273,28 +273,6 @@ Practical bound: Phase 2 follows immediately after drain and reconciles every ro
 
 Touches: `src/dbxignore/daemon.py` `_DeferredEvents` class (~10 LOC for cap if fix candidate 1); `tests/test_daemon_synthetic_events.py` (new overflow test).
 
-## 14. macOS sync-mode detection defaults to legacy when info.json is missing and pluginkit reports the extension as `allowed`
-
-`_backends/macos_xattr.py:_detect()` is path-primary: it reads account paths from `~/.dropbox/info.json` and uses `pluginkit` only to disambiguate. When `info.json` is missing, unreadable, or stale, `_read_dropbox_paths_from_info()` returns `[]` (intentionally — mode detection needs the *configured* sync mode, which lives only in info.json, so it bypasses the `DBXIGNORE_ROOT` override on purpose). With no path signal, `_detect()` branches on `pluginkit` state:
-
-- `disabled` → `[ATTR_LEGACY]` (correct — user opted out of File Provider).
-- `unknown` → `[ATTR_LEGACY, ATTR_FILEPROVIDER]` (the defensive write-both case).
-- `allowed` or `not_registered` → falls through to the confident `[ATTR_LEGACY]` default.
-
-The gap is the `allowed` arm. `allowed` means the File Provider extension is registered and the OS will dispatch events to it — a *weak signal toward* File Provider, not toward legacy. If the user's Dropbox is actually in File Provider mode but `info.json` is missing/stale (a non-stock install, a Dropbox reinstall mid-flight, a `DBXIGNORE_ROOT` override pointing at a `~/Library/CloudStorage/` folder on a host whose `~/.dropbox/info.json` never got written), `_detect()` writes `com.dropbox.ignored` while Dropbox watches `com.apple.fileprovider.ignore#P` and never honors the marker. The failure is silent: the marker write succeeds, Dropbox just ignores it.
-
-This is narrow — a normal Dropbox install always writes `info.json`, which is decisive — so it requires a missing/stale `info.json` *and* `pluginkit` reporting `allowed`.
-
-**Fix candidates:**
-
-1. **Widen the defensive write-both case to cover `allowed` + no decisive path signal.** Today only `unknown` triggers `[ATTR_LEGACY, ATTR_FILEPROVIDER]`; extend it to `allowed`-with-no-path-signal. The inactive stack just carries a stray attribute — the same metadata-cleanliness-vs-correctness trade `_detect()` already documents for the `unknown` case. Smallest change; stays within the module's existing logic. Preferred.
-2. **Use the operational root as a fallback path signal when info.json yields nothing** — consult `roots.discover()` / `DBXIGNORE_ROOT` and apply the same `~/Library/CloudStorage/` and `/Volumes/` path tests. More invasive: it crosses the deliberate info.json-only boundary `_read_dropbox_paths_from_info()`'s docstring describes, and needs care not to reintroduce the system-vs-user-signal conflation the path-primary design fixed.
-3. **Per-path attribute selection** when the reconciled path is itself under `~/Library/CloudStorage/` or `/Volumes/`. Most precise, biggest change — `_detect()`'s result is currently cached process-wide and path-independent.
-
-**Urgency:** low-medium. A silent wrong-attribute write is a real correctness failure, but the trigger (missing/stale info.json + `pluginkit` `allowed`) is uncommon on stock installs. No user report. Bundle with the next `_backends/macos_xattr.py` edit.
-
-Touches: `src/dbxignore/_backends/macos_xattr.py:_detect()` (~5 LOC for fix candidate 1); `tests/test_macos_xattr_unit.py` (new test: empty info.json paths + `pluginkit` `allowed` → asserts both attribute names returned).
-
 ## 16. Two-tier ignore/skip rule structure as an alternative to interleaved negations
 
 The rule model is single-tier: one gitignore-style spec per `.dropboxignore`, with `!pattern` negations the only re-include mechanism. Negations under an ignored ancestor are dropped (`is_dropped`) because Dropbox's folder-inheritance model genuinely cannot express them. An alternative authoring model would split each file into two independent specs — an ignore-spec and a separately-evaluated skip-spec — instead of interleaving negations into one list.
@@ -398,7 +376,7 @@ Touches: `scripts/manual-test-windows.ps1`.
 
 ### Open
 
-Nineteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Eighteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#1** — Intel Mac (x86_64) Mach-O binary build leg. dbxignore ships arm64-only Mach-O binaries; Intel users install via PyPI. Awaits demand signal.
 - **#2** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #1. Defer until item #1 actually triggers.
@@ -413,7 +391,6 @@ Nineteen items. Most are passive (no concrete trigger requires action) — bundl
 - **#11** — Other `cmd | grep -q` sites in `scripts/manual-test-{ubuntu-vps,macos}.sh` (`--help`, `explain`, `uv tool list`) share the SIGPIPE+pipefail false-failure risk that bit 5f. Capture-then-grep is the preemptive fix; defer until one of them actually flakes.
 - **#12** — Failed `uv tool uninstall` leaves the venv directory behind; the next `uv tool install` does an incremental update instead of fresh install, producing a hybrid venv (mixed install-event packages). Triggers subtle import / C-extension issues. Recovery is manual `Remove-Item ~\AppData\Roaming\uv\tools\<pkg>`.
 - **#13** — `_DeferredEvents.drain` redispatches serially on the worker thread before Phase 2 starts; a large startup-window burst could delay Phase 2's wall-clock unnecessarily. Mostly redundant with Phase 2 anyway. No observed problem.
-- **#14** — macOS detection defaults to legacy when info.json is missing and pluginkit reports the extension as `allowed`; widening the defensive write-both case is the smallest fix.
 - **#16** — Two-tier ignore/skip rule structure as an alternative to interleaved negations. RFC only; does not bypass Dropbox's ancestor-inheritance constraint — purely an authoring-ergonomics question. `is_dropped` is the defensible current answer. Awaiting a concrete UX-insufficiency case.
 - **#17** — Evaluate `igittigitt` as a `pathspec` replacement. 30-min spike (diff both libraries against the rules test corpus) before the next significant rules-layer change; conflict detector + `is_dropped` stay dbxignore-specific regardless, so the simplification ceiling may be modest.
 - **#18** — Confirm watchdog doesn't internally rewalk subtrees on every directory event under burst load. Per-event CPU cost axis, distinct from #7's watch-count axis. Investigation only. Awaiting a beta-tester CPU-spike report during bulk file ops.

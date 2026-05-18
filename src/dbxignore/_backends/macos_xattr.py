@@ -46,6 +46,8 @@ Path elsewhere + extension allowed                          ``[ATTR_FILEPROVIDER
 (external-drive eligibility-gated)
 Pluginkit unknown + no decisive path signal                 ``[ATTR_LEGACY, ATTR_FILEPROVIDER]``
 (write-both defensive)
+Pluginkit allowed + info.json missing/empty                 ``[ATTR_LEGACY, ATTR_FILEPROVIDER]``
+(write-both defensive)
 Otherwise                                                   ``[ATTR_LEGACY]``
 ==========================================================  =========================================
 
@@ -230,10 +232,19 @@ def _detect() -> tuple[list[str], str]:
          ``com.apple.fileprovider.ignore#P`` so whichever sync stack
          actually reads its own attribute name finds it; the other stack
          simply ignores the stray attribute.
+       - **Pluginkit allowed + info.json missing/empty** → both attributes.
+         The user has Dropbox.app installed (extension registered) but
+         info.json gave us no path at all (file missing, unreadable, or
+         every account-path entry was filtered out), so we have no way
+         to tell whether this account is legacy or File Provider. Write
+         both names defensively — same trade as the unknown arm. Only
+         fires when ``paths`` is empty; if at least one info.json path
+         exists but none matched CloudStorage / /Volumes, the deliberate
+         "legacy with extension ambient" case below applies instead.
        - **Otherwise** → legacy.  Confident default when extension is
-         not_registered (pure legacy install) or allowed but no path is
-         under CloudStorage / /Volumes (legacy install with the extension
-         ambient on disk).
+         not_registered (pure legacy install) or allowed with at least
+         one info.json path but none under CloudStorage / /Volumes
+         (legacy install with the extension ambient on disk).
 
     Why path-primary rather than pluginkit-primary: PluginKit registration
     is a *system-level* fact (does macOS know about ``DropboxFileProvider.appex``?).
@@ -308,6 +319,26 @@ def _detect() -> tuple[list[str], str]:
         result = (
             [ATTR_LEGACY, ATTR_FILEPROVIDER],
             "both: pluginkit unavailable; writing both attributes defensively",
+        )
+        _decision_cache = result
+        logger.debug("Sync mode detection: %s", result[1])
+        return result
+
+    # Allowed extension + no info.json paths at all is genuinely
+    # uncertain too: the user has Dropbox.app installed (FP extension
+    # is registered) but we have no path signal to confirm whether
+    # *this* account is in legacy or File Provider mode. A silent
+    # legacy default here writes ``com.dropbox.ignored`` only; if
+    # Dropbox is actually in File Provider mode it watches
+    # ``com.apple.fileprovider.ignore#P`` and ignores the marker. Write
+    # both names defensively. Crucially, this fires only when ``paths``
+    # is empty (info.json missing/unreadable) — the deliberate
+    # "extension installed but account in legacy mode" case has at
+    # least one info.json path and stays single-attribute legacy.
+    if extension_state == "allowed" and not paths:
+        result = (
+            [ATTR_LEGACY, ATTR_FILEPROVIDER],
+            "both: pluginkit allowed but no info.json paths; writing both attributes defensively",
         )
         _decision_cache = result
         logger.debug("Sync mode detection: %s", result[1])

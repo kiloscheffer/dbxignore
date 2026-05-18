@@ -327,32 +327,11 @@ The same null-create_time state also defeats `install/windows_task.py:uninstall_
 
 Touches: `src/dbxignore/daemon.py` (startup `state.write` call site); `src/dbxignore/state.py` (`State.write`, `is_daemon_alive` if behavior changes); a new unit test in `tests/test_state.py` covering both the null-capture path and the round-trip.
 
-## 22. Remaining bare-Remove sites under DropboxDir in manual-test-windows.ps1
-
-PR #260 (`fix/manual-test-phase4-dropbox-race`) extracted `Remove-DirWithRetry` and converted six bare `Remove-Item -Recurse -Force` sites in Phase 4 (4d, 4m, 4o, 4p-cleanup, 4q, 4q-cleanup) that target `$T` or `$target4{o,q}` — all paths inside `$script:DropboxDir`. Five other sites under the same DropboxDir tree were left as bare `Remove-Item -Recurse -Force -ErrorAction SilentlyContinue`:
-
-- Phase 4s setup
-- Phase 4t setup
-- Phase 4v setup
-- Phase 4v cleanup
-- Phase 7 cleanup of `$T`
-
-These differ from the converted six in that they pass `-ErrorAction SilentlyContinue`, so a race-induced failure converts to a silent skip rather than a hard abort. The script doesn't crash, but the next test case can run against a contaminated `$T` (stale files from a prior case) instead of a fresh tree, producing misleading PASS results (the assertion holds for the wrong reason) or misleading-cause failures (the failure points at the current case but the actual root cause is leftover state from a prior case).
-
-**Fix candidates:**
-
-1. **Replace each of the five sites with `Remove-DirWithRetry`** (and drop the `-ErrorAction SilentlyContinue`, since the helper has its own give-up-and-throw at the 10s mark). Same shape as the six already converted in PR #260. Trivial — five line-level edits.
-2. **Defer until one of these sites actually flakes.** The Dropbox-handle race tends to surface as a thundering herd around the first few test setups; by Phase 4s+ the daemon has been registered and Dropbox's initial-watch noise has settled. PR #260's verification run (122 PASS / 0 FAIL) didn't trip any of these five.
-
-**Urgency:** low. The risk is silent staleness rather than a hard failure, so the cost of leaving them is "obscure cross-case interference" rather than "broken test run." Bundle with the next significant edit to the test script.
-
-Touches: `scripts/manual-test-windows.ps1`.
-
 ## Status
 
 ### Open
 
-Seventeen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Sixteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#1** — Intel Mac (x86_64) Mach-O binary build leg. dbxignore ships arm64-only Mach-O binaries; Intel users install via PyPI. Awaits demand signal.
 - **#2** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #1. Defer until item #1 actually triggers.
@@ -372,4 +351,3 @@ Seventeen items. Most are passive (no concrete trigger requires action) — bund
 - **#19** — Finer-grained intra-root sweep parallelism below #6's top-level-subdir fan-out granularity. Matters only for trees where one subtree dominates wall-clock after the existing fan-out. Awaiting a profiled lopsided-tree case.
 - **#20** — Observer/callback hook on `RuleCache` mutations. Not needed until a TUI/GUI surface wants live rule state; callbacks must not re-enter the `_rules` lock. Awaiting TUI/GUI work.
 - **#21** — Windows daemon occasionally writes `daemon_create_time: null` to `state.json`; non-deterministic, both observations on Windows. Silently disables PID-reuse-race protection in `is_daemon_alive` AND defeats `uninstall_task`'s wait loop when state.json's PID is stale (the underlying enabler of the manual-test Phase 2 race fixed in `fix/manual-test-phase2-cleanup`). Awaiting trigger: independent reproduction or a real PID-reuse incident.
-- **#22** — Five bare `Remove-Item -Recurse -Force -ErrorAction SilentlyContinue` sites under `$script:DropboxDir` in `manual-test-windows.ps1` (Phase 4s/4t/4v setup+cleanup, Phase 7) could use the `Remove-DirWithRetry` helper PR #260 introduced. Today they silently skip on the Dropbox-handle race rather than aborting, so the script keeps running with potentially contaminated `$T`. No observed flake yet — awaiting one or a bundled cleanup PR.

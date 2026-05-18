@@ -300,3 +300,164 @@ jobs:
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
           packages-dir: dist/
+
+  publish-scoop:
+    # Auto-bump the kiloscheffer/scoop-dbxignore bucket manifest to the
+    # newly-released version. Runs in parallel with publish-pypi after
+    # publish-github (which ensures the binaries are on the release).
+    # Same release-tag + non-prerelease gating as publish-pypi.
+    needs: [classify-tag, publish-github]
+    if: |
+      startsWith(github.ref, 'refs/tags/')
+      && needs.classify-tag.outputs.is_prerelease != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine version from tag
+        id: ver
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute SHA256s for Windows binaries
+        id: hashes
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -e
+          EXE_SHA=$(curl -sSfL "https://github.com/${{ github.repository }}/releases/download/v$VERSION/dbxignore.exe" | sha256sum | awk '{print $1}')
+          EXEW_SHA=$(curl -sSfL "https://github.com/${{ github.repository }}/releases/download/v$VERSION/dbxignorew.exe" | sha256sum | awk '{print $1}')
+          echo "exe_sha=$EXE_SHA" >> "$GITHUB_OUTPUT"
+          echo "exew_sha=$EXEW_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout scoop-dbxignore
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: kiloscheffer/scoop-dbxignore
+          token: ${{ secrets.DISTRIBUTION_TOKEN }}
+          path: scoop-dbxignore
+
+      - name: Update manifest via jq
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          EXE_SHA: ${{ steps.hashes.outputs.exe_sha }}
+          EXEW_SHA: ${{ steps.hashes.outputs.exew_sha }}
+        run: |
+          cd scoop-dbxignore
+          jq --arg ver "$VERSION" --arg exe "$EXE_SHA" --arg exew "$EXEW_SHA" \
+            '.version = $ver |
+             .architecture."64bit".url = [
+               "https://github.com/kiloscheffer/dbxignore/releases/download/v\($ver)/dbxignore.exe",
+               "https://github.com/kiloscheffer/dbxignore/releases/download/v\($ver)/dbxignorew.exe"
+             ] |
+             .architecture."64bit".hash = [$exe, $exew]' \
+            bucket/dbxignore.json > bucket/dbxignore.json.tmp
+          mv bucket/dbxignore.json.tmp bucket/dbxignore.json
+
+      - name: Commit and push
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          cd scoop-dbxignore
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet bucket/dbxignore.json; then
+            echo "scoop manifest already at $VERSION; nothing to push"
+          else
+            git add bucket/dbxignore.json
+            git commit -m "chore: bump manifest to dbxignore $VERSION"
+            git push
+          fi
+
+  publish-homebrew:
+    # Auto-bump the kiloscheffer/homebrew-dbxignore tap formula to the
+    # newly-released version. Updates URL + sha256 for both macOS Mach-O
+    # and Linux x86_64 tar.gz binaries via inline Python regex.
+    needs: [classify-tag, publish-github]
+    if: |
+      startsWith(github.ref, 'refs/tags/')
+      && needs.classify-tag.outputs.is_prerelease != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine version from tag
+        id: ver
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute SHA256s for macOS + Linux binaries
+        id: hashes
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -e
+          MACOS_SHA=$(curl -sSfL "https://github.com/${{ github.repository }}/releases/download/v$VERSION/dbxignore" | sha256sum | awk '{print $1}')
+          LINUX_SHA=$(curl -sSfL "https://github.com/${{ github.repository }}/releases/download/v$VERSION/dbxignore-linux-x86_64.tar.gz" | sha256sum | awk '{print $1}')
+          echo "macos_sha=$MACOS_SHA" >> "$GITHUB_OUTPUT"
+          echo "linux_sha=$LINUX_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout homebrew-dbxignore
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: kiloscheffer/homebrew-dbxignore
+          token: ${{ secrets.DISTRIBUTION_TOKEN }}
+          path: homebrew-dbxignore
+
+      - name: Update formula
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          MACOS_SHA: ${{ steps.hashes.outputs.macos_sha }}
+          LINUX_SHA: ${{ steps.hashes.outputs.linux_sha }}
+        run: |
+          cd homebrew-dbxignore
+          python3 <<'PYEOF'
+          import os, re
+          version = os.environ['VERSION']
+          macos_sha = os.environ['MACOS_SHA']
+          linux_sha = os.environ['LINUX_SHA']
+          with open('Formula/dbxignore.rb') as f:
+              content = f.read()
+          content = re.sub(r'^  version "[^"]*"', f'  version "{version}"', content, count=1, flags=re.M)
+          content = re.sub(
+              r'url "https://github\.com/kiloscheffer/dbxignore/releases/download/v[^"]+/dbxignore"\n(\s+)sha256 "[a-f0-9]+"',
+              f'url "https://github.com/kiloscheffer/dbxignore/releases/download/v{version}/dbxignore"\n\\1sha256 "{macos_sha}"',
+              content,
+          )
+          content = re.sub(
+              r'url "https://github\.com/kiloscheffer/dbxignore/releases/download/v[^"]+/dbxignore-linux-x86_64\.tar\.gz"\n(\s+)sha256 "[a-f0-9]+"',
+              f'url "https://github.com/kiloscheffer/dbxignore/releases/download/v{version}/dbxignore-linux-x86_64.tar.gz"\n\\1sha256 "{linux_sha}"',
+              content,
+          )
+          content = re.sub(r'assert_match "[^"]+"', f'assert_match "{version}"', content, count=1)
+          with open('Formula/dbxignore.rb', 'w') as f:
+              f.write(content)
+          PYEOF
+
+      - name: Commit and push
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          cd homebrew-dbxignore
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet Formula/dbxignore.rb; then
+            echo "homebrew formula already at $VERSION; nothing to push"
+          else
+            git add Formula/dbxignore.rb
+            git commit -m "chore: bump formula to dbxignore $VERSION"
+            git push
+          fi
+
+  publish-winget:
+    # Auto-submit a winget-pkgs PR for the new release. Uses the
+    # kiloscheffer/winget-pkgs fork (auto-created on first wingetcreate
+    # submit). DISTRIBUTION_TOKEN PAT scopes Contents + Pull requests
+    # on the fork. Action runs on ubuntu-latest (komac is cross-platform).
+    needs: [classify-tag, publish-github]
+    if: |
+      startsWith(github.ref, 'refs/tags/')
+      && needs.classify-tag.outputs.is_prerelease != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Submit to winget-pkgs
+        uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
+        with:
+          identifier: kiloscheffer.dbxignore
+          installers-regex: '^dbxignore-windows-x86_64\.zip$'
+          release-tag: ${{ github.ref_name }}
+          token: ${{ secrets.DISTRIBUTION_TOKEN }}

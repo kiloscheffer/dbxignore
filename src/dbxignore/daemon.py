@@ -594,6 +594,48 @@ def _acquire_singleton_lock() -> Any | None:
     return fh
 
 
+def _capture_create_time() -> float | None:
+    """Capture this daemon's psutil ``create_time`` for PID-reuse race detection.
+
+    Returns the float on success, ``None`` on caught failure. The catch is
+    intentionally narrow — ``(ImportError, psutil.Error, OSError, SystemError)``
+    — and every caught branch logs a WARNING with the exception type+message.
+    Per backlog #21, the previous bare ``except Exception`` swallowed the cause
+    silently so the next ``daemon_create_time: null`` observation in the wild
+    left no diagnostic data; the WARNING is what unblocks root-cause analysis
+    of the intermittent Windows null observations.
+
+    Unanticipated exception types propagate so ``_initial_sweep_worker``'s
+    outer handler logs the traceback and the daemon shuts down via the same
+    path SIGTERM uses — preferable to silently mis-initializing the daemon
+    with a misleading ``None`` record.
+
+    ``SystemError`` is in the caught set because psutil C-extension calls can
+    raise it when CPython's exception state is wrapping another exception
+    (see the matching catch in ``state.is_daemon_alive``'s ``os.kill``
+    fallback — same psutil-partial-init concern).
+    """
+    try:
+        import psutil  # type: ignore[import-untyped, unused-ignore]
+    except ImportError as exc:
+        logger.warning(
+            "psutil unavailable for daemon_create_time capture (%s); "
+            "PID-reuse-race protection will be disabled for this daemon process",
+            exc,
+        )
+        return None
+    try:
+        return float(psutil.Process(os.getpid()).create_time())
+    except (psutil.Error, OSError, SystemError) as exc:
+        logger.warning(
+            "could not capture daemon_create_time (%s: %s); "
+            "PID-reuse-race protection will be disabled for this daemon process",
+            type(exc).__name__,
+            exc,
+        )
+        return None
+
+
 def _start_observer_or_exit(observer: BaseObserver) -> None:
     """Start ``observer``; trap inotify watch/instance exhaustion and exit 75.
 
@@ -717,14 +759,7 @@ def run(stop_event: threading.Event | None = None) -> None:
 
             # Capture our own process create_time so the persisted state.json
             # carries it for future is_daemon_alive(create_time=...) checks.
-            # Lazy-imported because psutil is soft-required
-            # and we want graceful degradation when it's missing.
-            try:
-                import psutil  # type: ignore[import-untyped, unused-ignore]
-
-                daemon_create_time: float | None = psutil.Process(os.getpid()).create_time()
-            except Exception:  # noqa: BLE001 — psutil missing or any per-platform quirk
-                daemon_create_time = None
+            daemon_create_time: float | None = _capture_create_time()
 
             def _signal_handler(signum: int, _frame: object) -> None:
                 logger.info("received signal %s, shutting down", signum)

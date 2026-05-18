@@ -39,12 +39,21 @@ def _release_4tuple(version: str) -> tuple[int, int, int, int]:
     Examples: ``"1.0.4"`` -> ``(1, 0, 4, 0)``; ``"1.0.4.dev5+gabc123"`` ->
     ``(1, 0, 4, 0)``; ``"0.0.0+unknown"`` -> ``(0, 0, 0, 0)``. The build
     component is always zero because hatch-vcs doesn't produce one.
-    Patterns we can't parse fall back to ``(0, 0, 0, 0)`` rather than
-    failing the build, so a malformed version never blocks a build.
+
+    Raises ``ValueError`` on input that doesn't carry a leading
+    ``major.minor`` release segment. The only realistic ways to reach
+    that branch are environmental breakage (hatch-vcs misconfiguration,
+    truncated CI checkout) — in those cases failing the build loudly is
+    safer than silently shipping a binary whose Windows-numeric version
+    is ``0.0.0.0``, which Windows treats as "older than everything" and
+    interacts badly with installer upgrade logic.
     """
     match = re.match(r"^(\d+)\.(\d+)(?:\.(\d+))?", version)
     if not match:
-        return (0, 0, 0, 0)
+        raise ValueError(
+            f"Cannot derive PE version 4-tuple from {version!r}; "
+            "expected a PEP 440 release segment (e.g. '1.0.4' or '1.0.4.dev5+gabc123')"
+        )
     return (
         int(match.group(1)),
         int(match.group(2)),

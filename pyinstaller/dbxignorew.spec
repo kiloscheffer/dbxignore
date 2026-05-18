@@ -20,12 +20,19 @@ click's --version callback can resolve the version via
 importlib.metadata at runtime. (Mirror of dbxignore.spec.)
 """
 
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import copy_metadata
 
 SRC = Path("src").resolve()
 ENTRY = SRC / "dbxignore" / "__main__.py"
+
+# Shared VERSIONINFO factory; see the matching block in dbxignore.spec.
+sys.path.insert(0, SPECPATH)
+from _pe_metadata import make_version_info  # noqa: E402
+
+from dbxignore import __version__  # noqa: E402
 
 
 a = Analysis(
@@ -76,4 +83,10 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=str(Path("pyinstaller/dbxignore-app.ico").resolve()),
+    version=make_version_info(
+        version=__version__,
+        internal_name="dbxignorew",
+        file_description="Hierarchical .dropboxignore for Dropbox (GUI helper)",
+        original_filename="dbxignorew.exe",
+    ),
 )

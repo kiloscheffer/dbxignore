@@ -13,12 +13,22 @@ click's `@click.version_option(package_name="dbxignore")` callback can
 resolve the version via importlib.metadata at runtime.
 """
 
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import copy_metadata
 
 SRC = Path("src").resolve()
 ENTRY = SRC / "dbxignore" / "__main__.py"
+
+# Import the shared VERSIONINFO factory from the sibling helper. SPECPATH
+# is PyInstaller's injected variable for the spec file's directory; adding
+# it to sys.path lets the helper live alongside the specs rather than
+# inside the wheel-shipped src/ tree.
+sys.path.insert(0, SPECPATH)
+from _pe_metadata import make_version_info  # noqa: E402
+
+from dbxignore import __version__  # noqa: E402
 
 
 a = Analysis(
@@ -70,4 +80,10 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=str(Path("pyinstaller/dbxignore-app.ico").resolve()),
+    version=make_version_info(
+        version=__version__,
+        internal_name="dbxignore",
+        file_description="Hierarchical .dropboxignore for Dropbox",
+        original_filename="dbxignore.exe",
+    ),
 )

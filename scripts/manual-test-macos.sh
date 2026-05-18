@@ -257,33 +257,34 @@ phase_dbxignore_install() {
         # `uv tool install` then does an incremental update (only changed
         # packages reinstall; others survive, producing a hybrid venv with
         # subtly broken C-extension state). Detect the orphan venv here
-        # and clean it up so the next install is fresh. Mirrors the
-        # known-install teardown above, minus the `dbxignore uninstall`
-        # CLI call (orphan state means dbxignore isn't on PATH). The
-        # daemon may or may not still be running: POSIX unlink-while-open
-        # lets a daemon process started before the partial uninstall
-        # survive venv removal as long as its loaded modules + open file
-        # descriptors stay alive, and it'll continue writing state.json /
-        # holding the singleton lock during the rest of the test — so the
-        # daemon-kill block below has to run defensively. See PR #266.
+        # and clean it up so the next install is fresh. See PR #266.
         #
-        # Venv-presence drives the recovery strategy. `uv tool dir --bin`
-        # commonly resolves to $HOME/.local/bin, which can also host
-        # dbxignore/dbxignorew binaries installed by pip --user, pipx, or
-        # other tools. So:
+        # State machine, derived across four review rounds:
         #
-        # - $(uv tool dir)/dbxignore EXISTS → the venv is unambiguously
-        #   uv's. Auto-recover (daemon-kill + service-unit teardown + venv
-        #   removal). Shims at $(uv tool dir --bin) are NOT auto-removed
-        #   even in this case — venv presence doesn't prove shim ownership
-        #   (a prior `uv tool install` could have created the venv and
-        #   then failed at the shim step because pipx had already put a
-        #   binary at the same path). Any surviving shims surface to the
-        #   tester via the next `uv tool install` "Executables already
-        #   exist" error.
-        # - ONLY shims exist (no venv) → ambiguous origin. Abort with
-        #   diagnostic instructions rather than risk deleting a tester's
-        #   pip/pipx-installed dbxignore.
+        # - venv exists AND no shims at $(uv tool dir --bin)
+        #     → BACKLOG #12's documented case. Auto-recover (daemon-kill
+        #       + service-unit teardown + venv removal). Mirrors the
+        #       known-install teardown above, minus the `dbxignore
+        #       uninstall` CLI call. Daemon-kill is defensive: POSIX
+        #       unlink-while-open lets a daemon process predating the
+        #       partial uninstall survive venv removal, so it'd keep
+        #       writing state.json / holding the singleton lock during
+        #       the rest of the test.
+        #
+        # - shims exist (with or without venv)
+        #     → Ambiguous origin: `uv tool dir --bin` commonly resolves
+        #       to $HOME/.local/bin (or another shared user bin dir) that
+        #       also hosts pip/pipx binaries. Even when the venv is uv's,
+        #       the shims could be from a competing install that landed
+        #       at the same paths before the uv venv was created (or
+        #       after a partial uv uninstall). Auto-removing would
+        #       silently break the tester's other install; leaving them
+        #       in place lets `uv tool install` fail later with
+        #       "Executables already exist" (uv doesn't overwrite shims
+        #       it doesn't recognize). Abort here with a diagnostic
+        #       listing the paths and resolution options instead.
+        #
+        # - nothing exists → no-op (fresh install path).
         local orphan_tool_dir orphan_bin_dir orphan_venv
         local -a orphan_shims=()
         orphan_tool_dir="$(uv tool dir 2>/dev/null)" || orphan_tool_dir=""
@@ -298,39 +299,49 @@ phase_dbxignore_install() {
         fi
         local venv_exists=0
         if [ -n "$orphan_venv" ] && [ -d "$orphan_venv" ]; then venv_exists=1; fi
-        if [ "$venv_exists" -eq 0 ] && [ "${#orphan_shims[@]}" -gt 0 ]; then
-            # Pure-shim-no-venv: ambiguous origin. Don't auto-act.
-            local shim_list
+        if [ "${#orphan_shims[@]}" -gt 0 ]; then
+            # Ambiguous origin in shared bin dir. Don't auto-act.
+            local shim_list venv_clause
             shim_list="$(printf '  %s\n' "${orphan_shims[@]}")"
+            if [ "$venv_exists" -eq 1 ]; then
+                venv_clause="An orphan uv tool venv ALSO exists at $orphan_venv — if the shims are confirmed uv's (option (a) below), remove the venv too with \`rm -rf $orphan_venv\`."
+            else
+                venv_clause="The matching uv tool venv at $orphan_venv does not exist, so the shims may have outlived it."
+            fi
             abort "$(cat <<EOF
-found dbxignore/dbxignorew shim(s) but no matching uv tool venv:
+found dbxignore/dbxignorew shim(s) in the uv tool bin dir:
 
 $shim_list
 
-The matching venv at $orphan_venv does not exist, so these shims may be from:
+$venv_clause
 
-  (a) a previous uv tool uninstall that removed the venv but failed to remove
-      the shims (rare — uv typically removes shims first), OR
+Possible origins:
+
+  (a) a previous uv tool install/uninstall that left shims uv didn't track
+      anymore (e.g. uv tool install created the venv but failed at shim-write
+      because something was already there; or uv tool uninstall failed
+      partway through). Safe to remove the shims if confirmed.
   (b) a competing dbxignore install via pip, pipx, or another tool that writes
       to the same bin dir ($orphan_bin_dir).
 
-Auto-removing them would silently break case (b). Manually verify and clean up:
+Auto-removing would silently break case (b). Manually verify and clean up:
 
-  pipx uninstall dbxignore           # if pipx-installed
-  pip uninstall dbxignore            # if pip-installed (--user or otherwise)
-  rm -f ${orphan_shims[*]}    # if confirmed uv pure-shim-orphan
+  pipx uninstall dbxignore           # if pipx-installed (case b)
+  pip uninstall dbxignore            # if pip-installed (case b)
+  rm -f ${orphan_shims[*]}    # if confirmed uv (case a)
 
 then re-run this script.
 EOF
 )"
         fi
         if [ "$venv_exists" -eq 1 ]; then
+            # venv-only orphan: BACKLOG #12's documented case. Auto-recover.
             note "${Y}WARNING:${X} orphan install detected — prior uv tool uninstall partially failed"
 
             # Service-unit teardown (best-effort: no-ops when nothing exists,
             # which is the common case in the orphan state since `dbxignore
             # uninstall` may have run earlier and removed the agent before
-            # the venv/shim cleanup failed).
+            # the venv cleanup failed).
             launchctl bootout "gui/$(id -u)/com.kiloscheffer.dbxignore" >/dev/null 2>&1 || true
             rm -f "$HOME/Library/LaunchAgents/com.kiloscheffer.dbxignore.plist"
 
@@ -355,20 +366,6 @@ EOF
 
             note "  removing orphan venv at $orphan_venv"
             rm -rf "$orphan_venv"
-            # Shim cleanup intentionally NOT done here. Venv presence proves
-            # the venv is uv's, but shims at $(uv tool dir --bin) sit in a
-            # shared user bin dir ($HOME/.local/bin) that also hosts
-            # pip/pipx binaries; deleting them would silently break a
-            # tester's pipx install whose binaries landed here before the
-            # failed uv tool install left the venv orphan. If leftover
-            # shims exist after venv removal, the next `uv tool install`
-            # errors with "Executables already exist" — that surfaces the
-            # conflict for the tester to resolve (manually inspect origin,
-            # then `pipx uninstall` / `rm -f` as appropriate), rather than
-            # auto-acting on ambiguous ownership.
-            if [ "${#orphan_shims[@]}" -gt 0 ]; then
-                note "  note: leaving ${#orphan_shims[@]} shim(s) in $orphan_bin_dir untouched (ownership ambiguous in shared bin dir; uv tool install will surface any conflict)"
-            fi
             note "orphan cleanup complete; proceeding with fresh install"
         fi
     fi

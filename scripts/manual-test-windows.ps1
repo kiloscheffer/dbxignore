@@ -1813,6 +1813,15 @@ function Test-Uninstall {
         }
     }
 
+    # purge - verb icon also removed (regression guard against future
+    # reordering of shell-integration teardown vs _purge_local_state).
+    $purgeIconPath = Join-Path $env:LOCALAPPDATA "dbxignore\icons\context-menu.ico"
+    if (-not (Test-Path $purgeIconPath)) {
+        Write-Pass "purge - icon file removed"
+    } else {
+        Write-Fail "purge - icon file persisted at $purgeIconPath"
+    }
+
     # 6b - status --summary returns state=no_state post-purge.
     # Truncated form: 'state=no_state conflicts=N' with no pid/marked/etc.
     Write-Note "6b - status --summary post-purge"

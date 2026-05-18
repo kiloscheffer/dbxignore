@@ -399,7 +399,7 @@ function Test-InstallDbxignore {
         # clean them up here so the next install is fresh. Symmetric with the
         # known-install teardown above, minus the daemon-kill prologue: in
         # the orphan case the schtasks-launched daemon is already dead
-        # because either its venv or its shim is gone. See PR #<THIS_PR>.
+        # because either its venv or its shim is gone. See PR #266.
         $toolDir = (uv tool dir 2>$null | Out-String).Trim()
         $binDir  = (uv tool dir --bin 2>$null | Out-String).Trim()
         $orphanVenv = if ($toolDir) { Join-Path $toolDir 'dbxignore' } else { $null }

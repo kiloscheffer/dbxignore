@@ -262,7 +262,7 @@ phase_dbxignore_install() {
         # up here so the next install is fresh. Symmetric with the
         # known-install teardown above, minus the daemon-kill prologue:
         # in the orphan case the launchd-launched daemon is already dead
-        # because either its venv or its shim is gone. See PR #<THIS_PR>.
+        # because either its venv or its shim is gone. See PR #266.
         local orphan_tool_dir orphan_bin_dir orphan_venv
         local -a orphan_shims=()
         orphan_tool_dir="$(uv tool dir 2>/dev/null)" || orphan_tool_dir=""

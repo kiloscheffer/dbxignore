@@ -430,7 +430,18 @@ function Test-InstallDbxignore {
             }
             foreach ($shim in $orphanShims) {
                 Write-Note "  removing orphan shim at $shim"
-                Remove-Item -Force $shim -ErrorAction SilentlyContinue
+                # SilentlyContinue would hide the pure-shim-orphan case where a
+                # daemon process started before an earlier venv removal is still
+                # running with dbxignorew.exe memory-mapped (PE images are
+                # always mapped; the trampoline-chain shim stays mapped for the
+                # daemon's lifetime). Removal then fails and the next
+                # uv tool install errors with "Executables already exist" —
+                # surface that here with a clear orphan-state message instead.
+                try {
+                    Remove-Item -Force $shim -ErrorAction Stop
+                } catch {
+                    Stop-Abort "could not remove orphan shim ${shim}: $($_.Exception.Message); a long-running daemon may still hold it mapped — kill the daemon process (Get-CimInstance Win32_Process | Where-Object CommandLine -match 'dbxignore.*daemon' | ForEach-Object { Stop-Process -Id `$_.ProcessId -Force }) and re-run"
+                }
             }
             Write-Note "orphan cleanup complete; proceeding with fresh install"
         }

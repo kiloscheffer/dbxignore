@@ -9,6 +9,7 @@ dbxignore applies the Dropbox ignore marker to paths that match a `.dropboxignor
 - [Install (Windows, from source)](#install-windows-from-source)
 - [Install (Linux)](#install-linux)
 - [Install (macOS)](#install-macos)
+- [Install (Homebrew)](#install-homebrew)
 - [Install (.exe)](#install-exe)
 - [Platform support](#platform-support)
 - [`.dropboxignore` syntax](#dropboxignore-syntax)
@@ -23,7 +24,7 @@ dbxignore applies the Dropbox ignore marker to paths that match a `.dropboxignor
 
 - **Windows 10/11** (NTFS), **or** a modern Linux distro with a systemd user session, **or** macOS (Apple Silicon for pre-built binaries; Intel via PyPI)
 - Dropbox desktop client installed
-- Python ≥ 3.11 with [`uv`](https://docs.astral.sh/uv/). The [Scoop bucket](https://github.com/kiloscheffer/scoop-dbxignore) (Windows) and pre-built binaries (Windows `.exe`, macOS arm64 Mach-O, Linux x86_64 `.tar.gz`) are alternatives that don't require Python.
+- Python ≥ 3.11 with [`uv`](https://docs.astral.sh/uv/). The [Scoop bucket](https://github.com/kiloscheffer/scoop-dbxignore) (Windows), [Homebrew tap](https://github.com/kiloscheffer/homebrew-dbxignore) (macOS + Linux), and pre-built binaries (Windows `.exe`, macOS arm64 Mach-O, Linux x86_64 `.tar.gz`) are alternatives that don't require Python.
 
 ## Install (Windows, Scoop)
 
@@ -182,6 +183,17 @@ Files written:
 
 Notes:
 - A symlink matched by a `.dropboxignore` rule is marked on the **link itself**, not its target.
+
+## Install (Homebrew)
+
+```bash
+brew tap kiloscheffer/dbxignore
+brew install dbxignore
+dbxignore install                    # registers launchd LaunchAgent (macOS) or systemd user unit (Linux)
+dbxignore status                     # verify: daemon running and watching Dropbox
+```
+
+The tap repo is at [`kiloscheffer/homebrew-dbxignore`](https://github.com/kiloscheffer/homebrew-dbxignore). Supports macOS arm64 (Apple Silicon) and Linux x86_64. Run `dbxignore uninstall` before `brew uninstall dbxignore` so the service is removed cleanly.
 
 ## Install (.exe)
 

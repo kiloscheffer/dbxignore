@@ -605,10 +605,13 @@ def _capture_create_time() -> float | None:
     left no diagnostic data; the WARNING is what unblocks root-cause analysis
     of the intermittent Windows null observations.
 
-    Unanticipated exception types propagate so ``_initial_sweep_worker``'s
-    outer handler logs the traceback and the daemon shuts down via the same
-    path SIGTERM uses — preferable to silently mis-initializing the daemon
-    with a misleading ``None`` record.
+    Unanticipated exception types propagate up ``daemon.run``, releasing
+    the singleton lock via the outer ``try/finally`` and aborting startup
+    before the observer or initial-sweep worker are created — preferable
+    to silently mis-initializing the daemon with a misleading ``None``
+    record. (Note: this is NOT the SIGTERM shutdown path — SIGTERM sets
+    ``stop_event`` and lets the running worker drain; an exception here
+    fires before there's a worker to drain.)
 
     ``SystemError`` is in the caught set because psutil C-extension calls can
     raise it when CPython's exception state is wrapping another exception

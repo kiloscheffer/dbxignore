@@ -13,9 +13,10 @@ inlined in ``daemon.run`` with a bare ``except Exception`` that swallowed
 the exception silently — no log line, no traceback, no diagnostic data when
 the null state appeared. The narrowed catch + WARNING ensures the next null
 observation in the wild leaves forensic evidence in ``daemon.log``;
-unanticipated exception types now propagate to ``_initial_sweep_worker``'s
-outer handler instead of silently mis-initializing the daemon with a
-misleading None record.
+unanticipated exception types now propagate up ``daemon.run`` (releasing the
+singleton lock via the outer ``try/finally`` and aborting startup before the
+observer or initial-sweep worker are created) instead of silently
+mis-initializing the daemon with a misleading None record.
 """
 
 from __future__ import annotations
@@ -115,9 +116,10 @@ def test_capture_create_time_propagates_unexpected_exception(
     anticipated (TypeError from a malformed psutil shim, RuntimeError from
     a third-party hook, etc.). The narrowed catch handles only the
     anticipated set ((ImportError, psutil.Error, OSError, SystemError));
-    other exceptions propagate so the initial-sweep-worker's outer handler
-    logs the traceback and triggers an orderly shutdown — preferable to
-    silently mis-initializing the daemon with a misleading None record.
+    other exceptions propagate up ``daemon.run`` (releasing the singleton
+    lock via the outer ``try/finally`` and aborting startup before the
+    observer or initial-sweep worker are created) — preferable to silently
+    mis-initializing the daemon with a misleading None record.
     """
 
     class _RaisingProc:

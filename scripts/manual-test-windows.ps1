@@ -437,7 +437,7 @@ function Test-InstallDbxignore {
             # Ambiguous origin in shared bin dir. Don't auto-act.
             $shimList = ($orphanShims -join "`n  ")
             $venvClause = if ($venvExists) {
-                "An orphan uv tool venv ALSO exists at $orphanVenv — if the shims are confirmed uv's (option (a) below), remove the venv too with``Remove-Item -Recurse -Force '$orphanVenv'``."
+                "An orphan uv tool venv ALSO exists at $orphanVenv — if the shims are confirmed uv's (option (a) below), remove the venv too with: Remove-Item -Recurse -Force '$orphanVenv'."
             } else {
                 "The matching uv tool venv at $orphanVenv does not exist, so the shims may have outlived it."
             }

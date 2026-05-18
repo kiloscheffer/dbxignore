@@ -75,6 +75,17 @@ jobs:
           test -s ./dist/dbxignore.exe
           test -s ./dist/dbxignorew.exe
 
+      - name: Zip Windows binaries
+        # winget's zip InstallerType requires a zip containing the binaries
+        # (Portable InstallerType is single-file only). Both .exe files are
+        # also uploaded individually for the Scoop bucket; the zip is an
+        # additional artifact, not a replacement.
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path dist/dbxignore.exe,dist/dbxignorew.exe `
+            -DestinationPath dist/dbxignore-windows-x86_64.zip
+
       - name: Upload dist artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -237,6 +248,7 @@ jobs:
             dist/*.tar.gz
             dist/dbxignore.exe
             dist/dbxignorew.exe
+            dist/dbxignore-windows-x86_64.zip
             dist-macos/dbxignore
             dist-linux/dbxignore-linux-x86_64.tar.gz
           generate_release_notes: true

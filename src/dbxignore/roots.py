@@ -1,0 +1,223 @@
+"""Discover configured Dropbox root paths from Dropbox's own info.json."""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import sys
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+def _read_dropbox_account_paths(info_path: Path) -> list[str]:
+    """Parse a Dropbox ``info.json`` and return per-account ``path`` strings.
+
+    Returns zero or more strings, one per dict-shaped account entry with a
+    non-empty string ``path`` field. Iterates over ``data.values()`` rather
+    than a hardcoded account-type allow-list, so any current or future
+    Dropbox account type (today: ``personal`` / ``business``) is picked up
+    automatically.
+
+    Raises ``OSError`` (file missing or unreadable), ``UnicodeDecodeError``
+    (file isn't valid UTF-8), ``json.JSONDecodeError`` (malformed JSON), or
+    ``ValueError`` (top-level value is not an object). Callers wrap with
+    their own try/except so they can choose between WARNING-with-detail
+    (``roots.discover()``) and silent fallback (mode detection in the macOS
+    backend on hosts where Dropbox isn't installed).
+    """
+    data = json.loads(info_path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"top-level value is not an object: {type(data).__name__}")
+    paths: list[str] = []
+    for account in data.values():
+        if isinstance(account, dict):
+            p = account.get("path")
+            if isinstance(p, str) and p:
+                paths.append(p)
+    return paths
+
+
+def _validate_account_paths(account_paths: list[str], source: Path) -> list[Path]:
+    """Filter info.json account paths to absolute, existing directories.
+
+    A stale ``info.json`` entry — an account that was unlinked, a folder
+    that was relocated, an external drive that isn't mounted — would
+    otherwise become a configured root unchecked. The daemon then crashes
+    at ``observer.schedule()`` on the nonexistent path. This mirrors the ``DBXIGNORE_ROOT``
+    override's absolute / exists / is-dir checks in ``discover()``; here
+    invalid entries are skipped individually (each with a WARNING) rather
+    than rejecting the whole file, so one stale account does not mask a
+    valid sibling.
+    """
+    valid: list[Path] = []
+    for raw in account_paths:
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            logger.warning(
+                "Dropbox account path %r in %s is not absolute; skipping entry",
+                raw,
+                source,
+            )
+            continue
+        # `is_dir()` follows symlinks and swallows its own OSError → False,
+        # so it covers "doesn't exist", "is a file", and "unreadable" in
+        # one check.
+        if not candidate.is_dir():
+            logger.warning(
+                "Dropbox account path %s in %s does not exist or is not a directory; "
+                "skipping entry",
+                candidate,
+                source,
+            )
+            continue
+        valid.append(candidate)
+    return valid
+
+
+def find_containing(path: Path, roots: list[Path]) -> Path | None:
+    """Return the most-specific (deepest) root containing ``path``, or ``None``.
+
+    With nested roots — one Dropbox root inside another, an unusual but
+    representable configuration — ``path.relative_to(outer)`` and
+    ``.relative_to(inner)`` both succeed. The inner root is the right
+    answer because rules and markers under it belong to the inner
+    ``.dropboxignore`` hierarchy, not the outer's. Sibling-only setups
+    (the common shape) have at most one container, so "deepest" collapses
+    to "first match".
+    """
+    best: Path | None = None
+    for root in roots:
+        try:
+            path.relative_to(root)
+        except ValueError:
+            continue
+        if best is None or len(root.parts) > len(best.parts):
+            best = root
+    return best
+
+
+def _info_json_paths() -> list[Path]:
+    """Return candidate Dropbox info.json locations, in priority order.
+
+    Windows: Dropbox's per-user installer writes ``%APPDATA%\\Dropbox\\info.json``;
+    the per-machine installer (also called "install for all users") writes
+    ``%LOCALAPPDATA%\\Dropbox\\info.json``. Check both, ``%APPDATA%`` first
+    since the per-user installer is the more common shape.
+
+    Linux + macOS: Dropbox desktop places ``info.json`` at
+    ``~/.dropbox/info.json`` on both, so a single arm covers them.
+
+    Empty list signals "no candidates derivable from environment" — caller
+    treats it the same as "no info.json exists" and returns ``[]`` from
+    ``discover()`` so the daemon's "no roots" path fires cleanly.
+    """
+    if sys.platform == "win32":
+        candidates: list[Path] = []
+        for env_var in ("APPDATA", "LOCALAPPDATA"):
+            value = os.environ.get(env_var)
+            if value:
+                candidates.append(Path(value) / "Dropbox" / "info.json")
+        if not candidates:
+            logger.warning("Neither APPDATA nor LOCALAPPDATA set; cannot locate Dropbox info.json")
+        return candidates
+    if sys.platform.startswith("linux") or sys.platform == "darwin":
+        home = os.environ.get("HOME")
+        if not home:
+            logger.warning("HOME not set; cannot locate Dropbox info.json")
+            return []
+        return [Path(home) / ".dropbox" / "info.json"]
+    logger.warning("Unsupported platform %s; cannot locate Dropbox info.json", sys.platform)
+    return []
+
+
+def discover() -> list[Path]:
+    override = os.environ.get("DBXIGNORE_ROOT")
+    if override:
+        override_path = Path(override)
+        # The override needs to be an absolute existing directory:
+        # - relative paths drift with CWD, and Task Scheduler / systemd /
+        #   launchd each pick their own daemon CWD at launch.
+        # - a file path becomes a "root" silently producing no-op applies
+        #   and breaks the watchdog observer's recursive schedule.
+        if not override_path.is_absolute():
+            logger.warning(
+                "DBXIGNORE_ROOT=%s is not an absolute path; ignoring override",
+                override_path,
+            )
+            return []
+        if not override_path.exists():
+            logger.warning(
+                "DBXIGNORE_ROOT=%s does not exist; ignoring override",
+                override_path,
+            )
+            return []
+        if not override_path.is_dir():
+            logger.warning(
+                "DBXIGNORE_ROOT=%s is not a directory; ignoring override",
+                override_path,
+            )
+            return []
+        return [override_path]
+
+    candidates = _info_json_paths()
+    if not candidates:
+        return []
+
+    # Iterate candidates and accept the first one that exists, parses
+    # cleanly, AND contains at least one usable account path. A stale
+    # APPDATA\Dropbox\info.json (from an uninstalled per-user install)
+    # can mask a valid per-machine LOCALAPPDATA\Dropbox\info.json (or
+    # vice versa) on Windows in two distinct ways: (a) parse failure on
+    # a corrupt first candidate; (b) parse-success-but-empty
+    # ``account_paths`` from a Dropbox-uninstall residue (``{}``, or
+    # ``{"personal": {}}``, etc. — the file remains on disk but its
+    # accounts dict has no usable ``path`` entries). Both arms fall through
+    # to the next candidate; the full-failure path emits a summary WARNING
+    # listing every attempted location so the user can self-diagnose.
+    tried: list[Path] = []
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        tried.append(candidate)
+        try:
+            account_paths = _read_dropbox_account_paths(candidate)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            logger.warning(
+                "Cannot read Dropbox info.json at %s: %s; trying next candidate",
+                candidate,
+                exc,
+            )
+            continue
+        if not account_paths:
+            logger.warning(
+                "Dropbox info.json at %s has no usable account paths; trying next candidate",
+                candidate,
+            )
+            continue
+        # Validate before returning: a stale account path (folder relocated,
+        # drive unmounted, account unlinked) would otherwise crash the
+        # daemon at observer.schedule(). Per-entry skip with a WARNING — an
+        # all-invalid candidate falls through to the next one, same as the
+        # empty-accounts arm above.
+        valid_roots = _validate_account_paths(account_paths, candidate)
+        if not valid_roots:
+            logger.warning(
+                "Dropbox info.json at %s has no account paths that resolve to existing "
+                "directories; trying next candidate",
+                candidate,
+            )
+            continue
+        return valid_roots
+
+    if not tried:
+        if len(candidates) == 1:
+            logger.warning("Dropbox info.json not found at %s", candidates[0])
+        else:
+            joined = ", ".join(str(p) for p in candidates)
+            logger.warning("Dropbox info.json not found at any of: %s", joined)
+    else:
+        joined = ", ".join(str(p) for p in tried)
+        logger.warning("No usable Dropbox info.json after trying: %s", joined)
+    return []

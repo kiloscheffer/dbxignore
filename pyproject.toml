@@ -1,0 +1,103 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dbxignore"
+description = "Hierarchical .dropboxignore for Dropbox on Windows (NTFS ADS), Linux (user.* xattrs), and macOS (xattrs)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Kilo Scheffer" }]
+dynamic = ["version"]
+dependencies = [
+    "watchdog>=4.0",
+    "pathspec>=0.12",
+    "click>=8.2",
+    "rich-click>=1.8",
+    "psutil>=5.9",
+    "xattr>=1.0; sys_platform == 'darwin'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-timeout>=2.3",
+    "ruff>=0.15.11",
+    # Pinned to non-Windows platforms: `xattr` has a C extension and ships no
+    # Windows wheel, so an unconditional dep makes `uv sync --all-extras` fail
+    # on the Windows CI runner with a missing-MSVC build error. The macOS unit
+    # tests that monkeypatch `xattr` accordingly skip on Windows — Linux still
+    # exercises the mocking path for cross-platform coverage.
+    "xattr>=1.0; sys_platform != 'win32'",
+]
+
+[project.scripts]
+dbxignore = "dbxignore.__main__:main_entry"
+
+# GUI-subsystem trampoline. pip/uv generate dbxignorew.exe as a real
+# GUI-subsystem launcher on Windows; the daemon registered by `install`
+# runs through it so Task Scheduler does not allocate a console window.
+# No-op name on Linux/macOS. Mirrors the frozen dbxignorew.exe binary.
+[project.gui-scripts]
+dbxignorew = "dbxignore.__main__:main_entry"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/dbxignore/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dbxignore"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "windows_only: test requires NTFS alternate data streams",
+    "linux_only: test requires Linux user.* xattrs",
+    "macos_only: test requires macOS xattrs (com.dropbox.ignored)",
+]
+timeout = 10
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "C4", "SIM", "TCH"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["dbxignore"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+check_untyped_defs = true
+no_implicit_reexport = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+# Scratch / non-shipping content lives outside the package layout. Excluded
+# so a developer's local scratch dirs don't surface in the typecheck pass.
+exclude = ["^pyinstaller/"]
+
+
+[dependency-groups]
+dev = [
+    "mypy>=1.20.2",
+    "pre-commit>=4.6.0",
+    "pytest>=9.0.3",
+    "pytest-timeout>=2.3",
+    "ruff>=0.15.11",
+    # Mirror the platform-conditional `xattr` pin from
+    # `[project.optional-dependencies] dev` so a fresh `uv sync` (without
+    # `--all-extras`) lands the package on Linux/macOS where the macOS
+    # unit tests import it. Windows skips per the same reason as the
+    # extras block (no MSVC build tooling on the runner).
+    "xattr>=1.0; sys_platform != 'win32'",
+]

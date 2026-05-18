@@ -1,0 +1,57 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel in-progress runs when a new commit lands on the same ref. Saves
+# Windows-runner minutes (10x cost multiplier vs Linux) during fast push
+# iteration on a PR. `github.ref` is the PR merge ref for pull_request
+# events and the branch ref for push events, so push-to-main and PR runs
+# group independently.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Sync deps
+        run: uv sync --all-extras
+
+      - name: Lint
+        run: uv run ruff check
+
+      - name: Type check
+        run: uv run mypy .
+
+      - name: Unit tests (cross-platform)
+        run: uv run python -m pytest -m "not windows_only and not linux_only and not macos_only" -v
+
+      - name: Windows-only integration tests
+        if: runner.os == 'Windows'
+        run: uv run python -m pytest -m windows_only -v
+
+      - name: Linux-only integration tests
+        if: runner.os == 'Linux'
+        run: uv run python -m pytest -m linux_only -v
+
+      - name: macOS-only integration tests
+        if: runner.os == 'macOS'
+        run: uv run python -m pytest -m macos_only -v

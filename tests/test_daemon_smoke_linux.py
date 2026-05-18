@@ -1,0 +1,155 @@
+"""End-to-end: real xattrs + real daemon event loop on a Linux tmp tree.
+
+Mirrors ``test_daemon_smoke.py`` (Windows) — isolates the
+watchdog+debouncer+reconcile pipeline by monkey-patching root discovery
+to a ``tmp_path`` scratch dir, then asserts that real ``user.com.dropbox.ignored``
+xattrs land as rules change. The discovery layer has its own unit tests;
+this smoke validates that all the pieces run together.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import threading
+from typing import TYPE_CHECKING
+
+import pytest
+
+from tests.conftest import _poll_until
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+pytestmark = pytest.mark.linux_only
+
+if not sys.platform.startswith("linux"):
+    pytest.skip(
+        "Daemon smoke test exercises real user.* xattrs; Linux-only",
+        allow_module_level=True,
+    )
+
+
+def _xattr_supported(path: Path) -> bool:
+    probe = path / ".xattr_probe"
+    probe.touch()
+    try:
+        os.setxattr(os.fspath(probe), "user.dropboxignore.probe", b"1")
+    except OSError:
+        return False
+    finally:
+        probe.unlink(missing_ok=True)
+    return True
+
+
+@pytest.fixture(autouse=True)
+def _require_xattr_fs(tmp_path: Path) -> None:
+    if not _xattr_supported(tmp_path):
+        pytest.skip(f"tmp_path {tmp_path} rejects user.* xattrs")
+
+
+def _wait_for_daemon_watching(log_path: Path, timeout_s: float = 3.0) -> bool:
+    """Block until the daemon emits its ``watching roots: …`` line.
+
+    On Linux, watchdog's inotify watches only observe events that fire
+    *after* ``observer.schedule()`` registers the watch. Creating files
+    before then is a silent miss — the next hourly sweep is 1h away.
+    The ``watching roots`` log line is emitted immediately after
+    ``observer.start()`` returns, so polling for it in ``daemon.log``
+    gives the test a deterministic readiness signal without touching
+    the daemon's public API.
+    """
+    return _poll_until(
+        lambda: log_path.exists() and "watching roots:" in log_path.read_text(),
+        timeout_s=timeout_s,
+    )
+
+
+def test_daemon_reacts_to_dropboxignore_add_and_remove(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Adding a rule marks a matching path; removing the rule clears it.
+
+    Deliberately avoids the Windows smoke's negation case (``!build/keep/``)
+    because Linux's inotify fires DIR_CREATE fast enough to reach dispatch
+    with the *old* rule cache, marking the child; the subsequent RULES
+    reload then prunes descent at the still-ignored parent and the
+    negation never unmarks the child. That prune/negation interaction is
+    a product-behavior question tracked separately — out of scope for a
+    pipeline smoke test.
+    """
+    from dbxignore import daemon, markers
+
+    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])  # type: ignore[attr-defined, unused-ignore]
+    # Route state.json + daemon.log off the real per-user XDG dir.
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    log_path = tmp_path / "state" / "dbxignore" / "daemon.log"
+
+    stop = threading.Event()
+    t = threading.Thread(target=daemon.run, args=(stop,), daemon=True)
+    t.start()
+    try:
+        assert _wait_for_daemon_watching(log_path), (
+            "daemon never logged 'watching roots:' within 3s"
+        )
+
+        # Phase 1: rule + directory → marker set.
+        (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+        (tmp_path / "build").mkdir()
+
+        assert _poll_until(lambda: markers.is_ignored(tmp_path / "build")), (
+            "build/ was not marked ignored within 2s"
+        )
+
+        # Phase 2: rule removed → marker cleared.
+        (tmp_path / ".dropboxignore").write_text("", encoding="utf-8")
+
+        assert _poll_until(
+            lambda: not markers.is_ignored(tmp_path / "build"),
+            timeout_s=3.0,
+        ), "build/ marker was not cleared after .dropboxignore emptied"
+    finally:
+        stop.set()
+        t.join(timeout=5.0)
+
+
+def test_daemon_drops_conflicted_negation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Adding `!build/keep/` after `build/` triggers the conflict-detection
+    layer: the negation is dropped from the active rule set at rule-load
+    time. `build/keep/` stays marked (either directly or via inheritance),
+    and daemon.log records the WARNING.
+
+    This is the Linux counterpart to the Windows smoke's negation phase.
+    """
+    from dbxignore import daemon, markers
+
+    monkeypatch.setattr(daemon.roots_module, "discover", lambda: [tmp_path])  # type: ignore[attr-defined, unused-ignore]
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    log_path = tmp_path / "state" / "dbxignore" / "daemon.log"
+
+    stop = threading.Event()
+    t = threading.Thread(target=daemon.run, args=(stop,), daemon=True)
+    t.start()
+    try:
+        assert _wait_for_daemon_watching(log_path)
+
+        # Phase 1 — rule + directory → marker.
+        (tmp_path / ".dropboxignore").write_text("build/\n", encoding="utf-8")
+        (tmp_path / "build").mkdir()
+        assert _poll_until(lambda: markers.is_ignored(tmp_path / "build"))
+
+        # Phase 2 — add a conflicted negation; child must NOT un-ignore.
+        (tmp_path / ".dropboxignore").write_text("build/\n!build/keep/\n", encoding="utf-8")
+        (tmp_path / "build" / "keep").mkdir()
+        assert _poll_until(
+            lambda: markers.is_ignored(tmp_path / "build" / "keep"),
+            timeout_s=3.0,
+        ), "conflicted negation should not un-ignore build/keep/"
+
+        assert _poll_until(
+            lambda: "!build/keep/" in log_path.read_text() and "masked by" in log_path.read_text(),
+            timeout_s=3.0,
+        ), "daemon.log should contain the conflict WARNING"
+    finally:
+        stop.set()
+        t.join(timeout=5.0)

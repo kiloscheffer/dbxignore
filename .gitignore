@@ -1,0 +1,46 @@
+# Build outputs
+__editable__*.pth
+build/
+dist/
+
+# Coverage artifacts
+.coverage
+coverage.xml
+htmlcov/
+
+# Developer/agent settings
+.claude/
+AGENTS.md
+CLAUDE.local.md
+CLAUDE.md
+docs/superpowers/
+
+# Editor scratch
+.idea/
+.vscode/
+*.swp
+*~
+
+# Generated source
+src/dbxignore/_version.py
+
+# OS metadata
+.DS_Store
+desktop.ini
+Thumbs.db
+
+# Python bytecode/eggs
+__pycache__/
+*.dist-info/
+*.egg-info/
+*.py[cod]
+
+# Tool caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.uv/
+
+# Virtual envs
+.venv/
+venv/

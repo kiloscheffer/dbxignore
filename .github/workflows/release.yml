@@ -1,0 +1,233 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  # Manual dispatch lets us dry-run the build without cutting a tag.
+  # The publish jobs are tag-gated, so dispatch runs exercise build
+  # + artifact upload but skip both publish destinations.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Sync deps
+        run: uv sync --all-extras
+
+      - name: Build wheel + sdist
+        run: uv build
+
+      - name: Build Windows binaries
+        # pyinstaller is a build-only tool, not a runtime or dev dep — install
+        # ephemerally for this run rather than declaring it in pyproject.toml.
+        # Two specs produce two binaries: dbxignore.exe (console=True; CLI)
+        # and dbxignorew.exe (console=False; Task Scheduler daemon + Explorer
+        # shell-verb helper).
+        run: |
+          uv run --with pyinstaller pyinstaller pyinstaller/dbxignore.spec
+          uv run --with pyinstaller pyinstaller pyinstaller/dbxignorew.spec
+
+      - name: Smoke test Windows binaries
+        # --help fails-fast on missing-bundled-module errors (e.g. a
+        # _cffi_backend that didn't make it into the bundle). --version
+        # fails-fast on missing dist-info metadata (PyInstaller surfaces
+        # this as "RuntimeError: <pkg> is not installed" when
+        # importlib.metadata can't find the wheel inside the frozen
+        # bundle).
+        # Both binaries: dbxignore.exe (console=True) is straightforward;
+        # dbxignorew.exe (console=False) needs --version captured via the
+        # bash assignment to force synchronous wait, since GUI-subsystem
+        # binaries return control to the shell asynchronously.
+        shell: bash
+        run: |
+          set -e
+          # dbxignore.exe — console subsystem; synchronous by default.
+          help_out=$(./dist/dbxignore.exe --help 2>&1)
+          echo "$help_out"
+          echo "$help_out" | grep -q "Usage:"
+          version_out=$(./dist/dbxignore.exe --version 2>&1)
+          echo "$version_out"
+          echo "$version_out" | grep -q "dbxignore.exe, version"
+          # dbxignorew.exe — GUI subsystem; bash assignment forces wait.
+          # --help on the GUI binary writes to a non-existent console
+          # (no parent terminal in CI), but importlib.metadata + click
+          # parser run before output — a non-zero exit indicates an
+          # import-time crash. We don't grep its output because the
+          # MessageBox path can't be exercised in headless CI.
+          # We don't grep output (the MessageBox path can't be exercised in
+          # headless CI), but the exit code surfaces import-time crashes:
+          # bash waits synchronously thanks to the pipe redirection, and the
+          # script's `set -e` propagates a non-zero exit to fail the job.
+          ./dist/dbxignorew.exe --help >/dev/null 2>&1
+          ./dist/dbxignorew.exe --version >/dev/null 2>&1
+          # Both binaries must exist and be non-empty.
+          test -s ./dist/dbxignore.exe
+          test -s ./dist/dbxignorew.exe
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
+
+  build-macos:
+    # arm64 Mach-O binaries built on macos-latest (which aliases to macos-14
+    # / Apple Silicon). Intel users install via the universal Python wheel
+    # from PyPI; an x86_64 build leg can be added in a point release if
+    # demand surfaces.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Sync deps
+        run: uv sync --all-extras
+
+      - name: Build macOS binaries
+        run: uv run --with pyinstaller pyinstaller pyinstaller/dbxignore-macos.spec
+
+      - name: Smoke test macOS binaries
+        # `--help` exercises the full import chain (cli → markers →
+        # _backends/macos_xattr → xattr → cffi → _cffi_backend) without
+        # starting the daemon, catching missing-bundled-module errors
+        # (e.g. a `_cffi_backend` that didn't make it into the bundle)
+        # before the artifact ships. `--version` additionally exercises
+        # the `copy_metadata("dbxignore")` bundling in the .spec
+        # (RuntimeError: 'dbxignore' is not installed if dist-info is
+        # missing), matching the Windows leg's `--help` + `--version`
+        # coverage shape.
+        # PyInstaller sets +x on output binaries, so no chmod needed.
+        shell: bash
+        run: |
+          set -e
+          ./dist/dbxignore --help
+          version_out=$(./dist/dbxignore --version 2>&1)
+          echo "$version_out"
+          echo "$version_out" | grep -q "dbxignore, version"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dist-macos
+          path: dist/
+          retention-days: 1
+
+  classify-tag:
+    # Parse the pushed tag against PEP 440 pre-release patterns so both
+    # publish-* jobs share a single source of truth for "is this a release
+    # tag or a pre-release tag?". GitHub Actions expressions don't have
+    # regex, and PEP 440 doesn't use a hyphen separator (alphas are
+    # `0.4.0a1`, not `0.4.0-a1`), so a `contains(github.ref, '-a')` check
+    # would not fire on real pre-release tags.
+    #
+    # Recognized pre-release suffixes: `aN`, `bN`, `rcN`, `.devN`.
+    # `.postN` (post-release) is NOT a pre-release per PEP 440 and
+    # correctly classifies as a release tag.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    outputs:
+      is_prerelease: ${{ steps.detect.outputs.is_prerelease }}
+    steps:
+      - id: detect
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          if [[ "$tag" =~ (a|b|rc)[0-9]+$ ]] || [[ "$tag" =~ \.dev[0-9]+$ ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "Tag $tag → pre-release"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "Tag $tag → release"
+          fi
+
+  publish-github:
+    # GitHub Release: wheel + sdist + Windows binaries + macOS binaries.
+    # Runs on every tag push; both build legs must succeed first.
+    needs: [build, build-macos, classify-tag]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows + wheel artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dist-macos
+          path: dist-macos/
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
+        with:
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/dbxignore.exe
+            dist/dbxignorew.exe
+            dist-macos/dbxignore
+          generate_release_notes: true
+          # Pre-release flag is sourced from classify-tag's PEP 440 detector
+          # so it can't disagree with publish-pypi's gating below.
+          prerelease: ${{ needs.classify-tag.outputs.is_prerelease == 'true' }}
+          # When `GH_RELEASE_TOKEN` is configured as a repo secret (a PAT with
+          # `contents: write` scope belonging to the repo owner), releases are
+          # authored under the owner's GitHub identity. Falls back to the
+          # default `github.token` (author: github-actions[bot]) when the
+          # secret isn't set, so the workflow never fails because of a
+          # missing secret — it just reverts to the bot-author attribution.
+          token: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
+
+  publish-pypi:
+    # PyPI via Trusted Publishing (OIDC). Gated on the `pypi` GitHub
+    # environment, which requires manual approval before the upload
+    # step runs. The id-token:write permission is scoped to this job
+    # only — least privilege. macOS Mach-O binaries are not shipped to
+    # PyPI (only wheels/sdists), so dist-macos isn't downloaded here.
+    #
+    # PEP 440 pre-release tags skip PyPI entirely via classify-tag's
+    # detector — defense-in-depth on top of the environment gate.
+    # Pre-releases never enter this job, so there's no queued-publish
+    # for someone to accidentally approve. The environment gate
+    # remains for the release-tag path as a second safety layer.
+    needs: [build, classify-tag]
+    if: |
+      startsWith(github.ref, 'refs/tags/')
+      && needs.classify-tag.outputs.is_prerelease != 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download dist artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: Exclude Windows binaries (PyPI distribution only)
+        run: rm -f dist/*.exe
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        with:
+          packages-dir: dist/

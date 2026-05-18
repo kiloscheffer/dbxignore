@@ -1,0 +1,362 @@
+"""Unit tests for the gitignore conflict-detection helpers in rules.py.
+
+These tests use a `_FakePattern` shim that models trailing-slash
+directory-rule semantics and exact non-directory matches. It does NOT
+model gitwildmatch features like `build/*` (children-only). For coverage
+of the children-only patterns and the strict-ancestor / last-match-wins
+semantics, see the higher-fidelity tests against real
+pathspec in `tests/test_rules_reload_explain.py` (the
+`test_rulecache_*conflict*` block).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from dbxignore.rules_conflicts import Conflict, _detect_conflicts, literal_prefix
+
+
+@pytest.mark.parametrize(
+    ("pattern", "expected"),
+    [
+        ("build/keep/", "build/keep/"),
+        ("build/keep", "build/"),  # no trailing slash → cut at last /
+        ("src/**/test.py", "src/"),
+        ("foo*/bar/", None),  # glob in first segment
+        ("**/cache/", None),  # starts with glob
+        ("/anchored/path/", "anchored/path/"),  # leading-/ normalized
+        ("", None),  # empty
+        ("plain", "plain"),  # single segment, no slash, no glob
+        ("a/b/c/d/", "a/b/c/d/"),
+        ("?single-char-glob", None),
+        ("[abc]/charset", None),
+    ],
+)
+def test_literal_prefix(pattern: str, expected: str | None) -> None:
+    assert literal_prefix(pattern) == expected
+
+
+def test_conflict_dataclass_shape() -> None:
+    c = Conflict(
+        dropped_source=Path("/root/.dropboxignore"),
+        dropped_line=3,
+        dropped_pattern="!build/keep/",
+        masking_source=Path("/root/.dropboxignore"),
+        masking_line=1,
+        masking_pattern="build/",
+    )
+    assert c.dropped_line == 3
+    assert c.masking_pattern == "build/"
+    # Frozen — assignment should raise.
+    with pytest.raises((AttributeError, TypeError)):
+        c.dropped_line = 99  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# _detect_conflicts tests
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _FakeEntry:
+    """Test shim for the sequence entries _detect_conflicts consumes."""
+
+    source: Path
+    line: int  # 1-based
+    raw: str  # source line text
+    ancestor_dir: Path  # directory the pattern is scoped to
+    pattern: Any  # object with .include and .match_file
+
+
+class _FakePattern:
+    def __init__(self, raw: str) -> None:
+        # Strip leading `!` to decide include bit; strip the `/` anchor for
+        # matching via simple prefix check (sufficient for these unit tests;
+        # real pathspec handles the full gitignore grammar).
+        self.include = not raw.startswith("!")
+        self._target = raw.lstrip("!").lstrip("/")
+
+    def match_file(self, path: str) -> bool | None:
+        # Directory-only rules (trailing /) match the dir itself AND
+        # descendants (prefix semantics); non-directory rules match exactly.
+        tgt = self._target
+        if tgt.endswith("/"):
+            # For simplicity: path matches if it equals tgt or starts with tgt.
+            if path == tgt or path.startswith(tgt):
+                return True
+        else:
+            if path == tgt or path.rstrip("/") == tgt:
+                return True
+        return None
+
+
+def _entry(source: str, line: int, raw: str, ancestor_dir: str) -> _FakeEntry:
+    return _FakeEntry(
+        source=Path(source),
+        line=line,
+        raw=raw,
+        ancestor_dir=Path(ancestor_dir),
+        pattern=_FakePattern(raw),
+    )
+
+
+def test_detect_conflict_flags_negation_under_ignored_ancestor(tmp_path: Path) -> None:
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "build/", str(root)),
+        _entry(str(root / ".dropboxignore"), 3, "!build/keep/", str(root)),
+    ]
+    conflicts = _detect_conflicts(sequence, root=root)  # type: ignore[arg-type]
+
+    assert len(conflicts) == 1
+    c = conflicts[0]
+    assert c.dropped_pattern == "!build/keep/"
+    assert c.masking_pattern == "build/"
+    assert c.dropped_line == 3
+    assert c.masking_line == 1
+
+
+def test_detect_no_conflict_for_file_pattern_negation(tmp_path: Path) -> None:
+    """*.log + !important.log does NOT flag — no directory is ignored."""
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "*.log", str(root)),
+        _entry(str(root / ".dropboxignore"), 2, "!important.log", str(root)),
+    ]
+    conflicts = _detect_conflicts(sequence, root=root)  # type: ignore[arg-type]
+    assert conflicts == []
+
+
+def test_detect_no_conflict_for_unrelated_paths(tmp_path: Path) -> None:
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "build/", str(root)),
+        _entry(str(root / ".dropboxignore"), 2, "!unrelated/path/", str(root)),
+    ]
+    assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
+
+
+def test_detect_no_conflict_when_negation_precedes_include(tmp_path: Path) -> None:
+    """Order matters: a negation can only be masked by a rule that appears
+    before it in evaluation order."""
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "!build/keep/", str(root)),
+        _entry(str(root / ".dropboxignore"), 2, "build/", str(root)),
+    ]
+    assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
+
+
+def test_detect_cross_file_conflict(tmp_path: Path) -> None:
+    """Root .dropboxignore ignores build/; nested .dropboxignore inside
+    build/ tries to re-include keep/. Same conflict as intra-file, just
+    with sources in two different files."""
+    root = tmp_path
+    root_file = root / ".dropboxignore"
+    nested_file = root / "build" / ".dropboxignore"
+    sequence = [
+        _entry(str(root_file), 1, "build/", str(root)),
+        _entry(str(nested_file), 1, "!keep/", str(root / "build")),
+    ]
+    conflicts = _detect_conflicts(sequence, root=root)  # type: ignore[arg-type]
+
+    assert len(conflicts) == 1
+    c = conflicts[0]
+    assert c.dropped_source == nested_file
+    assert c.masking_source == root_file
+
+
+def test_detect_glob_prefix_negation_under_directory_marking_glob_include(
+    tmp_path: Path,
+) -> None:
+    """Glob-prefix directory negation (`!**/foo/bar/`) is dropped as inert
+    when an earlier directory-marking include exists in the sequence.
+
+    The include `**/foo/` itself has glob prefix (literal_prefix returns
+    None), but it's still directory-marking — its raw text ends in `/`,
+    so it marks every `<anywhere>/foo/` directory the glob lands on.
+    Under Dropbox's ancestor-inheritance, every descendant of those
+    marked directories is implicitly ignored regardless of later
+    negations, so `!**/foo/bar/` is inert wherever the `**` lands under
+    a matched parent.
+
+    Flagged as a conflict via ``_find_masking_directory_include``.
+    """
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "**/foo/", str(root)),
+        _entry(str(root / ".dropboxignore"), 2, "!**/foo/bar/", str(root)),
+    ]
+    conflicts = _detect_conflicts(sequence, root=root)  # type: ignore[arg-type]
+    assert len(conflicts) == 1
+    assert conflicts[0].dropped_pattern == "!**/foo/bar/"
+    assert conflicts[0].masking_pattern == "**/foo/"
+
+
+def test_detect_glob_prefix_file_negation_still_skipped(tmp_path: Path) -> None:
+    """File-level glob-prefix negation (`!**/important.log` — no trailing
+    slash) is still skipped: file-level rules don't propagate via
+    Dropbox's ancestor inheritance, so the conflict-or-not call is
+    handled by pathspec's last-match-wins regardless of any earlier
+    include's directory-marking shape. Lock down the file-vs-directory
+    branching in the file-vs-directory detection."""
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "build/", str(root)),
+        _entry(str(root / ".dropboxignore"), 2, "!**/important.log", str(root)),
+    ]
+    assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
+
+
+def test_detect_glob_prefix_dir_negation_with_no_directory_include_no_flag(
+    tmp_path: Path,
+) -> None:
+    """Glob-prefix directory negation against only file-level includes:
+    no directory inheritance is at play, so no conflict to flag."""
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "*.log", str(root)),
+        _entry(str(root / ".dropboxignore"), 2, "!**/keep/", str(root)),
+    ]
+    assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
+
+
+def test_detect_glob_prefix_dir_negation_alone_no_flag(tmp_path: Path) -> None:
+    """Glob-prefix directory negation with no earlier rules at all:
+    nothing to be masked by, nothing to flag."""
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "!**/foo/", str(root)),
+    ]
+    assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
+
+
+def test_detect_glob_prefix_same_target_override_no_flag(tmp_path: Path) -> None:
+    """Same-target override carve-out: ``**/foo/`` followed by ``!**/foo/``
+    is the explicit pathspec last-match-wins case — the user wrote the
+    negation immediately after the include to unignore the same target.
+    The conservative-drop arm must NOT flag this, because dropping the
+    negation would leave ``foo/`` directories ignored on disk (``RuleCache.match()``
+    filters entries listed in ``_dropped`` before consulting pathspec,
+    so a dropped negation changes marker behavior, not just diagnostics)."""
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "**/foo/", str(root)),
+        _entry(str(root / ".dropboxignore"), 2, "!**/foo/", str(root)),
+    ]
+    assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
+
+
+def test_detect_glob_prefix_negation_overridden_by_children_only_include_no_flag(
+    tmp_path: Path,
+) -> None:
+    """Children-only includes don't propagate via inheritance — their
+    matched paths are leaves, not marked ancestors. So a glob-prefix
+    negation that overlaps a children-only include's match-set is
+    overridable via pathspec last-match-wins, not inheritance-inert.
+
+    Example: ``build/`` + ``foo/*`` + ``!**/bar/``. The negation overrides
+    ``foo/*``'s match for ``foo/bar/`` via last-match-wins; the
+    unrelated ``build/`` directory-marking include is a strict
+    ancestor of nothing the negation could land on (literal-suffix
+    ``bar/`` doesn't start with ``build/``), so neither include
+    triggers the inheritance-inert flag.
+
+    A conservative-drop arm that fired on any directory-marking
+    include (``build/``) would silently drop the negation and leave
+    ``foo/bar/`` ignored on disk."""
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "build/", str(root)),
+        _entry(str(root / ".dropboxignore"), 2, "foo/*", str(root)),
+        _entry(str(root / ".dropboxignore"), 3, "!**/bar/", str(root)),
+    ]
+    assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
+
+
+def test_detect_glob_prefix_negation_unrelated_dir_include_no_flag(
+    tmp_path: Path,
+) -> None:
+    """Earlier directory-marking include whose target is unrelated to the
+    negation's suffix path: not a strict ancestor, so not inheritance-
+    inert. Negation effective for any path it lands on outside the
+    include's subtree."""
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "build/", str(root)),
+        _entry(str(root / ".dropboxignore"), 2, "!**/bar/", str(root)),
+    ]
+    assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
+
+
+def test_detect_glob_prefix_literal_suffix_matches_literal_include_no_flag(
+    tmp_path: Path,
+) -> None:
+    """Literal-prefix include + glob-prefix negation with matching target.
+
+    ``bar/`` followed by ``!**/bar/`` is a same-target override even
+    though the raw strings don't match: the include's literal-prefix
+    (``bar/``) equals the negation's literal-suffix (``bar/``), and
+    pathspec last-match-wins resolves the negation as an explicit
+    override for ``bar/`` at the root. Dropping the negation would
+    leave ``bar/`` ignored on disk because ``_dropped`` filters
+    pre-pathspec; the same-target carve-out's literal-prefix-vs-suffix
+    arm prevents that."""
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "bar/", str(root)),
+        _entry(str(root / ".dropboxignore"), 2, "!**/bar/", str(root)),
+    ]
+    assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
+
+
+def test_detect_glob_prefix_same_target_override_with_other_dir_include_no_flag(
+    tmp_path: Path,
+) -> None:
+    """Same-target override stays effective even with unrelated directory
+    includes in the same sequence. ``**/bar/`` exists but doesn't share
+    the negation's target — the negation's explicit override of
+    ``**/foo/`` still produces real marker effect, so the negation must
+    not be dropped just because some OTHER directory-marking include
+    happens to be present."""
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "**/foo/", str(root)),
+        _entry(str(root / ".dropboxignore"), 2, "**/bar/", str(root)),
+        _entry(str(root / ".dropboxignore"), 3, "!**/foo/", str(root)),
+    ]
+    assert _detect_conflicts(sequence, root=root) == []  # type: ignore[arg-type]
+
+
+def test_detect_multiple_independent_conflicts(tmp_path: Path) -> None:
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "build/", str(root)),
+        _entry(str(root / ".dropboxignore"), 2, "node_modules/", str(root)),
+        _entry(str(root / ".dropboxignore"), 4, "!build/keep/", str(root)),
+        _entry(str(root / ".dropboxignore"), 5, "!node_modules/patched/", str(root)),
+    ]
+    conflicts = _detect_conflicts(sequence, root=root)  # type: ignore[arg-type]
+    patterns = {c.dropped_pattern for c in conflicts}
+    assert patterns == {"!build/keep/", "!node_modules/patched/"}
+
+
+def test_detect_later_include_does_not_affect_earlier_negation(tmp_path: Path) -> None:
+    """Sandwich (include → negation → include): the trailing include is invisible
+    to the detector because it iterates ``sequence[:i]``. Pins the slice
+    invariant so a refactor widening it to the full sequence would fail."""
+    root = tmp_path
+    sequence = [
+        _entry(str(root / ".dropboxignore"), 1, "build/", str(root)),
+        _entry(str(root / ".dropboxignore"), 2, "!build/keep/", str(root)),
+        _entry(str(root / ".dropboxignore"), 3, "src/", str(root)),
+    ]
+    conflicts = _detect_conflicts(sequence, root=root)  # type: ignore[arg-type]
+
+    assert len(conflicts) == 1
+    assert conflicts[0].dropped_pattern == "!build/keep/"
+    assert conflicts[0].masking_pattern == "build/"

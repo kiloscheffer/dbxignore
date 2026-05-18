@@ -128,6 +128,53 @@ jobs:
           path: dist/
           retention-days: 1
 
+  build-linux:
+    # x86_64 ELF binary built on ubuntu-22.04 for wider glibc compat
+    # (glibc 2.35; works on Debian 12+, Fedora 36+, RHEL 9+, Ubuntu 22.04+).
+    # Users on older distros install via PyPI per the README. An aarch64
+    # build leg can be added on ubuntu-22.04-arm if demand surfaces.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Sync deps
+        run: uv sync --all-extras
+
+      - name: Build Linux binary
+        run: uv run --with pyinstaller pyinstaller pyinstaller/dbxignore-linux.spec
+
+      - name: Smoke test Linux binary
+        # Same shape as the macOS smoke test: `--help` exercises the full
+        # import chain (cli → markers → _backends/linux_xattr → stdlib
+        # os.getxattr) without starting the daemon; `--version` exercises
+        # the copy_metadata("dbxignore") bundling in the .spec.
+        # PyInstaller sets +x on output binaries, so no chmod needed.
+        run: |
+          set -e
+          ./dist/dbxignore --help
+          version_out=$(./dist/dbxignore --version 2>&1)
+          echo "$version_out"
+          echo "$version_out" | grep -q "dbxignore, version"
+
+      - name: Archive Linux binary
+        # tar.gz so the binary's POSIX +x bit survives the upload/download
+        # round-trip (raw uploads strip the mode on GitHub Releases).
+        run: |
+          cd dist
+          tar -czf dbxignore-linux-x86_64.tar.gz dbxignore
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dist-linux
+          path: dist/dbxignore-linux-x86_64.tar.gz
+          retention-days: 1
+
   classify-tag:
     # Parse the pushed tag against PEP 440 pre-release patterns so both
     # publish-* jobs share a single source of truth for "is this a release
@@ -156,9 +203,9 @@ jobs:
           fi
 
   publish-github:
-    # GitHub Release: wheel + sdist + Windows binaries + macOS binaries.
-    # Runs on every tag push; both build legs must succeed first.
-    needs: [build, build-macos, classify-tag]
+    # GitHub Release: wheel + sdist + Windows binaries + macOS + Linux binaries.
+    # Runs on every tag push; all build legs must succeed first.
+    needs: [build, build-macos, build-linux, classify-tag]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -176,6 +223,12 @@ jobs:
           name: dist-macos
           path: dist-macos/
 
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dist-linux
+          path: dist-linux/
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
         with:
@@ -185,6 +238,7 @@ jobs:
             dist/dbxignore.exe
             dist/dbxignorew.exe
             dist-macos/dbxignore
+            dist-linux/dbxignore-linux-x86_64.tar.gz
           generate_release_notes: true
           # Pre-release flag is sourced from classify-tag's PEP 440 detector
           # so it can't disagree with publish-pypi's gating below.

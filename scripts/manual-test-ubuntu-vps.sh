@@ -336,6 +336,45 @@ phase_dbxignore_install() {
         if bin_dir="$(uv tool dir --bin 2>/dev/null)" && [ -n "$bin_dir" ] && [ -d "$bin_dir" ]; then
             rm -f "$bin_dir/dbxignore" "$bin_dir/dbxignorew"
         fi
+    else
+        # Orphan-install detection. A prior `uv tool uninstall` that failed
+        # mid-cleanup can leave the venv at $(uv tool dir)/dbxignore AND/OR
+        # the shims at $(uv tool dir --bin) behind even though `uv tool list`
+        # no longer shows dbxignore. The next `uv tool install` then either
+        # does an incremental update (venv-orphan: only changed packages
+        # reinstall; others survive, producing a hybrid venv with subtly
+        # broken C-extension state) or refuses outright with "Executables
+        # already exist" (shim-orphan). Detect both shapes and clean them
+        # up here so the next install is fresh. Symmetric with the
+        # known-install teardown above, minus the daemon-kill prologue:
+        # in the orphan case the systemd-launched daemon is already dead
+        # because either its venv or its shim is gone. See PR #<THIS_PR>.
+        local orphan_tool_dir orphan_bin_dir orphan_venv
+        local -a orphan_shims=()
+        orphan_tool_dir="$(uv tool dir 2>/dev/null)" || orphan_tool_dir=""
+        orphan_bin_dir="$(uv tool dir --bin 2>/dev/null)" || orphan_bin_dir=""
+        orphan_venv="${orphan_tool_dir:+$orphan_tool_dir/dbxignore}"
+        if [ -n "$orphan_bin_dir" ]; then
+            for exe in dbxignore dbxignorew; do
+                if [ -e "$orphan_bin_dir/$exe" ]; then
+                    orphan_shims+=("$orphan_bin_dir/$exe")
+                fi
+            done
+        fi
+        if { [ -n "$orphan_venv" ] && [ -d "$orphan_venv" ]; } || [ "${#orphan_shims[@]}" -gt 0 ]; then
+            note "${Y}WARNING:${X} orphan install detected — prior uv tool uninstall partially failed"
+            if [ -n "$orphan_venv" ] && [ -d "$orphan_venv" ]; then
+                note "  removing orphan venv at $orphan_venv"
+                rm -rf "$orphan_venv"
+            fi
+            if [ "${#orphan_shims[@]}" -gt 0 ]; then
+                for shim in "${orphan_shims[@]}"; do
+                    note "  removing orphan shim at $shim"
+                    rm -f "$shim"
+                done
+            fi
+            note "orphan cleanup complete; proceeding with fresh install"
+        fi
     fi
 
     clean_uv_cache_for_dbxignore_if_local

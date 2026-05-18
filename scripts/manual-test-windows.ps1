@@ -386,6 +386,54 @@ function Test-InstallDbxignore {
                 if (Test-Path $shim) { Remove-Item -Force $shim -ErrorAction SilentlyContinue }
             }
         }
+    } else {
+        # Orphan-install detection. A prior uv tool uninstall that failed
+        # mid-cleanup (e.g. daemon still running and holding dbxignorew.exe
+        # mapped) can leave the venv at $(uv tool dir)/dbxignore AND/OR the
+        # shims at $(uv tool dir --bin) behind even though uv tool list no
+        # longer shows dbxignore. The next uv tool install then either does
+        # an incremental update (venv-orphan: only changed packages reinstall;
+        # others survive from the prior install, producing a hybrid venv with
+        # subtly broken C-extension state) or refuses outright with
+        # "Executables already exist" (shim-orphan). Detect both shapes and
+        # clean them up here so the next install is fresh. Symmetric with the
+        # known-install teardown above, minus the daemon-kill prologue: in
+        # the orphan case the schtasks-launched daemon is already dead
+        # because either its venv or its shim is gone. See PR #<THIS_PR>.
+        $toolDir = (uv tool dir 2>$null | Out-String).Trim()
+        $binDir  = (uv tool dir --bin 2>$null | Out-String).Trim()
+        $orphanVenv = if ($toolDir) { Join-Path $toolDir 'dbxignore' } else { $null }
+        $orphanShims = @()
+        if ($binDir) {
+            foreach ($exe in @('dbxignore.exe', 'dbxignorew.exe')) {
+                $shim = Join-Path $binDir $exe
+                if (Test-Path $shim) { $orphanShims += $shim }
+            }
+        }
+        $venvExists = $orphanVenv -and (Test-Path $orphanVenv)
+        if ($venvExists -or $orphanShims.Count -gt 0) {
+            Write-Note "${Y}WARNING:${X} orphan install detected - prior uv tool uninstall partially failed"
+            if ($venvExists) {
+                Write-Note "  removing orphan venv at $orphanVenv"
+                $attempts = 0
+                while ((Test-Path $orphanVenv) -and ($attempts -lt 10)) {
+                    try {
+                        Remove-Item -Recurse -Force $orphanVenv -ErrorAction Stop
+                    } catch {
+                        Start-Sleep -Milliseconds 500
+                        $attempts++
+                    }
+                }
+                if (Test-Path $orphanVenv) {
+                    Stop-Abort "could not remove orphan venv $orphanVenv after 5s of retries; manual cleanup needed: Remove-Item -Recurse -Force $orphanVenv"
+                }
+            }
+            foreach ($shim in $orphanShims) {
+                Write-Note "  removing orphan shim at $shim"
+                Remove-Item -Force $shim -ErrorAction SilentlyContinue
+            }
+            Write-Note "orphan cleanup complete; proceeding with fresh install"
+        }
     }
 
     # Invalidate uv's path-keyed sdist cache for local-source installs.

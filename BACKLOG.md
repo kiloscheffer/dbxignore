@@ -217,30 +217,6 @@ Surfaced during a review cycle (the third site needing the idiom was identified 
 
 Touches: `src/dbxignore/cli.py`, `src/dbxignore/state.py`, `src/dbxignore/reconcile.py` (one helper added, ~3-7 call sites updated depending on which extraction shape is picked).
 
-## 11. Other `cmd | grep -q` sites in bash smoke scripts share the SIGPIPE+pipefail false-failure risk
-
-Phase 5f's human-status `dbxignore status 2>&1 | grep -qE '^daemon: running ...'` was confirmed to false-fail under `set -euo pipefail` because Python's block-buffered stdout flushes on exit, races the grep-quit-on-match pipe close, raises `BrokenPipeError`, exits 1, and pipefail propagates the 1 to the overall pipe exit — flipping the `if`-branch even when the regex matched. 5f is fixed by capture-then-grep; see `docs/internals/active-gotchas.md` for the diagnostic shape.
-
-Other `<command> | grep -q ...` sites in `scripts/manual-test-{ubuntu-vps,macos}.sh` carry the same theoretical risk wherever the producer emits more than one line:
-
-- `dbxignore --help 2>&1 | grep -q 'apply'` (`manual-test-ubuntu-vps.sh:329`, `manual-test-macos.sh:243`) — `--help` is multi-line.
-- `dbxignore explain "..." 2>&1 | grep -qF '[dropped]'` (`manual-test-ubuntu-vps.sh:388`, `manual-test-macos.sh:314`) — `explain` is multi-line.
-- `dbxignore explain "..." 2>&1 | grep -q '\*\.log'` (`manual-test-ubuntu-vps.sh:417`, `manual-test-macos.sh:348`) — same shape.
-- `uv tool list 2>/dev/null | grep -q '^dbxignore '` (`manual-test-ubuntu-vps.sh:289`, `manual-test-macos.sh:204`) — multi-line listing.
-
-None has been observed to flake in practice (PASS counts on Linux = 95 in a recent run; macOS clean in recent cycles), likely because the producers are fast enough that the entire output reaches the pipe buffer before `grep -q` closes its read end. But the trap is non-zero and the same.
-
-Surfaced by a Linux smoke-test validation pass, alongside the 5f failure.
-
-**Fix candidates:**
-
-- (1) Preemptively rewrite all six sites to capture-then-grep. ~3 lines per site. Mechanical; no behavioral risk.
-- (2) Leave as-is and add the gotcha entry (already done) so the next surfacing is fast to diagnose. Wait for the next observed flake to trigger work.
-
-**Urgency:** low. None of these sites have flaked yet. Tracker item to bundle with the next manual-script touch.
-
-Touches: `scripts/manual-test-ubuntu-vps.sh`, `scripts/manual-test-macos.sh`.
-
 ## 12. Stale uv tool venv survives failed uninstall, partial state on next install
 
 When `uv tool uninstall dbxignore` fails mid-cleanup (e.g. the Windows daemon is still running and holds `dbxignorew.exe` mapped), the tool venv at `%APPDATA%\uv\tools\dbxignore` (or platform equivalent) is left behind in a partially-cleaned state — the entry-point shims under `~/.local/bin/` may be removed but the venv's `site-packages/` survives. A subsequent `uv tool install .` detects the existing venv and does an *incremental update* rather than a fresh install: only changed packages get reinstalled, others (psutil, watchdog, etc.) are retained from the prior install. Result: a hybrid venv with packages from two different install events that can produce subtle compatibility issues — partially-initialized module errors on Python 3.14, daemon hangs during initial sweep, etc.
@@ -376,7 +352,7 @@ Touches: `scripts/manual-test-windows.ps1`.
 
 ### Open
 
-Eighteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Seventeen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#1** — Intel Mac (x86_64) Mach-O binary build leg. dbxignore ships arm64-only Mach-O binaries; Intel users install via PyPI. Awaits demand signal.
 - **#2** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #1. Defer until item #1 actually triggers.
@@ -388,7 +364,6 @@ Eighteen items. Most are passive (no concrete trigger requires action) — bundl
 - **#8** — macOS sync-mode detection is process-global; mixed legacy/File-Provider account setups may need per-root or write-both behavior.
 - **#9** — `dropbox_root` fixture from `test_cli_symlink_path_args.py` packages the ~27-site inline `monkeypatch.setattr(cli, "_discover_roots", lambda: [tmp_path])` pattern across `test_cli_apply.py` / `test_cli_clear.py` / `test_cli_status_list_explain.py`. Filed for design-tension record (precedent: #4, #5); current dual shape is defensible.
 - **#10** — `FileNotFoundError`-before-`OSError` 'vanished path' idiom now repeats across `reconcile._reconcile_path` (2 sites), `state._read_at` (1 site), and `cli.uninstall --purge` (4 sites). Filed for design-tension record (precedent: #4, #5, #9); current per-site shape is defensible because the local response action varies (return None / set flag / continue / pass) and no generic helper fits all seven sites.
-- **#11** — Other `cmd | grep -q` sites in `scripts/manual-test-{ubuntu-vps,macos}.sh` (`--help`, `explain`, `uv tool list`) share the SIGPIPE+pipefail false-failure risk that bit 5f. Capture-then-grep is the preemptive fix; defer until one of them actually flakes.
 - **#12** — Failed `uv tool uninstall` leaves the venv directory behind; the next `uv tool install` does an incremental update instead of fresh install, producing a hybrid venv (mixed install-event packages). Triggers subtle import / C-extension issues. Recovery is manual `Remove-Item ~\AppData\Roaming\uv\tools\<pkg>`.
 - **#13** — `_DeferredEvents.drain` redispatches serially on the worker thread before Phase 2 starts; a large startup-window burst could delay Phase 2's wall-clock unnecessarily. Mostly redundant with Phase 2 anyway. No observed problem.
 - **#16** — Two-tier ignore/skip rule structure as an alternative to interleaved negations. RFC only; does not bypass Dropbox's ancestor-inheritance constraint — purely an authoring-ergonomics question. `is_dropped` is the defensible current answer. Awaiting a concrete UX-insufficiency case.

@@ -475,6 +475,16 @@ jobs:
     # submit). DISTRIBUTION_TOKEN PAT scopes Contents + Pull requests
     # on the fork. Action runs on ubuntu-latest (komac is cross-platform).
     #
+    # The submitted artifact is `dbxignore-setup.exe`, an Inno Setup
+    # installer. winget-releaser/komac auto-detects `InstallerType: inno`
+    # from the binary; winget's built-in Inno silent switches cover
+    # `winget install kiloscheffer.dbxignore --silent` without a
+    # manifest `InstallerSwitches` block.
+    #
+    # winget-pkgs accepts each version's manifest independently, so
+    # changing the installer type from the previous `zip` to `inno`
+    # flows through as the next version's manifest with no re-bootstrap.
+    #
     # First-submission limitation: the winget-releaser action checks the
     # package path exists in microsoft/winget-pkgs master before submitting.
     # The initial submission for kiloscheffer.dbxignore must be done
@@ -492,6 +502,6 @@ jobs:
         uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
         with:
           identifier: kiloscheffer.dbxignore
-          installers-regex: '^dbxignore-windows-x86_64\.zip$'
+          installers-regex: '^dbxignore-setup\.exe$'
           release-tag: ${{ github.ref_name }}
           token: ${{ secrets.DISTRIBUTION_TOKEN }}

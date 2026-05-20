@@ -298,11 +298,36 @@ The same null-create_time state also defeats `install/windows_task.py:uninstall_
 
 Touches: `src/dbxignore/daemon.py` (`_capture_create_time` helper + `daemon.run`'s call site); `src/dbxignore/state.py` (`State.write`, `is_daemon_alive` if behavior changes once root cause is known); `tests/test_daemon_capture_create_time.py` (diagnostic helper).
 
+## 17. Code-sign the Windows installer
+
+`dbxignore-setup.exe` ships unsigned. On first run Windows SmartScreen
+shows a "Windows protected your PC" prompt; the user must click
+"More info" then "Run anyway" to proceed. An Authenticode signature on
+the installer (and ideally on `dbxignore.exe` / `dbxignorew.exe`) would
+suppress the warning.
+
+**Fix candidates:**
+
+1. Obtain a code-signing certificate and add a signing step to
+   `release.yml`'s Windows build job. EV certificates clear SmartScreen
+   reputation immediately; OV certificates build reputation over
+   download volume.
+2. Use a cloud signing service (e.g. Azure Trusted Signing) to avoid
+   managing a certificate or HSM directly.
+
+**Urgency:** low. The installer works unsigned; the SmartScreen prompt is
+a one-time, dismissible UX wrinkle documented in the README. Awaits a
+code-signing certificate becoming available or a concrete pain signal.
+
+Touches: `.github/workflows/release.yml` (a post-build signing step);
+`installer/dbxignore.iss` (a `SignTool` directive if Inno drives the
+signing).
+
 ## Status
 
 ### Open
 
-Sixteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Seventeen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#1** — Intel Mac (x86_64) Mach-O binary build leg. dbxignore ships arm64-only Mach-O binaries; Intel users install via PyPI. Awaits demand signal.
 - **#2** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #1. Defer until item #1 actually triggers.
@@ -320,3 +345,4 @@ Sixteen items. Most are passive (no concrete trigger requires action) — bundle
 - **#14** — Finer-grained intra-root sweep parallelism below #6's top-level-subdir fan-out granularity. Matters only for trees where one subtree dominates wall-clock after the existing fan-out. Awaiting a profiled lopsided-tree case.
 - **#15** — Observer/callback hook on `RuleCache` mutations. Not needed until a TUI/GUI surface wants live rule state; callbacks must not re-enter the `_rules` lock. Awaiting TUI/GUI work.
 - **#16** — Windows daemon occasionally writes `daemon_create_time: null` to `state.json`; non-deterministic, observed only on Windows. Silently disables PID-reuse-race protection in `is_daemon_alive` AND defeats `uninstall_task`'s wait loop when state.json's PID is stale. `daemon._capture_create_time` wraps the capture with a narrow catch + WARNING; a null observation in the wild carries forensic data in `daemon.log`.
+- **#17** — Code-sign the Windows installer. `dbxignore-setup.exe` ships unsigned; SmartScreen warns on first run. Awaits a code-signing certificate or a concrete pain signal.

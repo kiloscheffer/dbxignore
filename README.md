@@ -22,7 +22,7 @@ dbxignore applies the Dropbox ignore marker to paths that match a `.dropboxignor
 
 ## Requirements
 
-- **Windows 10/11** (NTFS), **or** a modern Linux distro with a systemd user session, **or** macOS (Apple Silicon for pre-built binaries; Intel via PyPI)
+- Windows 10/11 (NTFS), **or** a modern Linux distro with a systemd user session, **or** macOS (Apple Silicon for pre-built binaries; Intel via PyPI)
 - Dropbox desktop client installed
 - Python ≥ 3.11 with [`uv`](https://docs.astral.sh/uv/). The [Scoop bucket](https://github.com/kiloscheffer/scoop-dbxignore) (Windows), [Homebrew tap](https://github.com/kiloscheffer/homebrew-dbxignore) (macOS + Linux), and pre-built binaries (Windows `.exe`, macOS arm64 Mach-O, Linux x86_64 `.tar.gz`) are alternatives that don't require Python.
 
@@ -276,10 +276,10 @@ target/
 `dbxignore init [PATH]` writes a starter `.dropboxignore` into `PATH` (or the current directory). The packaged template covers common dev artifacts across ecosystems — Node.js (`node_modules`, npm/yarn/pnpm caches and logs), Python (virtualenvs, bytecode, tool caches), Rust (`target/`), JVM (`.gradle/`), .NET (`bin/`, `obj/`), frontend frameworks (`.next/`, `.nuxt/`, `.svelte-kit/`, `.turbo/`, etc.), generic build/dist outputs, and OS detritus (`.DS_Store`, `Thumbs.db`, vim swap files).
 
 ```
-dbxignore init                    # writes ./.dropboxignore
-dbxignore init ~/Dropbox/proj     # writes ~/Dropbox/proj/.dropboxignore
-dbxignore init --stdout           # preview without writing
-dbxignore init --force            # overwrite an existing file
+dbxignore init                       # writes ./.dropboxignore
+dbxignore init ~/Dropbox/proj        # writes ~/Dropbox/proj/.dropboxignore
+dbxignore init --stdout              # preview without writing
+dbxignore init --force               # overwrite an existing file
 ```
 
 The header of the generated file lists which marker-bait directories were detected in your tree at depth ≤ 3 (e.g., `# Detected in this tree at depth <= 3: node_modules, __pycache__`). All template patterns are emitted as active rules; the header is the cue for which ones are immediately load-bearing. Edit the file afterward to remove patterns that don't apply to your tree.
@@ -289,9 +289,9 @@ The header of the generated file lists which marker-bait directories were detect
 `dbxignore apply` runs one reconcile pass — the same operation the daemon performs on every `.dropboxignore` save and on its hourly recovery sweep. Useful for forcing a one-shot run without waiting for the daemon (or when no daemon is installed).
 
 ```
-dbxignore apply --dry-run         # preview what would be marked/cleared
-dbxignore apply --yes             # skip the confirmation prompt
-dbxignore apply ~/Dropbox/proj    # scope to a subtree
+dbxignore apply --dry-run            # preview what would be marked/cleared
+dbxignore apply --yes                # skip the confirmation prompt
+dbxignore apply ~/Dropbox/proj       # scope to a subtree
 dbxignore apply --from-gitignore ~/Dropbox/proj/.gitignore --yes
 ```
 
@@ -306,10 +306,10 @@ Unlike `clear`, `apply` does **not** refuse to run while the daemon is alive —
 `dbxignore clear` walks the watched roots and clears every ignore marker, the inverse of `apply`. Useful for staging a manual sync change or testing that Dropbox re-syncs previously-ignored content from the cloud. Unlike `uninstall --purge`, it leaves `.dropboxignore` rule files and `state.json` untouched.
 
 ```
-dbxignore clear --dry-run         # preview what would be cleared
-dbxignore clear --yes             # skip the confirmation prompt
-dbxignore clear ~/Dropbox/proj    # scope to a subtree
-dbxignore clear --force --yes     # override daemon-alive guard
+dbxignore clear --dry-run            # preview what would be cleared
+dbxignore clear --yes                # skip the confirmation prompt
+dbxignore clear ~/Dropbox/proj       # scope to a subtree
+dbxignore clear --force --yes        # override daemon-alive guard
 ```
 
 `clear` refuses to run when the daemon is alive — the daemon's next sweep would re-apply rule-driven markers within seconds (rule-reload events) or within the hour (recovery sweep tick). Stop the daemon first (`dbxignore uninstall`) or pass `--force` for known short-window tests where you'll restart the daemon yourself.
@@ -392,8 +392,8 @@ Dropbox marks files and folders as ignored using xattrs. When a folder carries t
 A negation can only re-include a path if no strict ancestor directory of that path is marked ignored. The case dbxignore drops is when an earlier rule marks a directory and a later negation tries to re-include something inside that directory:
 
 ```
-build/         # marks the directory build/ itself
-!build/keep/   # ← dropped: build/ is already ignored, inheritance wins
+build/                               # marks the directory build/ itself
+!build/keep/                         # ← dropped: build/ is already ignored, inheritance wins
 ```
 
 dbxignore detects this at the moment you save the `.dropboxignore`, logs a WARNING naming both rules, and drops the conflicted negation from the active rule set.
@@ -401,9 +401,9 @@ dbxignore detects this at the moment you save the `.dropboxignore`, logs a WARNI
 The git-canonical pattern works because it marks only the *children* of `build/`, not `build/` itself:
 
 ```
-build/*        # marks immediate children
-!build/keep/   # except this one
-!build/keep/** # re-include everything under it
+build/*                              # marks immediate children
+!build/keep/                         # except this one
+!build/keep/**                       # re-include everything under it
 ```
 
 If you wrote `build/` only to except a child, switch the trailing `/` to `/*` — the two forms differ (`build/` marks the directory itself; `build/*` does not), so only switch when the negation is the load-bearing reason for the rule.
@@ -428,10 +428,10 @@ A `.gitignore` and a `.dropboxignore` use the same pattern grammar (the same `pa
 **`dbxignore generate <path>`** writes a `.dropboxignore` derived byte-for-byte from a source file. `<path>` may be a file or a directory; if a directory, `.gitignore` inside it is the source.
 
 ```
-dbxignore generate ~/Dropbox/proj/.gitignore           # writes ~/Dropbox/proj/.dropboxignore
-dbxignore generate ~/Dropbox/proj                      # same — auto-finds .gitignore
-dbxignore generate ~/Dropbox/proj/.gitignore --stdout  # preview without writing
-dbxignore generate ~/Dropbox/proj/.gitignore --force   # overwrite an existing .dropboxignore
+dbxignore generate ~/Dropbox/proj/.gitignore            # writes ~/Dropbox/proj/.dropboxignore
+dbxignore generate ~/Dropbox/proj                       # same — auto-finds .gitignore
+dbxignore generate ~/Dropbox/proj/.gitignore --stdout   # preview without writing
+dbxignore generate ~/Dropbox/proj/.gitignore --force    # overwrite an existing .dropboxignore
 ```
 
 The destination path is `<dir>/.dropboxignore` by default; use `-o <path>` to redirect. Without `--force`, an existing `.dropboxignore` at the target is left in place and the command exits non-zero.
@@ -491,17 +491,17 @@ Ad-hoc debugging — bump the daemon's verbosity for one run:
 
 ```bash
 # Linux / macOS
-systemctl --user stop dbxignore.service     # Linux: stop the running daemon
+systemctl --user stop dbxignore.service                     # Linux: stop the running daemon
 launchctl bootout gui/$(id -u)/com.kiloscheffer.dbxignore   # macOS: same idea
 
-DBXIGNORE_LOG_LEVEL=DEBUG dbxignore daemon  # foreground; output streams to terminal
+DBXIGNORE_LOG_LEVEL=DEBUG dbxignore daemon                  # foreground; output streams to terminal
 ```
 
 ```powershell
 # Windows
-schtasks /End /TN dbxignore                       # stop the running task instance
+schtasks /End /TN dbxignore          # stop the running task instance
 $env:DBXIGNORE_LOG_LEVEL = "DEBUG"
-dbxignore daemon                                  # foreground in this shell
+dbxignore daemon                     # foreground in this shell
 ```
 
 Re-enable the managed daemon (`systemctl --user start dbxignore.service`, `launchctl bootstrap`, or wait for next logon on Windows) when you're done.

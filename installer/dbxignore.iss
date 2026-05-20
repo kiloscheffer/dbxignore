@@ -55,7 +55,8 @@ Source: "..\dist\dbxignore\*"; DestDir: "{app}"; \
 [Tasks]
 ; Checked by default. A [Tasks] entry (not a Finished-page [Run]
 ; postinstall checkbox) is controllable from the command line via
-; /TASKS=, which the CI smoke test relies on to skip registration.
+; /MERGETASKS=!registerdaemon, which the CI smoke test uses to skip
+; the post-install daemon registration.
 Name: "registerdaemon"; \
   Description: "Register the dbxignore background daemon and Explorer right-click menu"
 

@@ -1,12 +1,12 @@
 """VSVersionInfo factory for the PyInstaller-built Windows binaries.
 
-Shared by ``pyinstaller/dbxignore.spec`` and ``pyinstaller/dbxignorew.spec``
-to keep the PE VERSIONINFO resource fields (FileDescription, CompanyName,
-LegalCopyright, etc.) in one place. The two specs each call
-``make_version_info()`` with the three values that differ between the
-console and GUI binaries (``internal_name``, ``file_description``,
-``original_filename``); everything else is a project-wide constant defined
-here so the two binaries can't drift.
+Used by ``pyinstaller/dbxignore.spec`` to keep the PE VERSIONINFO resource
+fields (FileDescription, CompanyName, LegalCopyright, etc.) in one place.
+The spec calls ``make_version_info()`` twice — once per binary — with the
+three values that differ between the console and GUI binaries
+(``internal_name``, ``file_description``, ``original_filename``);
+everything else is a project-wide constant defined here so the two
+binaries can't drift.
 
 The numeric ``FixedFileInfo`` tuple takes only the PEP 440 release
 segment (major.minor.patch) plus a fixed build=0; dev/pre/post suffixes

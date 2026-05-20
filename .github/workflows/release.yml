@@ -114,11 +114,13 @@ jobs:
             Write-Host "==> $label : $exe $($arglist -join ' ')"
             $p = Start-Process -FilePath $exe -ArgumentList $arglist -PassThru
             if (-not $p.WaitForExit($timeoutSec * 1000)) {
+              # Kill first so the process releases its Inno /LOG handle
+              # before we read it, then dump diagnostics.
+              try { $p.Kill($true) } catch { }
               Write-Host "::group::$label timed out after ${timeoutSec}s"
               tasklist | Select-String -Pattern 'dbxignore|unins|_iu|setup'
               if (Test-Path $logPath) { Write-Host '--- Inno log ---'; Get-Content $logPath }
               Write-Host '::endgroup::'
-              try { $p.Kill($true) } catch { }
               throw "$label timed out after ${timeoutSec}s"
             }
             $code = try { $p.ExitCode } catch { '(unknown)' }

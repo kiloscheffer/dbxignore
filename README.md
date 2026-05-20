@@ -6,6 +6,7 @@ dbxignore applies the Dropbox ignore marker to paths that match a `.dropboxignor
 
 - [Requirements](#requirements)
 - [Install (Windows, Scoop)](#install-windows-scoop)
+- [Install (Windows, installer)](#install-windows-installer)
 - [Install (Windows, from source)](#install-windows-from-source)
 - [Install (Linux)](#install-linux)
 - [Install (macOS)](#install-macos)
@@ -36,6 +37,16 @@ dbxignore status                     # verify: daemon running and watching Dropb
 ```
 
 The bucket repo is at [`kiloscheffer/scoop-dbxignore`](https://github.com/kiloscheffer/scoop-dbxignore). Run `dbxignore uninstall` before `scoop uninstall dbxignore` so the Task Scheduler entry is removed cleanly.
+
+## Install (Windows, installer)
+
+Download `dbxignore-setup.exe` from the latest [Release](https://github.com/kiloscheffer/dbxignore/releases) and run it.
+
+The installer is per-user: it installs to `%LOCALAPPDATA%\Programs\dbxignore` and needs no administrator rights. On the "Select Additional Tasks" page, the "Register the dbxignore background daemon and Explorer right-click menu" checkbox is ticked by default — leave it ticked to run `dbxignore install` at the end of setup (this registers the Task Scheduler entry and the Explorer right-click verbs). Untick it to install the binaries and `PATH` entry only; you can run `dbxignore install` yourself later.
+
+`dbxignore-setup.exe` is not code-signed, so Windows SmartScreen shows a "Windows protected your PC" prompt on first run — click "More info", then "Run anyway".
+
+Uninstall from Settings → Apps (or "Add or remove programs"). The uninstaller asks whether to also clear your ignore markers and state; choose "No" to remove only the program. On an upgrade, leave the daemon checkbox ticked so the daemon restarts on the new binaries immediately.
 
 ## Install (Windows, from source)
 

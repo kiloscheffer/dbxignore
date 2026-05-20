@@ -78,6 +78,80 @@ jobs:
             -Path dist/dbxignore/* `
             -DestinationPath dist/dbxignore-windows-x86_64.zip
 
+      - name: Build Windows installer
+        # Compile the Inno Setup installer. Inno Setup 6 is pre-installed
+        # on the windows-latest runner image; ISCC.exe lives under
+        # Program Files (x86). The version is read from the built binary's
+        # --version output so tag pushes and workflow_dispatch runs both
+        # get a correct AppVersion. (If a future runner image drops Inno
+        # Setup, add: choco install innosetup -y)
+        shell: pwsh
+        run: |
+          $versionLine = & dist\dbxignore\dbxignore.exe --version
+          $ver = ($versionLine -replace '.*version\s+', '').Trim()
+          Write-Host "Installer AppVersion: $ver"
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=$ver installer\dbxignore.iss
+
+      - name: Smoke test Windows installer
+        # Silent-install with the daemon task deselected
+        # (/MERGETASKS=!registerdaemon — explicit deselect merged onto the
+        # defaults; a bare /TASKS= is ambiguous) so the post-install
+        # `dbxignore install` is skipped (the runner has no Dropbox).
+        # Assert the onedir tree landed and the CLI runs, then
+        # silent-uninstall and assert the install dir is gone.
+        #
+        # The installer and uninstaller each run under a hard timeout: a
+        # hung step must fail fast — dumping tasklist and the Inno /LOG
+        # for diagnosis — never block the runner indefinitely.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = "$env:LOCALAPPDATA\Programs\dbxignore"
+          $instLog = Join-Path $env:RUNNER_TEMP 'dbxignore-install.log'
+          $uninLog = Join-Path $env:RUNNER_TEMP 'dbxignore-uninstall.log'
+
+          function Invoke-Bounded($exe, $arglist, $timeoutSec, $label, $logPath) {
+            Write-Host "==> $label : $exe $($arglist -join ' ')"
+            $p = Start-Process -FilePath $exe -ArgumentList $arglist -PassThru
+            if (-not $p.WaitForExit($timeoutSec * 1000)) {
+              # Kill first so the process releases its Inno /LOG handle
+              # before we read it, then dump diagnostics.
+              try { $p.Kill($true) } catch { }
+              Write-Host "::group::$label timed out after ${timeoutSec}s"
+              tasklist | Select-String -Pattern 'dbxignore|unins|_iu|setup'
+              if (Test-Path $logPath) { Write-Host '--- Inno log ---'; Get-Content $logPath }
+              Write-Host '::endgroup::'
+              throw "$label timed out after ${timeoutSec}s"
+            }
+            $code = try { $p.ExitCode } catch { '(unknown)' }
+            Write-Host "==> $label exited with code $code"
+          }
+
+          Invoke-Bounded 'dist\dbxignore-setup.exe' `
+            @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/MERGETASKS=!registerdaemon',"/LOG=$instLog") `
+            120 'installer' $instLog
+          foreach ($f in 'dbxignore.exe','dbxignorew.exe','_internal') {
+            if (-not (Test-Path "$dir\$f")) { throw "installer did not place $f" }
+          }
+          & "$dir\dbxignore.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "installed dbxignore.exe --version failed" }
+
+          $uninst = Get-ChildItem $dir -Filter 'unins*.exe' | Select-Object -First 1
+          Invoke-Bounded $uninst.FullName `
+            @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$uninLog") `
+            120 'uninstaller' $uninLog
+          $deadline = (Get-Date).AddSeconds(60)
+          while ((Test-Path "$dir\dbxignore.exe") -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 500
+          }
+          if (Test-Path "$dir\dbxignore.exe") {
+            Write-Host '::group::uninstall did not remove the install dir'
+            tasklist | Select-String -Pattern 'dbxignore|unins|_iu'
+            if (Test-Path $uninLog) { Write-Host '--- Inno uninstall log ---'; Get-Content $uninLog }
+            Write-Host '::endgroup::'
+            throw "uninstall did not remove the install dir within 60s"
+          }
+
       - name: Upload dist artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -239,6 +313,7 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
             dist/dbxignore-windows-x86_64.zip
+            dist/dbxignore-setup.exe
             dist-macos/dbxignore
             dist-linux/dbxignore-linux-x86_64.tar.gz
           generate_release_notes: true
@@ -434,6 +509,16 @@ jobs:
     # submit). DISTRIBUTION_TOKEN PAT scopes Contents + Pull requests
     # on the fork. Action runs on ubuntu-latest (komac is cross-platform).
     #
+    # The submitted artifact is `dbxignore-setup.exe`, an Inno Setup
+    # installer. winget-releaser/komac auto-detects `InstallerType: inno`
+    # from the binary; winget's built-in Inno silent switches cover
+    # `winget install kiloscheffer.dbxignore --silent` without a
+    # manifest `InstallerSwitches` block.
+    #
+    # winget-pkgs accepts each version's manifest independently, so
+    # changing the installer type from the previous `zip` to `inno`
+    # flows through as the next version's manifest with no re-bootstrap.
+    #
     # First-submission limitation: the winget-releaser action checks the
     # package path exists in microsoft/winget-pkgs master before submitting.
     # The initial submission for kiloscheffer.dbxignore must be done
@@ -451,6 +536,6 @@ jobs:
         uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
         with:
           identifier: kiloscheffer.dbxignore
-          installers-regex: '^dbxignore-windows-x86_64\.zip$'
+          installers-regex: '^dbxignore-setup\.exe$'
           release-tag: ${{ github.ref_name }}
           token: ${{ secrets.DISTRIBUTION_TOKEN }}

@@ -10,7 +10,7 @@ dbxignore applies the Dropbox ignore marker to paths that match a `.dropboxignor
 - [Install (Linux)](#install-linux)
 - [Install (macOS)](#install-macos)
 - [Install (Homebrew)](#install-homebrew)
-- [Install (.exe)](#install-exe)
+- [Install (Windows, portable zip)](#install-windows-portable-zip)
 - [Platform support](#platform-support)
 - [`.dropboxignore` syntax](#dropboxignore-syntax)
 - [Commands](#commands)
@@ -195,11 +195,12 @@ dbxignore status                     # verify: daemon running and watching Dropb
 
 The tap repo is at [`kiloscheffer/homebrew-dbxignore`](https://github.com/kiloscheffer/homebrew-dbxignore). Supports macOS arm64 (Apple Silicon) and Linux x86_64. Run `dbxignore uninstall` before `brew uninstall dbxignore` so the service is removed cleanly.
 
-## Install (.exe)
+## Install (Windows, portable zip)
 
-1. Download both `dbxignore.exe` and `dbxignorew.exe` from the latest [Release](https://github.com/kiloscheffer/dbxignore/releases). They ship together — `dbxignore.exe` is the CLI you run from a terminal, `dbxignorew.exe` is the GUI helper that Task Scheduler invokes for the daemon and that the Explorer right-click verbs target. All commands you type are `dbxignore`; you do not invoke `dbxignorew.exe` directly.
-2. Place both files in a stable directory (e.g. `%LOCALAPPDATA%\dbxignore\bin\`) and add that directory to your `PATH`.
-3. Run `dbxignore install`.
+1. Download `dbxignore-windows-x86_64.zip` from the latest [Release](https://github.com/kiloscheffer/dbxignore/releases).
+2. Extract it to a stable directory (e.g. `%LOCALAPPDATA%\Programs\dbxignore\`). The archive contains `dbxignore.exe` (the CLI you run from a terminal), `dbxignorew.exe` (the GUI helper that Task Scheduler invokes for the daemon and that the Explorer right-click verbs target), and an `_internal\` folder of bundled dependencies. Keep the three together — the two executables read from `_internal\`. All commands you type are `dbxignore`; you do not invoke `dbxignorew.exe` directly.
+3. Add the extraction directory to your `PATH`.
+4. Run `dbxignore install`.
 
 ## Windows Explorer integration
 

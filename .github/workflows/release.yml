@@ -93,30 +93,62 @@ jobs:
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=$ver installer\dbxignore.iss
 
       - name: Smoke test Windows installer
-        # Silent-install with the daemon task deselected (/TASKS=) so the
-        # post-install `dbxignore install` is skipped — the runner has no
-        # Dropbox. Assert the onedir tree landed and the CLI runs, then
-        # silent-uninstall. Inno's uninstaller self-copies and relaunches,
-        # so -Wait returns early; poll for the directory to disappear.
+        # Silent-install with the daemon task deselected
+        # (/MERGETASKS=!registerdaemon — explicit deselect merged onto the
+        # defaults; a bare /TASKS= is ambiguous) so the post-install
+        # `dbxignore install` is skipped (the runner has no Dropbox).
+        # Assert the onedir tree landed and the CLI runs, then
+        # silent-uninstall and assert the install dir is gone.
+        #
+        # The installer and uninstaller each run under a hard timeout: a
+        # hung step must fail fast — dumping tasklist and the Inno /LOG
+        # for diagnosis — never block the runner indefinitely.
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $dir = "$env:LOCALAPPDATA\Programs\dbxignore"
-          Start-Process dist\dbxignore-setup.exe `
-            -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS=' -Wait
+          $instLog = Join-Path $env:RUNNER_TEMP 'dbxignore-install.log'
+          $uninLog = Join-Path $env:RUNNER_TEMP 'dbxignore-uninstall.log'
+
+          function Invoke-Bounded($exe, $arglist, $timeoutSec, $label, $logPath) {
+            Write-Host "==> $label : $exe $($arglist -join ' ')"
+            $p = Start-Process -FilePath $exe -ArgumentList $arglist -PassThru
+            if (-not $p.WaitForExit($timeoutSec * 1000)) {
+              Write-Host "::group::$label timed out after ${timeoutSec}s"
+              tasklist | Select-String -Pattern 'dbxignore|unins|_iu|setup'
+              if (Test-Path $logPath) { Write-Host '--- Inno log ---'; Get-Content $logPath }
+              Write-Host '::endgroup::'
+              try { $p.Kill($true) } catch { }
+              throw "$label timed out after ${timeoutSec}s"
+            }
+            $code = try { $p.ExitCode } catch { '(unknown)' }
+            Write-Host "==> $label exited with code $code"
+          }
+
+          Invoke-Bounded 'dist\dbxignore-setup.exe' `
+            @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/MERGETASKS=!registerdaemon',"/LOG=$instLog") `
+            120 'installer' $instLog
           foreach ($f in 'dbxignore.exe','dbxignorew.exe','_internal') {
             if (-not (Test-Path "$dir\$f")) { throw "installer did not place $f" }
           }
           & "$dir\dbxignore.exe" --version
           if ($LASTEXITCODE -ne 0) { throw "installed dbxignore.exe --version failed" }
+
           $uninst = Get-ChildItem $dir -Filter 'unins*.exe' | Select-Object -First 1
-          Start-Process $uninst.FullName `
-            -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          Invoke-Bounded $uninst.FullName `
+            @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$uninLog") `
+            120 'uninstaller' $uninLog
           $deadline = (Get-Date).AddSeconds(60)
           while ((Test-Path "$dir\dbxignore.exe") -and (Get-Date) -lt $deadline) {
             Start-Sleep -Milliseconds 500
           }
-          if (Test-Path "$dir\dbxignore.exe") { throw "uninstall did not remove the install dir within 60s" }
+          if (Test-Path "$dir\dbxignore.exe") {
+            Write-Host '::group::uninstall did not remove the install dir'
+            tasklist | Select-String -Pattern 'dbxignore|unins|_iu'
+            if (Test-Path $uninLog) { Write-Host '--- Inno uninstall log ---'; Get-Content $uninLog }
+            Write-Host '::endgroup::'
+            throw "uninstall did not remove the install dir within 60s"
+          }
 
       - name: Upload dist artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

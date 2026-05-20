@@ -29,61 +29,53 @@ jobs:
         run: uv build
 
       - name: Build Windows binaries
-        # pyinstaller is a build-only tool, not a runtime or dev dep — install
-        # ephemerally for this run rather than declaring it in pyproject.toml.
-        # Two specs produce two binaries: dbxignore.exe (console=True; CLI)
-        # and dbxignorew.exe (console=False; Task Scheduler daemon + Explorer
-        # shell-verb helper).
-        run: |
-          uv run --with pyinstaller pyinstaller pyinstaller/dbxignore.spec
-          uv run --with pyinstaller pyinstaller pyinstaller/dbxignorew.spec
+        # pyinstaller is a build-only tool, not a runtime or dev dep —
+        # install ephemerally for this run rather than declaring it in
+        # pyproject.toml. One merged onedir spec produces dist/dbxignore/
+        # containing both dbxignore.exe (console=True; CLI) and
+        # dbxignorew.exe (console=False; Task Scheduler daemon + Explorer
+        # shell-verb helper) plus one shared _internal/ dependency tree.
+        run: uv run --with pyinstaller pyinstaller pyinstaller/dbxignore.spec
 
       - name: Smoke test Windows binaries
         # --help fails-fast on missing-bundled-module errors (e.g. a
         # _cffi_backend that didn't make it into the bundle). --version
         # fails-fast on missing dist-info metadata (PyInstaller surfaces
         # this as "RuntimeError: <pkg> is not installed" when
-        # importlib.metadata can't find the wheel inside the frozen
-        # bundle).
-        # Both binaries: dbxignore.exe (console=True) is straightforward;
-        # dbxignorew.exe (console=False) needs --version captured via the
-        # bash assignment to force synchronous wait, since GUI-subsystem
-        # binaries return control to the shell asynchronously.
+        # importlib.metadata can't find the wheel inside the bundle).
+        # Both binaries live in the onedir tree dist/dbxignore/.
         shell: bash
         run: |
           set -e
           # dbxignore.exe — console subsystem; synchronous by default.
-          help_out=$(./dist/dbxignore.exe --help 2>&1)
+          help_out=$(./dist/dbxignore/dbxignore.exe --help 2>&1)
           echo "$help_out"
           echo "$help_out" | grep -q "Usage:"
-          version_out=$(./dist/dbxignore.exe --version 2>&1)
+          version_out=$(./dist/dbxignore/dbxignore.exe --version 2>&1)
           echo "$version_out"
           echo "$version_out" | grep -q "dbxignore.exe, version"
           # dbxignorew.exe — GUI subsystem; bash assignment forces wait.
-          # --help on the GUI binary writes to a non-existent console
-          # (no parent terminal in CI), but importlib.metadata + click
-          # parser run before output — a non-zero exit indicates an
-          # import-time crash. We don't grep its output because the
-          # MessageBox path can't be exercised in headless CI.
-          # We don't grep output (the MessageBox path can't be exercised in
-          # headless CI), but the exit code surfaces import-time crashes:
-          # bash waits synchronously thanks to the pipe redirection, and the
-          # script's `set -e` propagates a non-zero exit to fail the job.
-          ./dist/dbxignorew.exe --help >/dev/null 2>&1
-          ./dist/dbxignorew.exe --version >/dev/null 2>&1
-          # Both binaries must exist and be non-empty.
-          test -s ./dist/dbxignore.exe
-          test -s ./dist/dbxignorew.exe
+          # We don't grep its output (the MessageBox path can't be
+          # exercised in headless CI), but a non-zero exit surfaces an
+          # import-time crash, and bash waits synchronously thanks to the
+          # pipe redirection.
+          ./dist/dbxignore/dbxignorew.exe --help >/dev/null 2>&1
+          ./dist/dbxignore/dbxignorew.exe --version >/dev/null 2>&1
+          # Both binaries and the shared dependency tree must exist.
+          test -s ./dist/dbxignore/dbxignore.exe
+          test -s ./dist/dbxignore/dbxignorew.exe
+          test -d ./dist/dbxignore/_internal
 
-      - name: Zip Windows binaries
-        # winget's zip InstallerType requires a zip containing the binaries
-        # (Portable InstallerType is single-file only). Both .exe files are
-        # also uploaded individually for the Scoop bucket; the zip is an
-        # additional artifact, not a replacement.
+      - name: Zip Windows onedir bundle
+        # winget and the Scoop bucket consume an archive of the whole
+        # onedir tree. `-Path dist/dbxignore/*` archives the directory
+        # *contents* (both .exe files + _internal\) at the zip root, so
+        # the extracted layout is dbxignore.exe alongside _internal\ with
+        # no wrapper directory.
         shell: pwsh
         run: |
           Compress-Archive `
-            -Path dist/dbxignore.exe,dist/dbxignorew.exe `
+            -Path dist/dbxignore/* `
             -DestinationPath dist/dbxignore-windows-x86_64.zip
 
       - name: Upload dist artifacts
@@ -246,8 +238,6 @@ jobs:
           files: |
             dist/*.whl
             dist/*.tar.gz
-            dist/dbxignore.exe
-            dist/dbxignorew.exe
             dist/dbxignore-windows-x86_64.zip
             dist-macos/dbxignore
             dist-linux/dbxignore-linux-x86_64.tar.gz
@@ -291,10 +281,10 @@ jobs:
           path: dist/
 
       - name: Exclude Windows binaries (PyPI distribution only)
-        # PyPI only accepts wheels and sdists; drop the standalone .exe
-        # binaries and the .zip archive (the latter would otherwise be
-        # mis-parsed by twine as an sdist and rejected as malformed).
-        run: rm -f dist/*.exe dist/*.zip
+        # PyPI only accepts wheels and sdists. Drop the .zip archive, the
+        # onedir bundle directory, and any .exe (covers dbxignore-setup.exe
+        # once a later PR adds it).
+        run: rm -rf dist/*.zip dist/dbxignore dist/*.exe
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
@@ -316,16 +306,14 @@ jobs:
         id: ver
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
 
-      - name: Compute SHA256s for Windows binaries
+      - name: Compute SHA256 for Windows zip
         id: hashes
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -e
-          EXE_SHA=$(curl -sSfL "https://github.com/${{ github.repository }}/releases/download/v$VERSION/dbxignore.exe" | sha256sum | awk '{print $1}')
-          EXEW_SHA=$(curl -sSfL "https://github.com/${{ github.repository }}/releases/download/v$VERSION/dbxignorew.exe" | sha256sum | awk '{print $1}')
-          echo "exe_sha=$EXE_SHA" >> "$GITHUB_OUTPUT"
-          echo "exew_sha=$EXEW_SHA" >> "$GITHUB_OUTPUT"
+          ZIP_SHA=$(curl -sSfL "https://github.com/${{ github.repository }}/releases/download/v$VERSION/dbxignore-windows-x86_64.zip" | sha256sum | awk '{print $1}')
+          echo "zip_sha=$ZIP_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Checkout scoop-dbxignore
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -337,17 +325,14 @@ jobs:
       - name: Update manifest via jq
         env:
           VERSION: ${{ steps.ver.outputs.version }}
-          EXE_SHA: ${{ steps.hashes.outputs.exe_sha }}
-          EXEW_SHA: ${{ steps.hashes.outputs.exew_sha }}
+          ZIP_SHA: ${{ steps.hashes.outputs.zip_sha }}
         run: |
           cd scoop-dbxignore
-          jq --arg ver "$VERSION" --arg exe "$EXE_SHA" --arg exew "$EXEW_SHA" \
+          jq --arg ver "$VERSION" --arg zip "$ZIP_SHA" \
             '.version = $ver |
-             .architecture."64bit".url = [
-               "https://github.com/kiloscheffer/dbxignore/releases/download/v\($ver)/dbxignore.exe",
-               "https://github.com/kiloscheffer/dbxignore/releases/download/v\($ver)/dbxignorew.exe"
-             ] |
-             .architecture."64bit".hash = [$exe, $exew]' \
+             .architecture."64bit".url = "https://github.com/kiloscheffer/dbxignore/releases/download/v\($ver)/dbxignore-windows-x86_64.zip" |
+             .architecture."64bit".hash = $zip |
+             .autoupdate.architecture."64bit".url = "https://github.com/kiloscheffer/dbxignore/releases/download/v$version/dbxignore-windows-x86_64.zip"' \
             bucket/dbxignore.json > bucket/dbxignore.json.tmp
           mv bucket/dbxignore.json.tmp bucket/dbxignore.json
 

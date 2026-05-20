@@ -78,6 +78,46 @@ jobs:
             -Path dist/dbxignore/* `
             -DestinationPath dist/dbxignore-windows-x86_64.zip
 
+      - name: Build Windows installer
+        # Compile the Inno Setup installer. Inno Setup 6 is pre-installed
+        # on the windows-latest runner image; ISCC.exe lives under
+        # Program Files (x86). The version is read from the built binary's
+        # --version output so tag pushes and workflow_dispatch runs both
+        # get a correct AppVersion. (If a future runner image drops Inno
+        # Setup, add: choco install innosetup -y)
+        shell: pwsh
+        run: |
+          $versionLine = & dist\dbxignore\dbxignore.exe --version
+          $ver = ($versionLine -replace '.*version\s+', '').Trim()
+          Write-Host "Installer AppVersion: $ver"
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=$ver installer\dbxignore.iss
+
+      - name: Smoke test Windows installer
+        # Silent-install with the daemon task deselected (/TASKS=) so the
+        # post-install `dbxignore install` is skipped — the runner has no
+        # Dropbox. Assert the onedir tree landed and the CLI runs, then
+        # silent-uninstall. Inno's uninstaller self-copies and relaunches,
+        # so -Wait returns early; poll for the directory to disappear.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = "$env:LOCALAPPDATA\Programs\dbxignore"
+          Start-Process dist\dbxignore-setup.exe `
+            -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS=' -Wait
+          foreach ($f in 'dbxignore.exe','dbxignorew.exe','_internal') {
+            if (-not (Test-Path "$dir\$f")) { throw "installer did not place $f" }
+          }
+          & "$dir\dbxignore.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "installed dbxignore.exe --version failed" }
+          $uninst = Get-ChildItem $dir -Filter 'unins*.exe' | Select-Object -First 1
+          Start-Process $uninst.FullName `
+            -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          $deadline = (Get-Date).AddSeconds(60)
+          while ((Test-Path "$dir\dbxignore.exe") -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 500
+          }
+          if (Test-Path "$dir\dbxignore.exe") { throw "uninstall did not remove the install dir within 60s" }
+
       - name: Upload dist artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -239,6 +279,7 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
             dist/dbxignore-windows-x86_64.zip
+            dist/dbxignore-setup.exe
             dist-macos/dbxignore
             dist-linux/dbxignore-linux-x86_64.tar.gz
           generate_release_notes: true

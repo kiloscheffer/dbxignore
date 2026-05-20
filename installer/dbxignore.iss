@@ -48,8 +48,14 @@ UninstallDisplayIcon={app}\dbxignore.exe
 UninstallDisplayName={#AppName}
 
 [Files]
-; The whole onedir tree: dbxignore.exe, dbxignorew.exe, and _internal\.
-Source: "..\dist\dbxignore\*"; DestDir: "{app}"; \
+; The two executables are named explicitly rather than folded into a
+; wildcard: ISCC errors at compile time if a named source file is
+; missing, so an incomplete dist\dbxignore\ (e.g. a build interrupted
+; by file locks) fails the build instead of silently producing an
+; installer with no binaries. _internal\ is the shared dependency tree.
+Source: "..\dist\dbxignore\dbxignore.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\dbxignore\dbxignorew.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\dbxignore\_internal\*"; DestDir: "{app}\_internal"; \
   Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Tasks]

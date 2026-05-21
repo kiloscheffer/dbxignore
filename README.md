@@ -11,6 +11,7 @@ dbxignore applies the Dropbox ignore marker to paths that match a `.dropboxignor
 - [Install (Linux)](#install-linux)
 - [Install (macOS)](#install-macos)
 - [Install (Homebrew)](#install-homebrew)
+- [Install (macOS / Linux, one-line)](#install-macos--linux-one-line)
 - [Install (Windows, portable zip)](#install-windows-portable-zip)
 - [Platform support](#platform-support)
 - [`.dropboxignore` syntax](#dropboxignore-syntax)
@@ -202,6 +203,26 @@ dbxignore status                     # verify: daemon running and watching Dropb
 ```
 
 The tap repo is at [`kiloscheffer/homebrew-dbxignore`](https://github.com/kiloscheffer/homebrew-dbxignore). Supports macOS arm64 (Apple Silicon) and Linux x86_64. Run `dbxignore uninstall` before `brew uninstall dbxignore` so the service is removed cleanly.
+
+## Install (macOS / Linux, one-line)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kiloscheffer/dbxignore/main/install.sh | sh
+```
+
+The script downloads the pre-built bundle for your platform (macOS arm64 or Linux x86_64), installs it under `~/.local/share/dbxignore/`, symlinks `~/.local/bin/dbxignore`, adds `~/.local/bin` to your `PATH` if it is not already there, and runs `dbxignore install` to register the daemon. Open a new shell afterwards so the `PATH` change takes effect, then run `dbxignore status` to verify.
+
+Flags (pass after `sh -s --`):
+
+- `--no-daemon` — install the binary only; skip `dbxignore install`.
+- `--no-modify-path` — do not edit your shell profile; print the `PATH` line instead.
+- `--uninstall` — remove the daemon, the installed files, the symlink, and the `PATH` entry.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kiloscheffer/dbxignore/main/install.sh | sh -s -- --uninstall
+```
+
+Intel Macs and non-x86_64 Linux have no pre-built bundle — install via PyPI (`pip install dbxignore`) instead.
 
 ## Install (Windows, portable zip)
 

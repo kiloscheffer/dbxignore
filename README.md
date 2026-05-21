@@ -25,7 +25,7 @@ dbxignore applies the Dropbox ignore marker to paths that match a `.dropboxignor
 
 - Windows 10/11 (NTFS), **or** a modern Linux distro with a systemd user session, **or** macOS (Apple Silicon for pre-built binaries; Intel via PyPI)
 - Dropbox desktop client installed
-- Python ≥ 3.11 with [`uv`](https://docs.astral.sh/uv/). The [Scoop bucket](https://github.com/kiloscheffer/scoop-dbxignore) (Windows), [Homebrew tap](https://github.com/kiloscheffer/homebrew-dbxignore) (macOS + Linux), and pre-built binaries (Windows `.exe`, macOS arm64 Mach-O, Linux x86_64 `.tar.gz`) are alternatives that don't require Python.
+- Python ≥ 3.11 with [`uv`](https://docs.astral.sh/uv/). The [Scoop bucket](https://github.com/kiloscheffer/scoop-dbxignore) (Windows), [Homebrew tap](https://github.com/kiloscheffer/homebrew-dbxignore) (macOS + Linux), and pre-built binaries (Windows, macOS, and Linux) are alternatives that don't require Python.
 
 ## Install (Windows, Scoop)
 
@@ -159,20 +159,17 @@ dbxignore status                     # verify: daemon running and watching Dropb
 <details>
 <summary>Pre-built binaries (arm64 only)</summary>
 
-Pre-built Mach-O binaries are arm64 (Apple Silicon). Intel Mac users: install via PyPI — the wheel is universal Python.
+Pre-built binaries are arm64 (Apple Silicon). Intel Mac users: install via PyPI — the wheel is universal Python.
 
 ```bash
-curl -L -o dbxignore  https://github.com/kiloscheffer/dbxignore/releases/latest/download/dbxignore
-chmod +x dbxignore
-sudo mv dbxignore /usr/local/bin/
+curl -L -o dbxignore-macos-arm64.tar.gz \
+  https://github.com/kiloscheffer/dbxignore/releases/latest/download/dbxignore-macos-arm64.tar.gz
+tar -xzf dbxignore-macos-arm64.tar.gz
 ```
 
-The binary is unsigned — Gatekeeper refuses it on first launch with "cannot be opened because it is from an unidentified developer." Either right-click → Open in Finder (macOS remembers the override), or strip the quarantine xattr explicitly:
+The archive extracts to a `dbxignore/` directory containing the `dbxignore` executable and an `_internal/` folder of bundled dependencies; keep them together. Move the directory somewhere stable, put the executable on your `PATH`, and run `dbxignore install`.
 
-```bash
-xattr -d com.apple.quarantine /usr/local/bin/dbxignore
-dbxignore install
-```
+`curl` does not set the `com.apple.quarantine` attribute, so Gatekeeper does not block a binary fetched this way — no `xattr` workaround is needed.
 
 </details>
 

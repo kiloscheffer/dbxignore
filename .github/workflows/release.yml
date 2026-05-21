@@ -202,6 +202,20 @@ jobs:
           cd dist
           tar -czf dbxignore-macos-arm64.tar.gz dbxignore
 
+      - name: Smoke test install.sh
+        # Install from the freshly-built local tarball (no release exists
+        # yet on a workflow_dispatch run), with the daemon step skipped
+        # (the runner has no Dropbox). Assert dbxignore runs from the
+        # symlink, then uninstall and assert the install dir is gone.
+        run: |
+          set -e
+          DBXIGNORE_INSTALL_TARBALL="$PWD/dist/dbxignore-macos-arm64.tar.gz" \
+            sh install.sh --no-daemon --no-modify-path
+          "$HOME/.local/bin/dbxignore" --version
+          sh install.sh --uninstall
+          test ! -e "$HOME/.local/share/dbxignore"
+          test ! -e "$HOME/.local/bin/dbxignore"
+
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -226,6 +240,11 @@ jobs:
       - name: Sync deps
         run: uv sync --all-extras
 
+      - name: Shellcheck install.sh
+        # shellcheck is preinstalled on the ubuntu runner image. POSIX-sh
+        # correctness matters for a script piped straight into `sh`.
+        run: shellcheck install.sh
+
       - name: Build Linux binary
         run: uv run --with pyinstaller pyinstaller pyinstaller/dbxignore-linux.spec
 
@@ -249,6 +268,18 @@ jobs:
         run: |
           cd dist
           tar -czf dbxignore-linux-x86_64.tar.gz dbxignore
+
+      - name: Smoke test install.sh
+        # Install from the freshly-built local tarball, daemon step
+        # skipped. Assert dbxignore runs from the symlink, then uninstall.
+        run: |
+          set -e
+          DBXIGNORE_INSTALL_TARBALL="$PWD/dist/dbxignore-linux-x86_64.tar.gz" \
+            sh install.sh --no-daemon --no-modify-path
+          "$HOME/.local/bin/dbxignore" --version
+          sh install.sh --uninstall
+          test ! -e "$HOME/.local/share/dbxignore"
+          test ! -e "$HOME/.local/bin/dbxignore"
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

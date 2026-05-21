@@ -100,11 +100,19 @@ remove_path_block() {
   [ -f "$profile" ] || return 0
   grep -qF "$BLOCK_START" "$profile" || return 0
   tmp=$(mktemp)
-  sed "/^${BLOCK_START}\$/,/^${BLOCK_END}\$/d" "$profile" > "$tmp" && mv "$tmp" "$profile"
-  info "removed the PATH block from $profile"
+  if sed "/^${BLOCK_START}\$/,/^${BLOCK_END}\$/d" "$profile" > "$tmp"; then
+    mv "$tmp" "$profile"
+    info "removed the PATH block from $profile"
+  else
+    rm -f "$tmp"
+    warn "could not edit $profile; remove the dbxignore PATH block by hand"
+  fi
 }
 
 do_uninstall() {
+  # Locate the installed executable to deregister the daemon. Assumes a
+  # non-tampered install — if the install directory and the symlink were
+  # both removed by hand, daemon deregistration is skipped.
   dbx=""
   if [ -x "$DATA_DIR/dbxignore" ]; then
     dbx="$DATA_DIR/dbxignore"
@@ -136,6 +144,8 @@ do_install() {
     else
       url="https://github.com/$REPO/releases/latest/download/$asset"
     fi
+    command -v curl >/dev/null 2>&1 \
+      || die "curl is required to download dbxignore; install curl, or set DBXIGNORE_INSTALL_TARBALL to a local tarball"
     info "downloading $url"
     curl -fsSL "$url" -o "$tarball" || die "download failed: $url"
   fi

@@ -1,12 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec building a single macOS Mach-O binary.
+"""PyInstaller spec building the macOS onedir bundle.
 
 - dbxignore : entry point for all subcommands (CLI + daemon dispatch).
 
-Sibling to dbxignore.spec (Windows). The platform-specific bits (hiddenimports,
-upx, binary names) differ enough to warrant a sibling rather than a single
-parameterized spec — branching sys.platform inside a .spec file hides
-platform-specific assumptions from the maintainer.
+Produces dist/dbxignore/ — the executable plus a _internal/ dependency
+tree. --onedir (not --onefile): the dependencies are unpacked on disk, so
+each launch skips the per-invocation temp-directory extraction a onefile
+bundle pays. install.sh and the Homebrew tap both place this directory.
+
+Sibling to dbxignore.spec (Windows). The platform-specific bits
+(hiddenimports, upx, binary names) differ enough to warrant a sibling
+rather than a single parameterized spec.
 """
 
 from pathlib import Path
@@ -48,16 +52,14 @@ def _analysis():
     )
 
 
-# ---- Single binary -------------------------------------------------------
+# ---- onedir bundle -------------------------------------------------------
 a = _analysis()
 pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="dbxignore",
     debug=False,
     bootloader_ignore_signals=False,
@@ -67,15 +69,23 @@ exe = EXE(
     # diagnostic cost of debugging that remotely.
     upx=False,
     upx_exclude=[],
-    runtime_tmpdir=None,
     disable_windowed_traceback=False,
     argv_emulation=False,
     # arch follows the runner (arm64 on macos-latest); Intel users install
     # via PyPI per the README.
     target_arch=None,
-    # Unsigned binaries — Gatekeeper bypass via `xattr -d com.apple.quarantine`
-    # is documented in the README.
+    # Unsigned binaries — install.sh fetches via curl, which does not set
+    # the com.apple.quarantine attribute, so Gatekeeper does not block them.
     codesign_identity=None,
     entitlements_file=None,
 )
-
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name="dbxignore",
+)

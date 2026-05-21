@@ -183,26 +183,30 @@ jobs:
         # `--help` exercises the full import chain (cli → markers →
         # _backends/macos_xattr → xattr → cffi → _cffi_backend) without
         # starting the daemon, catching missing-bundled-module errors
-        # (e.g. a `_cffi_backend` that didn't make it into the bundle)
         # before the artifact ships. `--version` additionally exercises
-        # the `copy_metadata("dbxignore")` bundling in the .spec
-        # (RuntimeError: 'dbxignore' is not installed if dist-info is
-        # missing), matching the Windows leg's `--help` + `--version`
-        # coverage shape.
-        # PyInstaller sets +x on output binaries, so no chmod needed.
+        # the `copy_metadata("dbxignore")` bundling in the .spec.
+        # The onedir bundle puts the executable in dist/dbxignore/.
         shell: bash
         run: |
           set -e
-          ./dist/dbxignore --help
-          version_out=$(./dist/dbxignore --version 2>&1)
+          ./dist/dbxignore/dbxignore --help
+          version_out=$(./dist/dbxignore/dbxignore --version 2>&1)
           echo "$version_out"
           echo "$version_out" | grep -q "dbxignore, version"
+          test -d ./dist/dbxignore/_internal
+
+      - name: Archive macOS bundle
+        # tar.gz of the onedir tree. The single top-level directory is
+        # dbxignore/; install.sh strips it with --strip-components=1.
+        run: |
+          cd dist
+          tar -czf dbxignore-macos-arm64.tar.gz dbxignore
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dist-macos
-          path: dist/
+          path: dist/dbxignore-macos-arm64.tar.gz
           retention-days: 1
 
   build-linux:
@@ -230,17 +234,18 @@ jobs:
         # import chain (cli → markers → _backends/linux_xattr → stdlib
         # os.getxattr) without starting the daemon; `--version` exercises
         # the copy_metadata("dbxignore") bundling in the .spec.
-        # PyInstaller sets +x on output binaries, so no chmod needed.
+        # The onedir bundle puts the executable in dist/dbxignore/.
         run: |
           set -e
-          ./dist/dbxignore --help
-          version_out=$(./dist/dbxignore --version 2>&1)
+          ./dist/dbxignore/dbxignore --help
+          version_out=$(./dist/dbxignore/dbxignore --version 2>&1)
           echo "$version_out"
           echo "$version_out" | grep -q "dbxignore, version"
+          test -d ./dist/dbxignore/_internal
 
       - name: Archive Linux binary
-        # tar.gz so the binary's POSIX +x bit survives the upload/download
-        # round-trip (raw uploads strip the mode on GitHub Releases).
+        # tar.gz of the onedir tree. The single top-level directory is
+        # dbxignore/; install.sh strips it with --strip-components=1.
         run: |
           cd dist
           tar -czf dbxignore-linux-x86_64.tar.gz dbxignore
@@ -314,7 +319,7 @@ jobs:
             dist/*.tar.gz
             dist/dbxignore-windows-x86_64.zip
             dist/dbxignore-setup.exe
-            dist-macos/dbxignore
+            dist-macos/dbxignore-macos-arm64.tar.gz
             dist-linux/dbxignore-linux-x86_64.tar.gz
           generate_release_notes: true
           # Pre-release flag is sourced from classify-tag's PEP 440 detector
@@ -446,7 +451,7 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -e
-          MACOS_SHA=$(curl -sSfL "https://github.com/${{ github.repository }}/releases/download/v$VERSION/dbxignore" | sha256sum | awk '{print $1}')
+          MACOS_SHA=$(curl -sSfL "https://github.com/${{ github.repository }}/releases/download/v$VERSION/dbxignore-macos-arm64.tar.gz" | sha256sum | awk '{print $1}')
           LINUX_SHA=$(curl -sSfL "https://github.com/${{ github.repository }}/releases/download/v$VERSION/dbxignore-linux-x86_64.tar.gz" | sha256sum | awk '{print $1}')
           echo "macos_sha=$MACOS_SHA" >> "$GITHUB_OUTPUT"
           echo "linux_sha=$LINUX_SHA" >> "$GITHUB_OUTPUT"
@@ -474,8 +479,8 @@ jobs:
               content = f.read()
           content = re.sub(r'^  version "[^"]*"', f'  version "{version}"', content, count=1, flags=re.M)
           content = re.sub(
-              r'url "https://github\.com/kiloscheffer/dbxignore/releases/download/v[^"]+/dbxignore"\n(\s+)sha256 "[a-f0-9]+"',
-              f'url "https://github.com/kiloscheffer/dbxignore/releases/download/v{version}/dbxignore"\n\\1sha256 "{macos_sha}"',
+              r'url "https://github\.com/kiloscheffer/dbxignore/releases/download/v[^"]+/dbxignore-macos-arm64\.tar\.gz"\n(\s+)sha256 "[a-f0-9]+"',
+              f'url "https://github.com/kiloscheffer/dbxignore/releases/download/v{version}/dbxignore-macos-arm64.tar.gz"\n\\1sha256 "{macos_sha}"',
               content,
           )
           content = re.sub(

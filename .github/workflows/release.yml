@@ -78,6 +78,30 @@ jobs:
             -Path dist/dbxignore/* `
             -DestinationPath dist/dbxignore-windows-x86_64.zip
 
+      - name: Smoke test install.ps1
+        # Install from the freshly-built local zip via DBXIGNORE_INSTALL_ARCHIVE
+        # (no release exists yet on a workflow_dispatch run), the daemon step
+        # skipped (-NoDaemon — the runner has no Dropbox) and PATH left
+        # untouched (-NoModifyPath). Assert the CLI runs, then uninstall and
+        # assert the install dir is gone. Runs before the Inno installer smoke
+        # test because both use %LOCALAPPDATA%\Programs\dbxignore.
+        #
+        # install.ps1 is invoked as a *file*, which is execution-policy-gated
+        # (unlike the documented `irm | iex` one-liner), so -ExecutionPolicy
+        # Bypass is required for this invocation form.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = "$env:LOCALAPPDATA\Programs\dbxignore"
+          $env:DBXIGNORE_INSTALL_ARCHIVE = "$PWD\dist\dbxignore-windows-x86_64.zip"
+          powershell -ExecutionPolicy Bypass -File install.ps1 -NoDaemon -NoModifyPath
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 failed" }
+          & "$dir\dbxignore.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "installed dbxignore.exe --version failed" }
+          powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 -Uninstall failed" }
+          if (Test-Path "$dir\dbxignore.exe") { throw "uninstall left files behind" }
+
       - name: Build Windows installer
         # Compile the Inno Setup installer. Inno Setup 6 is pre-installed
         # on the windows-latest runner image; ISCC.exe lives under

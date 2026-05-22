@@ -162,11 +162,14 @@ function Invoke-Install {
     }
 
     # Windows cannot overwrite a running daemon's .exe / _internal files, so
-    # stop an existing install.ps1 install before replacing it.
+    # stop an existing install.ps1 install before replacing it. --keep-logs
+    # preserves daemon.log* across the reinstall (this isn't a real uninstall
+    # -- it's a stop-then-replace for upgrade; the user's diagnostic log
+    # should survive).
     $existing = Join-Path $InstallDir 'dbxignore.exe'
     if (Test-Path -LiteralPath $existing) {
-        info "stopping the existing install ($existing uninstall)"
-        & $existing uninstall
+        info "stopping the existing install ($existing uninstall --keep-logs)"
+        & $existing uninstall --keep-logs
         if ($LASTEXITCODE -ne 0) { warn "dbxignore uninstall reported an error; continuing" }
     }
     Remove-InstallDir
@@ -226,7 +229,7 @@ function Invoke-Uninstall {
     }
     Remove-InstallDir
     Remove-FromPath $InstallDir
-    info "uninstalled. Ignore markers and state are untouched (run 'dbxignore uninstall --purge' before uninstalling for a full wipe)."
+    info "uninstalled. Ignore markers are untouched (run 'dbxignore uninstall --purge' before uninstalling to also clear them)."
 }
 
 if ($Help) { Show-Usage; exit 0 }

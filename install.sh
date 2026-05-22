@@ -126,7 +126,7 @@ do_uninstall() {
   rm -f "$SYMLINK"
   rm -rf "$DATA_DIR"
   remove_path_block
-  info "uninstalled. Ignore markers and state are untouched (run 'dbxignore uninstall --purge' before uninstalling for a full wipe)."
+  info "uninstalled. Ignore markers are untouched (run 'dbxignore uninstall --purge' before uninstalling to also clear them)."
 }
 
 do_install() {

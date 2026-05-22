@@ -1180,6 +1180,65 @@ def test_purge_cleans_separate_log_dir_on_darwin(
     assert not log_dir.exists()
 
 
+def test_purge_local_state_keep_logs_preserves_log_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``keep_logs=True`` removes state files but leaves daemon.log* in place.
+
+    install.ps1's reinstall step relies on this: an upgrade should preserve
+    log continuity, so the stop-the-old-daemon call passes --keep-logs.
+    """
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "state.json").write_text("{}")
+    (state_dir / "daemon.lock").write_text("")
+    (state_dir / "daemon.log").write_text("entry\n")
+    (state_dir / "daemon.log.1").write_text("rotated\n")
+
+    from dbxignore import cli, state
+
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(state, "user_log_dir", lambda: state_dir)
+
+    cli._purge_local_state(keep_logs=True)
+
+    assert not (state_dir / "state.json").exists()
+    assert not (state_dir / "daemon.lock").exists()
+    assert (state_dir / "daemon.log").exists()
+    assert (state_dir / "daemon.log.1").exists()
+    # Dir survives because logs remain.
+    assert state_dir.exists()
+
+
+def test_purge_local_state_keep_logs_darwin_skips_log_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On macOS with a separate log dir, ``keep_logs=True`` skips it entirely."""
+    state_dir = tmp_path / "state"
+    log_dir = tmp_path / "logs"
+    state_dir.mkdir()
+    log_dir.mkdir()
+    (state_dir / "state.json").write_text("{}")
+    (log_dir / "daemon.log").write_text("entry")
+    (log_dir / "launchd.log").write_text("ld")
+
+    from dbxignore import cli, state
+
+    monkeypatch.setattr(state, "user_state_dir", lambda: state_dir)
+    monkeypatch.setattr(state, "user_log_dir", lambda: log_dir)
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    cli._purge_local_state(keep_logs=True)
+
+    # state.json gone; state dir emptied and removed.
+    assert not state_dir.exists()
+    # log dir untouched.
+    assert (log_dir / "daemon.log").exists()
+    assert (log_dir / "launchd.log").exists()
+
+
 def test_format_applies_to_query_single_root() -> None:
     roots = [Path(r"C:\Users\kilo\Dropbox")]
     result = _format_applies_to_query(roots)

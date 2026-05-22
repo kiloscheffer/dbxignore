@@ -59,11 +59,13 @@ powershell -c "irm https://dbxignore.com/install.ps1 | iex"
 
 Downloads `dbxignore-windows-x86_64.zip`, installs it under `%LOCALAPPDATA%\Programs\dbxignore`, adds that directory to your `PATH`, and runs `dbxignore install`. Open a new terminal afterwards so the `PATH` change takes effect. x86_64 is the only Windows build; it runs on ARM64 Windows under emulation.
 
-The `irm | iex` one-liner cannot pass `-switches`, so non-default behavior is set through environment variables — `DBXIGNORE_NO_DAEMON=1`, `DBXIGNORE_NO_MODIFY_PATH=1`, `DBXIGNORE_UNINSTALL=1`, and `DBXIGNORE_VERSION` (pin a release, e.g. `1.2.3`):
+To pass a switch — `-Uninstall`, `-NoDaemon`, or `-NoModifyPath` — build a scriptblock from the downloaded script; a bare `irm | iex` cannot take arguments:
 
 ```powershell
-powershell -c "$env:DBXIGNORE_UNINSTALL=1; irm https://dbxignore.com/install.ps1 | iex"
+powershell -c "& ([scriptblock]::Create((irm https://dbxignore.com/install.ps1))) -Uninstall"
 ```
+
+To pin a release, set `$env:DBXIGNORE_VERSION` in your shell before running the install.
 
 ### Package managers
 
@@ -175,7 +177,7 @@ dbxignore uninstall --purge          # also clear ignore markers, state files, a
 
 Run `dbxignore uninstall` *before* removing the program itself, so the service entry is deregistered cleanly:
 
-- **One-line script** — `curl -fsSL https://dbxignore.com/install.sh | sh -s -- --uninstall` (macOS / Linux), or `powershell -c "$env:DBXIGNORE_UNINSTALL=1; irm https://dbxignore.com/install.ps1 | iex"` (Windows). This removes the daemon, the installed files, and the `PATH` entry in one step.
+- **One-line script** — `curl -fsSL https://dbxignore.com/install.sh | sh -s -- --uninstall` (macOS / Linux), or `powershell -c "& ([scriptblock]::Create((irm https://dbxignore.com/install.ps1))) -Uninstall"` (Windows). This removes the daemon, the installed files, and the `PATH` entry in one step.
 - **Package managers** — `dbxignore uninstall`, then `scoop uninstall dbxignore` / `brew uninstall dbxignore`.
 - **Windows installer** — uninstall from Settings → Apps (or "Add or remove programs"). The uninstaller asks whether to also clear your ignore markers and state; choose "No" to remove only the program.
 - **Python package / manual install** — `dbxignore uninstall`, then `pip uninstall dbxignore` / `uv tool uninstall dbxignore`, or delete the directory you extracted along with its `PATH` entry.

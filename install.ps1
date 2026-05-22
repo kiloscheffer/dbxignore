@@ -26,13 +26,13 @@ Print usage and exit.
 Usage:
   powershell -c "irm https://dbxignore.com/install.ps1 | iex"
 
-The irm | iex one-liner cannot pass -switches, so each switch has an
-environment-variable equivalent:
+A bare irm | iex cannot pass -switches. To pass one, build a scriptblock
+from the downloaded script:
+  powershell -c "& ([scriptblock]::Create((irm https://dbxignore.com/install.ps1))) -Uninstall"
+
+Environment variables:
   DBXIGNORE_VERSION           pin a release, e.g. 1.2.3 (default: latest)
   DBXIGNORE_INSTALL_ARCHIVE   install from a local .zip instead of downloading
-  DBXIGNORE_UNINSTALL=1       same as -Uninstall
-  DBXIGNORE_NO_DAEMON=1       same as -NoDaemon
-  DBXIGNORE_NO_MODIFY_PATH=1  same as -NoModifyPath
 #>
 param(
     [switch]$Uninstall,
@@ -60,15 +60,12 @@ function Show-Usage {
     Write-Host ''
     Write-Host '  powershell -c "irm https://dbxignore.com/install.ps1 | iex"'
     Write-Host ''
+    Write-Host 'To pass a switch, run the downloaded script as a scriptblock:'
+    Write-Host '  powershell -c "& ([scriptblock]::Create((irm https://dbxignore.com/install.ps1))) -Uninstall"'
+    Write-Host ''
     Write-Host 'Options:  -Uninstall  -NoDaemon  -NoModifyPath  -Help'
     Write-Host 'Env vars: DBXIGNORE_VERSION  DBXIGNORE_INSTALL_ARCHIVE'
-    Write-Host '          DBXIGNORE_UNINSTALL  DBXIGNORE_NO_DAEMON  DBXIGNORE_NO_MODIFY_PATH'
 }
-
-# The irm | iex one-liner can't pass -switches; honor env-var equivalents.
-if ($env:DBXIGNORE_UNINSTALL)      { $Uninstall = $true }
-if ($env:DBXIGNORE_NO_DAEMON)      { $NoDaemon = $true }
-if ($env:DBXIGNORE_NO_MODIFY_PATH) { $NoModifyPath = $true }
 
 # Nudge the environment so newly-opened shells pick up a PATH change.
 function Send-SettingChange {

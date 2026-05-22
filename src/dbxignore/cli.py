@@ -82,37 +82,46 @@ def _purge_dir(
         dir_path.rmdir()
 
 
-def _purge_local_state(*, errors: list[tuple[Path, str]] | None = None) -> None:
-    """Delete state.json + daemon.log + rotated backups; rmdir empty dirs.
+def _purge_local_state(
+    *,
+    errors: list[tuple[Path, str]] | None = None,
+    keep_logs: bool = False,
+) -> None:
+    """Delete dbxignore's per-user state files; rmdir empty dirs.
 
-    Called by `uninstall --purge` after the ignore markers are cleared.
-    On Windows + Linux, state and log live in the same dir. On macOS, the
+    Called by `uninstall` (plain and --purge). Always removes `state.json`,
+    `state.json.tmp`, `daemon.lock`, and the slow-sweep marker. Removes
+    `daemon.log*` (plus `launchd.log` on macOS) unless ``keep_logs`` is True —
+    that mode preserves the log across a scripted reinstall (install.ps1).
+
+    Plain `uninstall` passes ``errors=None`` and is best-effort: per-file
+    failures are logged but do not change the exit code. `--purge` passes a
+    list and feeds it into the exit-2 gate, so a locked `daemon.lock`
+    (Windows `schtasks /End` timeout cascade) fails loudly rather than
+    silently exiting 0 with the artifact still on disk.
+
+    On Windows and Linux, state and log live in the same dir. On macOS, the
     log dir (~/Library/Logs/dbxignore/) is separate from the state dir
-    (~/Library/Application Support/dbxignore/), so we clean both.
-
-    When ``errors`` is supplied, per-file unlink failures from the
-    underlying ``_purge_dir`` calls are appended for the caller's exit-2
-    gate.
+    (~/Library/Application Support/dbxignore/), so both are cleaned — unless
+    ``keep_logs`` skips the log dir entirely.
     """
     from dbxignore import daemon as daemon_mod
 
+    state_dir_patterns: list[str] = [
+        "state.json",
+        "state.json.tmp",
+        "daemon.lock",
+        daemon_mod.SLOW_SWEEP_MARKER_NAME,
+    ]
+    if not keep_logs:
+        state_dir_patterns.extend(["daemon.log", "daemon.log.*"])
+
     state_dir = state.user_state_dir()
     if state_dir.exists():
-        _purge_dir(
-            state_dir,
-            patterns=[
-                "state.json",
-                "state.json.tmp",
-                "daemon.lock",
-                "daemon.log",
-                "daemon.log.*",
-                daemon_mod.SLOW_SWEEP_MARKER_NAME,
-            ],
-            errors=errors,
-        )
+        _purge_dir(state_dir, patterns=state_dir_patterns, errors=errors)
         click.echo(f"Cleaned {state_dir}.")
 
-    if sys.platform == "darwin":
+    if sys.platform == "darwin" and not keep_logs:
         log_dir = state.user_log_dir()
         if log_dir.exists() and log_dir != state_dir:
             _purge_dir(
@@ -980,7 +989,7 @@ def clear(path: Path | None, dry_run: bool, force: bool, yes: bool) -> None:
     Inverse of `apply`: where `apply` sets every marker the rules
     dictate, `clear` unsets every marker regardless of rules. Leaves
     `.dropboxignore` files and per-user state.json untouched —
-    `uninstall --purge` is the heavier verb that also wipes state.
+    `uninstall` removes state.json (and `--purge` also clears every marker).
 
     Refuses to run if the daemon is alive (the daemon's next sweep would
     re-apply rule-driven markers within seconds for rule-reload events
@@ -1703,10 +1712,10 @@ def _refuse_purge_daemon_alive(pid_clause: str, kill_hint: str) -> NoReturn:
     "--purge",
     is_flag=True,
     help=(
-        "Also clear every ignore marker and remove local dbxignore state "
-        "(state.json, daemon.log*, the state directory, and any systemd "
-        "drop-in directory on Linux). Under --purge, --no-shell-integration "
-        "is overridden — Explorer integration is always removed."
+        "Also clear every ignore marker under each discovered Dropbox root, "
+        "and on Linux remove the systemd drop-in directory if present. Under "
+        "--purge, --no-shell-integration is overridden — Explorer integration "
+        "is always removed."
     ),
 )
 @click.option(
@@ -1717,14 +1726,27 @@ def _refuse_purge_daemon_alive(pid_clause: str, kill_hint: str) -> NoReturn:
         "Ignored under --purge. No effect on Linux or macOS."
     ),
 )
-def uninstall(purge: bool, no_shell_integration: bool) -> None:
-    """Remove the daemon service.
+@click.option(
+    "--keep-logs",
+    is_flag=True,
+    help=(
+        "Preserve daemon.log* (and on macOS launchd.log) across the uninstall. "
+        "Used by scripted reinstalls (install.ps1) so log history survives an "
+        "upgrade."
+    ),
+)
+def uninstall(purge: bool, no_shell_integration: bool, keep_logs: bool) -> None:
+    """Remove dbxignore — deregister the daemon and scrub local state.
 
-    With --purge, also clear every ignore marker under each discovered
-    Dropbox root, delete `state.json` and `daemon.log*` from the
-    per-user state directory, remove that directory if it's empty, and
-    on Linux remove the systemd drop-in directory if it exists. The goal
-    is to leave no dbxignore-authored artifacts on disk.
+    Always removes `state.json`, `daemon.lock` and (by default) `daemon.log*`
+    from the per-user state directory, plus the directory itself if empty.
+    Pass --keep-logs to preserve the logs — install.ps1's reinstall step uses
+    that so log history survives an upgrade.
+
+    With --purge, additionally clear every ignore marker under each discovered
+    Dropbox root, and on Linux remove the systemd drop-in directory if it
+    exists. Together, `uninstall --purge` leaves no dbxignore-authored
+    artifacts on disk (or on your file tree).
     """
     from dbxignore.install import (
         uninstall_service,
@@ -1746,6 +1768,14 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
     state_errors: list[tuple[Path, str]] = []
     if not purge and not no_shell_integration:
         uninstall_shell_integration_if_supported()
+    if not purge:
+        # Plain uninstall: best-effort cleanup of dbxignore's own bookkeeping
+        # (state.json, daemon.lock, and — unless --keep-logs — daemon.log*).
+        # Failures (rare: a locked daemon.lock on Windows if uninstall_service
+        # left the daemon briefly alive) log a WARNING but don't change the
+        # exit code. The deregister above is the load-bearing step; this
+        # cleanup is the litter sweep, not gated.
+        _purge_local_state(keep_logs=keep_logs)
 
     if purge:
         # Fail-closed gate against a silent tug-of-war. By this
@@ -1846,8 +1876,8 @@ def uninstall(purge: bool, no_shell_integration: bool) -> None:
             if len(errors) > _MAX_REPORTED_ERRORS:
                 click.echo(f"  ... and {len(errors) - _MAX_REPORTED_ERRORS} more.", err=True)
 
-        # (2) Remove state.json, daemon.log*, state dir (cross-platform).
-        _purge_local_state(errors=state_errors)
+        # (2) Remove state.json, daemon.log* (unless --keep-logs), state dir.
+        _purge_local_state(errors=state_errors, keep_logs=keep_logs)
         if state_errors:
             click.echo(
                 f"Could not fully purge state files ({len(state_errors)} errors):",

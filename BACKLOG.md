@@ -360,11 +360,40 @@ extract step rather than installing a broken tree.
 
 Touches: `install.sh`; `install.ps1`; `.github/workflows/release.yml`.
 
+## 21. Update Phase 6 of the manual-test scripts for plain-uninstall scrubs state
+
+Phase 6 in `scripts/manual-test-{ubuntu-vps,macos}.sh` and the equivalent in
+`scripts/manual-test-windows.ps1` assumes plain `dbxignore uninstall` retains
+`state.json`. The `6a` check polls `dbxignore status --summary` for up to 30
+seconds expecting `^state=not_running pid=\d+ marked=\d+ ...$`. After the
+plain-uninstall-scrubs-state change, `state.read()` returns `None` post-
+uninstall, so `_format_summary` emits `state=no_state conflicts=0` — the 6a
+regex cannot match and Phase 6 fails loudly on the next run. The Windows
+script additionally captures `$oldPid` from `state.json` post-uninstall,
+which now will not exist.
+
+**Fix candidates:**
+
+1. Update each script's `6a` assertion to accept the new `state=no_state`
+   output after plain uninstall. Drop the "state.json retained by plain
+   uninstall" comments at the corresponding sites
+   (`manual-test-macos.sh:856` area, `manual-test-ubuntu-vps.sh:933` area,
+   `manual-test-windows.ps1:1679` area).
+2. For the Windows script, capture `$oldPid` *before* the plain-uninstall
+   call rather than after — `state.json` is gone post-uninstall.
+
+**Urgency:** medium. The manual-test scripts are release-prep tooling rather
+than CI, so a regression here doesn't break daily development, but it'll
+hit at the next release pass.
+
+Touches: `scripts/manual-test-ubuntu-vps.sh`; `scripts/manual-test-macos.sh`;
+`scripts/manual-test-windows.ps1`.
+
 ## Status
 
 ### Open
 
-Nineteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Twenty items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#1** — Intel Mac (x86_64) Mach-O binary build leg. dbxignore ships arm64-only Mach-O binaries; Intel users install via PyPI. Awaits demand signal.
 - **#2** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #1. Defer until item #1 actually triggers.
@@ -385,3 +414,4 @@ Nineteen items. Most are passive (no concrete trigger requires action) — bundl
 - **#17** — Code-sign the Windows installer. `dbxignore-setup.exe` ships unsigned; SmartScreen warns on first run. Awaits a code-signing certificate or a concrete pain signal.
 - **#19** — Notarized macOS `.pkg` installer. Awaits an Apple Developer Program account.
 - **#20** — Verify the integrity of the downloaded install archive. `install.sh` / `install.ps1` extract the release archive with no checksum check; a corrupted download fails only at the extract step. Awaits a convenient fix.
+- **#21** — Update Phase 6 of the manual-test scripts for plain-uninstall scrubs state. The `6a` `status --summary` regex expects `state=not_running pid=...`; post-PR it'll see `state=no_state` and fail loudly on the next run across all three platforms.

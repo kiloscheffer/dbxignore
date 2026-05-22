@@ -119,20 +119,21 @@ end;
 
 function InitializeUninstall(): Boolean;
 begin
-  { Ask once, up front, whether to also purge markers and state.
+  { Ask once, up front, whether to also clear the ignore markers (the one
+    user-data-touching action that the plain uninstall path leaves alone).
     SuppressibleMsgBox — NOT MsgBox: a plain MsgBox is displayed even
     under /VERYSILENT and blocks forever on a headless silent uninstall
     (`winget uninstall` runs the uninstaller silently). SuppressibleMsgBox
     honors /SUPPRESSMSGBOXES and returns the Default argument (IDNO)
-    without displaying — so a silent uninstall never purges. Interactive
-    uninstalls still show the dialog, with No as the default button
-    (MB_DEFBUTTON2). }
+    without displaying — so a silent uninstall never purges markers.
+    Interactive uninstalls still show the dialog, with No as the default
+    button (MB_DEFBUTTON2). }
   PurgeOnUninstall :=
     SuppressibleMsgBox(
-      'Also clear all dbxignore ignore markers and state?' + #13#10#13#10 +
+      'Also clear all dbxignore ignore markers?' + #13#10#13#10 +
       'This makes Dropbox re-upload every file that was previously ignored.'
         + #13#10 +
-      'Choose No to keep your markers and only remove the program.',
+      'Choose No to keep your markers.',
       mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES;
   Result := True;
 end;

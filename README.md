@@ -171,15 +171,15 @@ dbxignore status                     # verify: daemon running and watching Dropb
 ### Uninstalling
 
 ```
-dbxignore uninstall                  # deregister the daemon, remove the service unit
-dbxignore uninstall --purge          # also clear ignore markers, state files, and logs
+dbxignore uninstall                  # deregister the daemon; scrub state.json and logs
+dbxignore uninstall --purge          # also clear every ignore marker
 ```
 
 Run `dbxignore uninstall` *before* removing the program itself, so the service entry is deregistered cleanly:
 
 - **One-line script** — `curl -fsSL https://dbxignore.com/install.sh | sh -s -- --uninstall` (macOS / Linux), or `powershell -c "& ([scriptblock]::Create((irm https://dbxignore.com/install.ps1))) -Uninstall"` (Windows). This removes the daemon, the installed files, and the `PATH` entry in one step.
 - **Package managers** — `dbxignore uninstall`, then `scoop uninstall dbxignore` / `brew uninstall dbxignore`.
-- **Windows installer** — uninstall from Settings → Apps (or "Add or remove programs"). The uninstaller asks whether to also clear your ignore markers and state; choose "No" to remove only the program.
+- **Windows installer** — uninstall from Settings → Apps (or "Add or remove programs"). The uninstaller asks whether to also clear your ignore markers; choose "No" to keep them.
 - **Python package / manual install** — `dbxignore uninstall`, then `pip uninstall dbxignore` / `uv tool uninstall dbxignore`, or delete the directory you extracted along with its `PATH` entry.
 
 ## Windows Explorer integration

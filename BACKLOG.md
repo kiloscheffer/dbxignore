@@ -323,24 +323,6 @@ Touches: `.github/workflows/release.yml` (a post-build signing step);
 `installer/dbxignore.iss` (a `SignTool` directive if Inno drives the
 signing).
 
-## 18. Host install.sh at a stable dbxignore.com URL
-
-The macOS/Linux installer is fetched from the raw GitHub URL
-(`raw.githubusercontent.com/kiloscheffer/dbxignore/main/install.sh`). A
-`dbxignore.com/install.sh` URL would be friendlier. A static site cannot
-HTTP-redirect a shell script, so this needs an actual copy of the script
-served from the `dbxignore.com` repo, kept in sync with the source.
-
-**Fix candidates:**
-
-1. A CI step (in `release.yml` or a `dbxignore.com` workflow) that copies
-   `install.sh` into the `dbxignore.com` repo on change.
-2. Serve it from a path the host can proxy to the raw GitHub URL.
-
-**Urgency:** low. The raw URL works; this is cosmetic.
-
-Touches: `install.sh`; the `dbxignore.com` repo.
-
 ## 19. Notarized macOS .pkg installer
 
 `install.sh` is the macOS install path because a GUI `.pkg` needs an
@@ -359,7 +341,7 @@ a new `installer/` package artifact.
 
 ### Open
 
-Nineteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Eighteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#1** — Intel Mac (x86_64) Mach-O binary build leg. dbxignore ships arm64-only Mach-O binaries; Intel users install via PyPI. Awaits demand signal.
 - **#2** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #1. Defer until item #1 actually triggers.
@@ -378,5 +360,4 @@ Nineteen items. Most are passive (no concrete trigger requires action) — bundl
 - **#15** — Observer/callback hook on `RuleCache` mutations. Not needed until a TUI/GUI surface wants live rule state; callbacks must not re-enter the `_rules` lock. Awaiting TUI/GUI work.
 - **#16** — Windows daemon occasionally writes `daemon_create_time: null` to `state.json`; non-deterministic, observed only on Windows. Silently disables PID-reuse-race protection in `is_daemon_alive` AND defeats `uninstall_task`'s wait loop when state.json's PID is stale. `daemon._capture_create_time` wraps the capture with a narrow catch + WARNING; a null observation in the wild carries forensic data in `daemon.log`.
 - **#17** — Code-sign the Windows installer. `dbxignore-setup.exe` ships unsigned; SmartScreen warns on first run. Awaits a code-signing certificate or a concrete pain signal.
-- **#18** — Host `install.sh` at a stable `dbxignore.com` URL instead of the raw GitHub URL. Cosmetic; awaits a sync mechanism.
 - **#19** — Notarized macOS `.pkg` installer. Awaits an Apple Developer Program account.

@@ -5,14 +5,8 @@ dbxignore applies the Dropbox ignore marker to paths that match a `.dropboxignor
 ## Contents
 
 - [Requirements](#requirements)
-- [Install (Windows, Scoop)](#install-windows-scoop)
-- [Install (Windows, installer)](#install-windows-installer)
-- [Install (Windows, from source)](#install-windows-from-source)
-- [Install (Linux)](#install-linux)
-- [Install (macOS)](#install-macos)
-- [Install (Homebrew)](#install-homebrew)
-- [Install (macOS / Linux, one-line)](#install-macos--linux-one-line)
-- [Install (Windows, portable zip)](#install-windows-portable-zip)
+- [Installation](#installation)
+- [Windows Explorer integration](#windows-explorer-integration)
 - [Platform support](#platform-support)
 - [`.dropboxignore` syntax](#dropboxignore-syntax)
 - [Commands](#commands)
@@ -28,39 +22,95 @@ dbxignore applies the Dropbox ignore marker to paths that match a `.dropboxignor
 - Dropbox desktop client installed
 - Python ≥ 3.11 with [`uv`](https://docs.astral.sh/uv/). The [Scoop bucket](https://github.com/kiloscheffer/scoop-dbxignore) (Windows), [Homebrew tap](https://github.com/kiloscheffer/homebrew-dbxignore) (macOS + Linux), and pre-built binaries (Windows, macOS, and Linux) are alternatives that don't require Python.
 
-## Install (Windows, Scoop)
+## Installation
+
+Pick any method below. Every one ends the same way: `dbxignore install` registers the background daemon with your platform's service manager, and `dbxignore status` verifies it. The one-line scripts and the Windows installer run `dbxignore install` for you — see [Registering the daemon](#registering-the-daemon).
+
+### Quick start
+
+| OS | Install |
+|----|---------|
+| macOS / Linux | `curl -fsSL https://dbxignore.com/install.sh \| sh` |
+| Windows | `powershell -c "irm https://dbxignore.com/install.ps1 \| iex"` |
+
+These one-line scripts download the pre-built bundle, install it, and register the daemon — no Python required. The methods below cover package managers, Python environments, and platforms without a pre-built bundle.
+
+### One-line script
+
+On **macOS / Linux**:
+
+```bash
+curl -fsSL https://dbxignore.com/install.sh | sh
+```
+
+Downloads the pre-built bundle for your platform (macOS arm64 or Linux x86_64), installs it under `~/.local/share/dbxignore/`, symlinks `~/.local/bin/dbxignore`, adds `~/.local/bin` to your `PATH` if it is not already there, and runs `dbxignore install`. Open a new shell afterwards so the `PATH` change takes effect.
+
+Flags, passed after `sh -s --`:
+
+- `--no-daemon` — install the binary only; skip `dbxignore install`.
+- `--no-modify-path` — do not edit your shell profile; print the `PATH` line instead.
+- `--uninstall` — remove the daemon, the installed files, the symlink, and the `PATH` entry.
+
+On **Windows**:
+
+```powershell
+powershell -c "irm https://dbxignore.com/install.ps1 | iex"
+```
+
+Downloads `dbxignore-windows-x86_64.zip`, installs it under `%LOCALAPPDATA%\Programs\dbxignore`, adds that directory to your `PATH`, and runs `dbxignore install`. Open a new terminal afterwards so the `PATH` change takes effect. x86_64 is the only Windows build; it runs on ARM64 Windows under emulation.
+
+The `irm | iex` one-liner cannot pass `-switches`, so non-default behavior is set through environment variables — `DBXIGNORE_NO_DAEMON=1`, `DBXIGNORE_NO_MODIFY_PATH=1`, `DBXIGNORE_UNINSTALL=1`, and `DBXIGNORE_VERSION` (pin a release, e.g. `1.2.3`):
+
+```powershell
+powershell -c "$env:DBXIGNORE_UNINSTALL=1; irm https://dbxignore.com/install.ps1 | iex"
+```
+
+### Package managers
+
+**Scoop** (Windows):
 
 ```powershell
 scoop bucket add dbxignore https://github.com/kiloscheffer/scoop-dbxignore
 scoop install dbxignore/dbxignore
-dbxignore install                    # registers Task Scheduler entry
-dbxignore status                     # verify: daemon running and watching Dropbox
+dbxignore install
 ```
 
-The bucket repo is at [`kiloscheffer/scoop-dbxignore`](https://github.com/kiloscheffer/scoop-dbxignore). Run `dbxignore uninstall` before `scoop uninstall dbxignore` so the Task Scheduler entry is removed cleanly.
+**Homebrew** (macOS arm64 and Linux x86_64):
 
-## Install (Windows, installer)
+```bash
+brew tap kiloscheffer/dbxignore
+brew install dbxignore
+dbxignore install
+```
 
-Download `dbxignore-setup.exe` from the latest [Release](https://github.com/kiloscheffer/dbxignore/releases) and run it.
+The bucket and tap repos are [`kiloscheffer/scoop-dbxignore`](https://github.com/kiloscheffer/scoop-dbxignore) and [`kiloscheffer/homebrew-dbxignore`](https://github.com/kiloscheffer/homebrew-dbxignore). With either manager, run `dbxignore uninstall` before the manager's own uninstall — see [Uninstalling](#uninstalling).
 
-The installer is per-user: it installs to `%LOCALAPPDATA%\Programs\dbxignore` and needs no administrator rights. On the "Select Additional Tasks" page, the "Register the dbxignore background daemon and Explorer right-click menu" checkbox is ticked by default — leave it ticked to run `dbxignore install` at the end of setup (this registers the Task Scheduler entry and the Explorer right-click verbs). Untick it to install the binaries and `PATH` entry only; you can run `dbxignore install` yourself later.
+### Windows installer
+
+Download `dbxignore-setup.exe` from the latest [Release](https://github.com/kiloscheffer/dbxignore/releases) and run it. The installer is per-user — it installs to `%LOCALAPPDATA%\Programs\dbxignore` and needs no administrator rights.
+
+On the "Select Additional Tasks" page, the "Register the dbxignore background daemon and Explorer right-click menu" checkbox is ticked by default — leave it ticked to run `dbxignore install` at the end of setup; untick it to install the binaries and `PATH` entry only. On an upgrade, leave it ticked so the daemon restarts on the new binaries immediately.
 
 `dbxignore-setup.exe` is not code-signed, so Windows SmartScreen shows a "Windows protected your PC" prompt on first run — click "More info", then "Run anyway".
 
-Uninstall from Settings → Apps (or "Add or remove programs"). The uninstaller asks whether to also clear your ignore markers and state; choose "No" to remove only the program. On an upgrade, leave the daemon checkbox ticked so the daemon restarts on the new binaries immediately.
+### Python package
 
-## Install (Windows, from source)
+Requires Python ≥ 3.11. Use this for a release from PyPI, for the latest unreleased `main`, or on a platform with no pre-built bundle (Intel Macs, non-x86_64 Linux):
 
-```powershell
-uv tool install git+https://github.com/kiloscheffer/dbxignore
-dbxignore install
-dbxignore status                     # verify: daemon running and watching Dropbox
+```bash
+pip install dbxignore                 # or: uv tool install dbxignore
 ```
 
-`dbxignore install` registers a Task Scheduler entry that launches the daemon (`pythonw -m dbxignore daemon`) at every user logon.
+For the latest `main`:
+
+```bash
+uv tool install git+https://github.com/kiloscheffer/dbxignore
+```
+
+Then run `dbxignore install`.
 
 <details>
-<summary>If install fails with "ERROR_CLOUD_FILE_INCOMPATIBLE_HARDLINKS"</summary>
+<summary>If a Windows install fails with "ERROR_CLOUD_FILE_INCOMPATIBLE_HARDLINKS"</summary>
 
 Windows users whose `AppData` is OneDrive-synced (Files On-Demand) can hit:
 
@@ -78,89 +128,18 @@ uv hardlinks files from its cache into the tool's site-packages by default; the 
 uv tool install --link-mode=copy git+https://github.com/kiloscheffer/dbxignore
 ```
 
-Or set it as a session-wide default before the install: `$env:UV_LINK_MODE = "copy"`. Either form works for `uv tool upgrade` too.
+Or set `$env:UV_LINK_MODE = "copy"` before the install. Either form works for `uv tool upgrade` too.
 
 </details>
 
-## Install (Linux)
-
-Requires a systemd user session (standard on Ubuntu, Fedora, Debian, Arch, and most modern distros; WSL2 requires `systemd=true` in `/etc/wsl.conf`).
-
-```bash
-uv tool install git+https://github.com/kiloscheffer/dbxignore
-dbxignore install                    # writes systemd user unit, enables it
-dbxignore status                     # verify: daemon running and watching Dropbox
-```
-
-`dbxignore install` writes `~/.config/systemd/user/dbxignore.service` and runs `systemctl --user enable --now` so the daemon starts at login. For systemd-level unit state or recent log output, see `systemctl --user status dbxignore.service` or `journalctl --user -u dbxignore.service`.
-
-For non-stock Dropbox installs, export `DBXIGNORE_ROOT` before running `dbxignore install` — the install step will read the variable from your shell environment and write a corresponding `Environment="DBXIGNORE_ROOT=..."` line into the generated unit's `[Service]` block. Without this, a shell-exported value won't reach the daemon when systemd launches it. If your Dropbox location ever changes, re-run `dbxignore install` after updating the export.
-
-To uninstall:
-
-```bash
-dbxignore uninstall                  # disables unit, removes the file
-dbxignore uninstall --purge          # clears markers, state files, logs, systemd drop-in
-```
-
-Notes:
-- Dropbox on Linux marks ignored paths with the xattr `user.com.dropbox.ignored=1`. Files on filesystems that don't support `user.*` xattrs (tmpfs without `user_xattr`, vfat, some FUSE mounts) are skipped with a `WARNING` in the daemon log — not a fatal error.
-- Several common operations strip xattrs silently: `cp` without `-a`, `mv` across filesystems, most archivers, `vim`'s default save-via-rename. The watchdog plus hourly sweep re-apply markers automatically; no action needed.
-- Linux symlinks cannot carry `user.*` xattrs (kernel restriction). A symlink matched by a rule logs one `WARNING` per sweep and is skipped. Its target is not affected.
-
-### Linux daemon prerequisites
-
-The daemon uses inotify to watch the Dropbox tree recursively. The kernel
-caps the number of watches per user (`fs.inotify.max_user_watches`); on
-default-config kernels this is often 8192, which a typical Dropbox tree
-exceeds. The daemon refuses to start (exit code 75) when the limit is hit.
-
-Raise the limit (one-time, persistent across reboots):
-
-    echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/99-dbxignore.conf
-    sudo sysctl --system
-
-If the daemon won't start, check `journalctl --user -u dbxignore.service`
-for the exact errno (ENOSPC = watch count, EMFILE = instance count) and the
-sysctl command to run.
-
-## Install (macOS)
-
-dbxignore on macOS supports both Dropbox sync modes and auto-detects which one is active:
-
-- **Legacy mode** — Dropbox folder at `~/Dropbox`, ignored files marked via the `com.dropbox.ignored` extended attribute. Synced by Dropbox's own daemon.
-- **File Provider mode** — Dropbox folder at `~/Library/CloudStorage/Dropbox/`, ignored files marked via the `com.apple.fileprovider.ignore#P` extended attribute (per [Dropbox's docs](https://help.dropbox.com/sync/ignored-files)). Synced by Apple's File Provider extension; default for installs since 2023.
-
-The macOS xattr backend auto-detects sync mode at first use. It reads the configured sync paths from `~/.dropbox/info.json` (one entry per Dropbox account) and queries `pluginkit` for the File Provider extension's user-toggled state. The decision: any path under `~/Library/CloudStorage/` (or under `/Volumes/...` with the extension allowed) → File Provider mode; extension explicitly disabled → legacy; `pluginkit` unavailable and no path is decisive → write both attribute names; otherwise → legacy. The result is cached for the rest of the process. `dbxignore status` echoes the decision on macOS; the daemon also logs it at startup. The daemon registers as a launchd User Agent in either case.
+### Manual install
 
 <details>
-<summary>Verify your sync mode manually</summary>
+<summary>Install the pre-built bundle by hand</summary>
 
-`dbxignore status` echoes a `sync mode:` line on macOS. To query Apple's PluginKit registry directly:
+**Windows** — download `dbxignore-windows-x86_64.zip` from the latest [Release](https://github.com/kiloscheffer/dbxignore/releases) and extract it to a stable directory (e.g. `%LOCALAPPDATA%\Programs\dbxignore\`). The archive contains `dbxignore.exe` (the CLI you run from a terminal), `dbxignorew.exe` (the GUI helper that Task Scheduler invokes for the daemon and that the Explorer right-click verbs target), and an `_internal\` folder of bundled dependencies — keep the three together; you run `dbxignore`, never `dbxignorew.exe` directly. Add the extraction directory to your `PATH`, then run `dbxignore install`.
 
-```bash
-pluginkit -m -A -i com.getdropbox.dropbox.fileprovider
-```
-
-The prefix character indicates the user-toggled state: leading whitespace = registered, untoggled (default); `+` = explicitly enabled; `-` = explicitly disabled. No matching line means the extension isn't registered.
-
-</details>
-
-Install:
-
-```bash
-pip install dbxignore                # or: uv tool install dbxignore
-dbxignore install                    # writes ~/Library/LaunchAgents/com.kiloscheffer.dbxignore.plist
-                                     # and bootstraps it into your GUI session
-dbxignore status                     # verify: daemon running and watching Dropbox
-```
-
-`dbxignore install` requires that you've logged into the macOS GUI at least once since the last reboot — the GUI domain that LaunchAgents bootstrap into isn't initialized until a graphical login. SSH-on-fresh-boot installs fail with `Bootstrap failed: 5: Input/output error`. Log into the GUI, then retry.
-
-<details>
-<summary>Pre-built binaries (arm64 only)</summary>
-
-Pre-built binaries are arm64 (Apple Silicon). Intel Mac users: install via PyPI — the wheel is universal Python.
+**macOS / Linux** — download the tarball for your platform from the latest Release:
 
 ```bash
 curl -L -o dbxignore-macos-arm64.tar.gz \
@@ -168,89 +147,38 @@ curl -L -o dbxignore-macos-arm64.tar.gz \
 tar -xzf dbxignore-macos-arm64.tar.gz
 ```
 
-The archive extracts to a `dbxignore/` directory containing the `dbxignore` executable and an `_internal/` folder of bundled dependencies; keep them together. Move the directory somewhere stable, put the executable on your `PATH`, and run `dbxignore install`.
-
-`curl` does not set the `com.apple.quarantine` attribute, so Gatekeeper does not block a binary fetched this way — no `xattr` workaround is needed.
+The archive extracts to a `dbxignore/` directory containing the `dbxignore` executable and an `_internal/` folder of bundled dependencies; keep them together. Move the directory somewhere stable, put the executable on your `PATH`, and run `dbxignore install`. `curl` does not set the `com.apple.quarantine` attribute, so Gatekeeper does not block a binary fetched this way.
 
 </details>
 
-To uninstall:
+### Registering the daemon
 
-```bash
-dbxignore uninstall                  # bootouts the agent, removes the plist
-dbxignore uninstall --purge          # also clears markers, state files, logs
-```
-
-Files written:
+Every install method finishes with:
 
 ```
-~/Library/LaunchAgents/com.kiloscheffer.dbxignore.plist   # launchd unit
-~/Library/Application Support/dbxignore/state.json        # daemon state
-~/Library/Logs/dbxignore/daemon.log                       # daemon log (rotated)
-~/Library/Logs/dbxignore/launchd.log                      # launchd-captured stdout/stderr
-```
-
-Notes:
-- A symlink matched by a `.dropboxignore` rule is marked on the **link itself**, not its target.
-
-## Install (Homebrew)
-
-```bash
-brew tap kiloscheffer/dbxignore
-brew install dbxignore
-dbxignore install                    # registers launchd LaunchAgent (macOS) or systemd user unit (Linux)
+dbxignore install                    # register the background daemon
 dbxignore status                     # verify: daemon running and watching Dropbox
 ```
 
-The tap repo is at [`kiloscheffer/homebrew-dbxignore`](https://github.com/kiloscheffer/homebrew-dbxignore). Supports macOS arm64 (Apple Silicon) and Linux x86_64. Run `dbxignore uninstall` before `brew uninstall dbxignore` so the service is removed cleanly.
+`dbxignore install` registers the daemon with your platform's service manager so it starts at login:
 
-## Install (macOS / Linux, one-line)
+- **Windows** — a Task Scheduler entry that launches the daemon at every user logon. It also registers the Explorer right-click verbs (see [Windows Explorer integration](#windows-explorer-integration)).
+- **Linux** — writes `~/.config/systemd/user/dbxignore.service` and runs `systemctl --user enable --now`. Check unit state or logs with `systemctl --user status dbxignore.service` or `journalctl --user -u dbxignore.service`. Requires a systemd user session (standard on most modern distros; on WSL2, set `systemd=true` in `/etc/wsl.conf`). For a non-stock Dropbox location, export `DBXIGNORE_ROOT` before running `dbxignore install` — the value is written into the unit's `[Service]` block as `Environment="DBXIGNORE_ROOT=..."` so it reaches the daemon under systemd; re-run `dbxignore install` if the location changes.
+- **macOS** — writes `~/Library/LaunchAgents/com.kiloscheffer.dbxignore.plist` and bootstraps it into your GUI session. This requires that you have logged into the macOS GUI at least once since the last reboot — an SSH-on-fresh-boot install fails with `Bootstrap failed: 5: Input/output error` until you do.
 
-```bash
-curl -fsSL https://dbxignore.com/install.sh | sh
+### Uninstalling
+
+```
+dbxignore uninstall                  # deregister the daemon, remove the service unit
+dbxignore uninstall --purge          # also clear ignore markers, state files, and logs
 ```
 
-The script downloads the pre-built bundle for your platform (macOS arm64 or Linux x86_64), installs it under `~/.local/share/dbxignore/`, symlinks `~/.local/bin/dbxignore`, adds `~/.local/bin` to your `PATH` if it is not already there, and runs `dbxignore install` to register the daemon. Open a new shell afterwards so the `PATH` change takes effect, then run `dbxignore status` to verify.
+Run `dbxignore uninstall` *before* removing the program itself, so the service entry is deregistered cleanly:
 
-Flags (pass after `sh -s --`):
-
-- `--no-daemon` — install the binary only; skip `dbxignore install`.
-- `--no-modify-path` — do not edit your shell profile; print the `PATH` line instead.
-- `--uninstall` — remove the daemon, the installed files, the symlink, and the `PATH` entry.
-
-```bash
-curl -fsSL https://dbxignore.com/install.sh | sh -s -- --uninstall
-```
-
-Intel Macs and non-x86_64 Linux have no pre-built bundle — install via PyPI (`pip install dbxignore`) instead.
-
-## Install (Windows, one-line)
-
-```powershell
-powershell -c "irm https://dbxignore.com/install.ps1 | iex"
-```
-
-The script downloads `dbxignore-windows-x86_64.zip`, installs it under `%LOCALAPPDATA%\Programs\dbxignore` (the same location as `dbxignore-setup.exe`), adds that directory to your `PATH`, and runs `dbxignore install` to register the daemon. Open a new terminal afterwards so the `PATH` change takes effect, then run `dbxignore status` to verify.
-
-The `irm | iex` one-liner cannot pass `-switches`, so non-default behavior is set via environment variables:
-
-- `DBXIGNORE_NO_DAEMON=1` — install the binaries only; skip `dbxignore install`.
-- `DBXIGNORE_NO_MODIFY_PATH=1` — do not modify `PATH`; print the directory to add instead.
-- `DBXIGNORE_UNINSTALL=1` — remove the daemon, the installed files, and the `PATH` entry.
-- `DBXIGNORE_VERSION` — pin a release, e.g. `1.2.3` (default: latest).
-
-```powershell
-powershell -c "$env:DBXIGNORE_UNINSTALL=1; irm https://dbxignore.com/install.ps1 | iex"
-```
-
-x86_64 is the only Windows build; it runs on ARM64 Windows under emulation.
-
-## Install (Windows, portable zip)
-
-1. Download `dbxignore-windows-x86_64.zip` from the latest [Release](https://github.com/kiloscheffer/dbxignore/releases).
-2. Extract it to a stable directory (e.g. `%LOCALAPPDATA%\Programs\dbxignore\`). The archive contains `dbxignore.exe` (the CLI you run from a terminal), `dbxignorew.exe` (the GUI helper that Task Scheduler invokes for the daemon and that the Explorer right-click verbs target), and an `_internal\` folder of bundled dependencies. Keep the three together — the two executables read from `_internal\`. All commands you type are `dbxignore`; you do not invoke `dbxignorew.exe` directly.
-3. Add the extraction directory to your `PATH`.
-4. Run `dbxignore install`.
+- **One-line script** — `curl -fsSL https://dbxignore.com/install.sh | sh -s -- --uninstall` (macOS / Linux), or `powershell -c "$env:DBXIGNORE_UNINSTALL=1; irm https://dbxignore.com/install.ps1 | iex"` (Windows). This removes the daemon, the installed files, and the `PATH` entry in one step.
+- **Package managers** — `dbxignore uninstall`, then `scoop uninstall dbxignore` / `brew uninstall dbxignore`.
+- **Windows installer** — uninstall from Settings → Apps (or "Add or remove programs"). The uninstaller asks whether to also clear your ignore markers and state; choose "No" to remove only the program.
+- **Python package / manual install** — `dbxignore uninstall`, then `pip uninstall dbxignore` / `uv tool uninstall dbxignore`, or delete the directory you extracted along with its `PATH` entry.
 
 ## Windows Explorer integration
 
@@ -279,6 +207,59 @@ If you move your Dropbox folder, re-run `dbxignore install` to refresh the
 | Windows 10 / 11 | NTFS Alternate Data Streams | Task Scheduler (user task)      |
 | Linux (Ubuntu 22.04 / 24.04 + most modern distros with systemd user session) | `user.com.dropbox.ignored` xattr | systemd user unit |
 | macOS (Apple Silicon; Intel via PyPI) | `com.dropbox.ignored` xattr (legacy mode) or `com.apple.fileprovider.ignore#P` (File Provider mode — default since 2023; auto-detected) | launchd User Agent |
+
+### macOS sync modes
+
+dbxignore on macOS supports both Dropbox sync modes and auto-detects which one is active:
+
+- **Legacy mode** — Dropbox folder at `~/Dropbox`, ignored files marked via the `com.dropbox.ignored` extended attribute. Synced by Dropbox's own daemon.
+- **File Provider mode** — Dropbox folder at `~/Library/CloudStorage/Dropbox/`, ignored files marked via the `com.apple.fileprovider.ignore#P` extended attribute (per [Dropbox's docs](https://help.dropbox.com/sync/ignored-files)). Synced by Apple's File Provider extension; default for installs since 2023.
+
+The macOS xattr backend auto-detects sync mode at first use. It reads the configured sync paths from `~/.dropbox/info.json` (one entry per Dropbox account) and queries `pluginkit` for the File Provider extension's user-toggled state. The decision: any path under `~/Library/CloudStorage/` (or under `/Volumes/...` with the extension allowed) → File Provider mode; extension explicitly disabled → legacy; `pluginkit` unavailable and no path is decisive → write both attribute names; otherwise → legacy. The result is cached for the rest of the process. `dbxignore status` echoes the decision; the daemon also logs it at startup.
+
+<details>
+<summary>Verify your sync mode manually</summary>
+
+`dbxignore status` echoes a `sync mode:` line on macOS. To query Apple's PluginKit registry directly:
+
+```bash
+pluginkit -m -A -i com.getdropbox.dropbox.fileprovider
+```
+
+The prefix character indicates the user-toggled state: leading whitespace = registered, untoggled (default); `+` = explicitly enabled; `-` = explicitly disabled. No matching line means the extension isn't registered.
+
+</details>
+
+A symlink matched by a `.dropboxignore` rule is marked on the **link itself**, not its target. `dbxignore install` and the daemon write:
+
+```
+~/Library/LaunchAgents/com.kiloscheffer.dbxignore.plist   # launchd unit
+~/Library/Application Support/dbxignore/state.json        # daemon state
+~/Library/Logs/dbxignore/daemon.log                       # daemon log (rotated)
+~/Library/Logs/dbxignore/launchd.log                      # launchd-captured stdout/stderr
+```
+
+### Linux notes
+
+- Dropbox on Linux marks ignored paths with the xattr `user.com.dropbox.ignored=1`. Files on filesystems that don't support `user.*` xattrs (tmpfs without `user_xattr`, vfat, some FUSE mounts) are skipped with a `WARNING` in the daemon log — not a fatal error.
+- Several common operations strip xattrs silently: `cp` without `-a`, `mv` across filesystems, most archivers, `vim`'s default save-via-rename. The watchdog plus hourly sweep re-apply markers automatically; no action needed.
+- Linux symlinks cannot carry `user.*` xattrs (kernel restriction). A symlink matched by a rule logs one `WARNING` per sweep and is skipped; its target is not affected.
+
+### Linux daemon prerequisites
+
+The daemon uses inotify to watch the Dropbox tree recursively. The kernel
+caps the number of watches per user (`fs.inotify.max_user_watches`); on
+default-config kernels this is often 8192, which a typical Dropbox tree
+exceeds. The daemon refuses to start (exit code 75) when the limit is hit.
+
+Raise the limit (one-time, persistent across reboots):
+
+    echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/99-dbxignore.conf
+    sudo sysctl --system
+
+If the daemon won't start, check `journalctl --user -u dbxignore.service`
+for the exact errno (ENOSPC = watch count, EMFILE = instance count) and the
+sysctl command to run.
 
 ## `.dropboxignore` syntax
 

@@ -2,9 +2,9 @@
 # dbxignore installer for macOS and Linux.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/kiloscheffer/dbxignore/main/install.sh | sh
-#   curl -fsSL .../install.sh | sh -s -- --uninstall
-#   curl -fsSL .../install.sh | sh -s -- --no-daemon --no-modify-path
+#   curl -fsSL https://dbxignore.com/install.sh | sh
+#   curl -fsSL https://dbxignore.com/install.sh | sh -s -- --uninstall
+#   curl -fsSL https://dbxignore.com/install.sh | sh -s -- --no-daemon --no-modify-path
 #
 # Environment:
 #   DBXIGNORE_VERSION          pin a release, e.g. 1.2.3 (default: latest)

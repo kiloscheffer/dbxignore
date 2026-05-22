@@ -207,7 +207,7 @@ The tap repo is at [`kiloscheffer/homebrew-dbxignore`](https://github.com/kilosc
 ## Install (macOS / Linux, one-line)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kiloscheffer/dbxignore/main/install.sh | sh
+curl -fsSL https://dbxignore.com/install.sh | sh
 ```
 
 The script downloads the pre-built bundle for your platform (macOS arm64 or Linux x86_64), installs it under `~/.local/share/dbxignore/`, symlinks `~/.local/bin/dbxignore`, adds `~/.local/bin` to your `PATH` if it is not already there, and runs `dbxignore install` to register the daemon. Open a new shell afterwards so the `PATH` change takes effect, then run `dbxignore status` to verify.
@@ -219,7 +219,7 @@ Flags (pass after `sh -s --`):
 - `--uninstall` — remove the daemon, the installed files, the symlink, and the `PATH` entry.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kiloscheffer/dbxignore/main/install.sh | sh -s -- --uninstall
+curl -fsSL https://dbxignore.com/install.sh | sh -s -- --uninstall
 ```
 
 Intel Macs and non-x86_64 Linux have no pre-built bundle — install via PyPI (`pip install dbxignore`) instead.

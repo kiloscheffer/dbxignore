@@ -224,6 +224,27 @@ curl -fsSL https://dbxignore.com/install.sh | sh -s -- --uninstall
 
 Intel Macs and non-x86_64 Linux have no pre-built bundle — install via PyPI (`pip install dbxignore`) instead.
 
+## Install (Windows, one-line)
+
+```powershell
+powershell -c "irm https://dbxignore.com/install.ps1 | iex"
+```
+
+The script downloads `dbxignore-windows-x86_64.zip`, installs it under `%LOCALAPPDATA%\Programs\dbxignore` (the same location as `dbxignore-setup.exe`), adds that directory to your `PATH`, and runs `dbxignore install` to register the daemon. Open a new terminal afterwards so the `PATH` change takes effect, then run `dbxignore status` to verify.
+
+The `irm | iex` one-liner cannot pass `-switches`, so non-default behavior is set via environment variables:
+
+- `DBXIGNORE_NO_DAEMON=1` — install the binaries only; skip `dbxignore install`.
+- `DBXIGNORE_NO_MODIFY_PATH=1` — do not modify `PATH`; print the directory to add instead.
+- `DBXIGNORE_UNINSTALL=1` — remove the daemon, the installed files, and the `PATH` entry.
+- `DBXIGNORE_VERSION` — pin a release, e.g. `1.2.3` (default: latest).
+
+```powershell
+powershell -c "$env:DBXIGNORE_UNINSTALL=1; irm https://dbxignore.com/install.ps1 | iex"
+```
+
+x86_64 is the only Windows build; it runs on ARM64 Windows under emulation.
+
 ## Install (Windows, portable zip)
 
 1. Download `dbxignore-windows-x86_64.zip` from the latest [Release](https://github.com/kiloscheffer/dbxignore/releases).

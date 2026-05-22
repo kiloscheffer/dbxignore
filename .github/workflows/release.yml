@@ -316,7 +316,9 @@ jobs:
           fi
 
   publish-github:
-    # GitHub Release: wheel + sdist + Windows binaries + macOS + Linux binaries.
+    # GitHub Release: Windows onedir bundle + installer + macOS + Linux
+    # bundles. Wheel + sdist are not attached here — they ship to PyPI
+    # (publish-pypi), which is their authoritative source.
     # Runs on every tag push; all build legs must succeed first.
     needs: [build, build-macos, build-linux, classify-tag]
     if: startsWith(github.ref, 'refs/tags/')
@@ -346,8 +348,6 @@ jobs:
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
         with:
           files: |
-            dist/*.whl
-            dist/*.tar.gz
             dist/dbxignore-windows-x86_64.zip
             dist/dbxignore-setup.exe
             dist-macos/dbxignore-macos-arm64.tar.gz

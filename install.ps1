@@ -165,11 +165,21 @@ function Invoke-Install {
     # stop an existing install.ps1 install before replacing it. --keep-logs
     # preserves daemon.log* across the reinstall (this isn't a real uninstall
     # -- it's a stop-then-replace for upgrade; the user's diagnostic log
-    # should survive).
+    # should survive). Pre-1.0.5 binaries do not know --keep-logs; click
+    # would exit 2 ("No such option") and the daemon wouldn't get stopped,
+    # leaving dbxignore.exe / _internal locked through Remove-InstallDir's
+    # 30s retry. Probe --help once to detect support and fall back to plain
+    # uninstall for legacy binaries.
     $existing = Join-Path $InstallDir 'dbxignore.exe'
     if (Test-Path -LiteralPath $existing) {
-        info "stopping the existing install ($existing uninstall --keep-logs)"
-        & $existing uninstall --keep-logs
+        $keep_logs_supported = (& $existing uninstall --help 2>&1) -match '--keep-logs'
+        if ($keep_logs_supported) {
+            info "stopping the existing install ($existing uninstall --keep-logs)"
+            & $existing uninstall --keep-logs
+        } else {
+            info "stopping the existing install ($existing uninstall) [legacy: no --keep-logs]"
+            & $existing uninstall
+        }
         if ($LASTEXITCODE -ne 0) { warn "dbxignore uninstall reported an error; continuing" }
     }
     Remove-InstallDir

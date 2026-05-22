@@ -206,6 +206,11 @@ function Invoke-Install {
 }
 
 function Invoke-Uninstall {
+    # A setup.exe install must be removed by its own uninstaller, or its
+    # Apps & Features entry is orphaned. Refuse rather than delete it.
+    if (Test-InnoInstall) {
+        die "$InstallDir holds a setup.exe-based install; uninstall it via Settings > Apps."
+    }
     # Locate the installed executable to deregister the daemon. Assumes a
     # non-tampered install; if the install directory was removed by hand,
     # daemon deregistration is skipped.

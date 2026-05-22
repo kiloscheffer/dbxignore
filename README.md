@@ -208,7 +208,7 @@ If you move your Dropbox folder, re-run `dbxignore install` to refresh the
 | Platform | Marker mechanism                  | Daemon mechanism                |
 |----------|-----------------------------------|---------------------------------|
 | Windows 10 / 11 | NTFS Alternate Data Streams | Task Scheduler (user task)      |
-| Linux (Ubuntu 22.04 / 24.04 + most modern distros with systemd user session) | `user.com.dropbox.ignored` xattr | systemd user unit |
+| Linux (modern distros with a systemd user session; the pre-built binary needs glibc ≥ 2.35) | `user.com.dropbox.ignored` xattr | systemd user unit |
 | macOS (Apple Silicon; Intel via PyPI) | `com.dropbox.ignored` xattr (legacy mode) or `com.apple.fileprovider.ignore#P` (File Provider mode — default since 2023; auto-detected) | launchd User Agent |
 
 ### macOS sync modes

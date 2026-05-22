@@ -337,11 +337,34 @@ Gatekeeper friction entirely.
 Touches: `pyinstaller/dbxignore-macos.spec`; `.github/workflows/release.yml`;
 a new `installer/` package artifact.
 
+## 20. Verify the integrity of the downloaded install archive
+
+`install.sh` and `install.ps1` download the release archive over HTTPS and
+extract and run it with no integrity check. A corrupted or truncated download
+surfaces only as a later "not a valid archive" error from `tar` /
+`Expand-Archive` — there is no positive confirmation the bytes are intact.
+
+**Fix candidates:**
+
+1. Publish a `.sha256` file per release asset from `release.yml`; have both
+   installers download it and verify the archive before extracting. The
+   checksum travels over the same HTTPS channel as the archive, so this guards
+   against corruption/truncation rather than a compromised GitHub.
+2. Bake the per-release SHA256 into the installer scripts at release time.
+   Stronger — the script becomes the trust root — but incompatible with
+   serving a single always-latest script from `dbxignore.com`: the script
+   would have to be regenerated and redeployed every release.
+
+**Urgency:** low. Downloads are HTTPS; a corrupted archive fails loudly at the
+extract step rather than installing a broken tree.
+
+Touches: `install.sh`; `install.ps1`; `.github/workflows/release.yml`.
+
 ## Status
 
 ### Open
 
-Eighteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Nineteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#1** — Intel Mac (x86_64) Mach-O binary build leg. dbxignore ships arm64-only Mach-O binaries; Intel users install via PyPI. Awaits demand signal.
 - **#2** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #1. Defer until item #1 actually triggers.
@@ -361,3 +384,4 @@ Eighteen items. Most are passive (no concrete trigger requires action) — bundl
 - **#16** — Windows daemon occasionally writes `daemon_create_time: null` to `state.json`; non-deterministic, observed only on Windows. Silently disables PID-reuse-race protection in `is_daemon_alive` AND defeats `uninstall_task`'s wait loop when state.json's PID is stale. `daemon._capture_create_time` wraps the capture with a narrow catch + WARNING; a null observation in the wild carries forensic data in `daemon.log`.
 - **#17** — Code-sign the Windows installer. `dbxignore-setup.exe` ships unsigned; SmartScreen warns on first run. Awaits a code-signing certificate or a concrete pain signal.
 - **#19** — Notarized macOS `.pkg` installer. Awaits an Apple Developer Program account.
+- **#20** — Verify the integrity of the downloaded install archive. `install.sh` / `install.ps1` extract the release archive with no checksum check; a corrupted download fails only at the extract step. Awaits a convenient fix.

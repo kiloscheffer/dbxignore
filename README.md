@@ -20,7 +20,7 @@ dbxignore applies the Dropbox ignore marker to paths that match a `.dropboxignor
 
 - Windows 10/11 (NTFS), **or** a modern Linux distro with a systemd user session, **or** macOS (Apple Silicon for pre-built binaries; Intel via PyPI)
 - Dropbox desktop client installed
-- Python ≥ 3.11 with [`uv`](https://docs.astral.sh/uv/). The [Scoop bucket](https://github.com/kiloscheffer/scoop-dbxignore) (Windows), [Homebrew tap](https://github.com/kiloscheffer/homebrew-dbxignore) (macOS + Linux), and pre-built binaries (Windows, macOS, and Linux) are alternatives that don't require Python.
+- For the [PyPI install](#python-package), Python ≥ 3.11.
 
 ## Installation
 
@@ -28,10 +28,17 @@ Pick any method below. Every one ends the same way: `dbxignore install` register
 
 ### Quick start
 
-| OS | Install |
-|----|---------|
-| macOS / Linux | `curl -fsSL https://dbxignore.com/install.sh \| sh` |
-| Windows | `powershell -c "irm https://dbxignore.com/install.ps1 \| iex"` |
+**macOS / Linux**
+
+```bash
+curl -fsSL https://dbxignore.com/install.sh | sh
+```
+
+**Windows**
+
+```powershell
+powershell -c "irm https://dbxignore.com/install.ps1 | iex"
+```
 
 These one-line scripts download the pre-built bundle, install it, and register the daemon — no Python required. The methods below cover package managers, Python environments, and platforms without a pre-built bundle.
 
@@ -97,16 +104,10 @@ On the "Select Additional Tasks" page, the "Register the dbxignore background da
 
 ### Python package
 
-Requires Python ≥ 3.11. Use this for a release from PyPI, for the latest unreleased `main`, or on a platform with no pre-built bundle (Intel Macs, non-x86_64 Linux):
+Requires Python ≥ 3.11. Use this for a release from PyPI or on a platform with no pre-built bundle (Intel Macs, non-x86_64 Linux):
 
 ```bash
-pip install dbxignore                 # or: uv tool install dbxignore
-```
-
-For the latest `main`:
-
-```bash
-uv tool install git+https://github.com/kiloscheffer/dbxignore
+uv tool install dbxignore            # or: pip install dbxignore
 ```
 
 Then run `dbxignore install`.

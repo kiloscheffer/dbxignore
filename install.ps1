@@ -111,6 +111,25 @@ function Test-InnoInstall {
     [bool](Get-ChildItem -LiteralPath $InstallDir -Filter 'unins*.exe' -ErrorAction SilentlyContinue)
 }
 
+# Remove the install directory, retrying briefly. After 'dbxignore uninstall'
+# the daemon process exits asynchronously and can hold its .exe / _internal
+# files open for a moment longer.
+function Remove-InstallDir {
+    if (-not (Test-Path -LiteralPath $InstallDir)) { return }
+    $deadline = (Get-Date).AddSeconds(30)
+    while ($true) {
+        try {
+            Remove-Item -LiteralPath $InstallDir -Recurse -Force
+            return
+        } catch {
+            if ((Get-Date) -ge $deadline) {
+                die "could not remove $InstallDir - files still in use. Stop the dbxignore daemon and retry."
+            }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+}
+
 function Get-Archive($dest) {
     if ($env:DBXIGNORE_INSTALL_ARCHIVE) {
         info "installing from local archive: $env:DBXIGNORE_INSTALL_ARCHIVE"
@@ -124,8 +143,8 @@ function Get-Archive($dest) {
     }
     info "downloading $url"
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    # Invoke-WebRequest uses the Windows system proxy by default.
     $req = @{ Uri = $url; OutFile = $dest; UseBasicParsing = $true }
-    if ($env:HTTPS_PROXY) { $req.Proxy = $env:HTTPS_PROXY }
     $oldProgress = $ProgressPreference
     $ProgressPreference = 'SilentlyContinue'
     try {
@@ -153,9 +172,7 @@ function Invoke-Install {
         & $existing uninstall
         if ($LASTEXITCODE -ne 0) { warn "dbxignore uninstall reported an error; continuing" }
     }
-    if (Test-Path -LiteralPath $InstallDir) {
-        Remove-Item -LiteralPath $InstallDir -Recurse -Force
-    }
+    Remove-InstallDir
 
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ('dbxignore-' + [guid]::NewGuid())
     New-Item -ItemType Directory -Path $tmp | Out-Null
@@ -205,9 +222,7 @@ function Invoke-Uninstall {
         & $exe uninstall
         if ($LASTEXITCODE -ne 0) { warn "dbxignore uninstall reported an error; continuing" }
     }
-    if (Test-Path -LiteralPath $InstallDir) {
-        Remove-Item -LiteralPath $InstallDir -Recurse -Force
-    }
+    Remove-InstallDir
     Remove-FromPath $InstallDir
     info "uninstalled. Ignore markers and state are untouched (run 'dbxignore uninstall --purge' before uninstalling for a full wipe)."
 }

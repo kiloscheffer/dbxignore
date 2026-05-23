@@ -480,11 +480,35 @@ The fork at `kiloscheffer/Extras` with branch `dbxignore-add` is preserved for r
 
 Touches: `kiloscheffer/Extras` fork (`bucket/dbxignore.json` already staged on the `dbxignore-add` branch — refresh the manifest from `scoop-dbxignore` at re-submission time, then run the validators above before pushing).
 
+## 25. Manual-test script defaults to PyPI when run from a git checkout
+
+`scripts/manual-test-macos.sh` (and the ubuntu-vps + windows-ps1 siblings) declare:
+
+```bash
+DBXIGNORE_INSTALL_SPEC="${DBXIGNORE_INSTALL_SPEC:-dbxignore}"
+```
+
+Phase 2 then runs `uv tool install "$DBXIGNORE_INSTALL_SPEC"`. With the env var unset (the natural default for a tester running `bash scripts/manual-test-*.sh` from a freshly-cloned repo), the spec is the bare PyPI name `dbxignore` — `uv tool install dbxignore` looks up PyPI, NOT the local checkout. The whole point of the manual-test scripts per CONTRIBUTING.md is "test unreleased work against real Dropbox" (BACKLOG #22's role A), and the default behavior contradicts that intent.
+
+Concrete impact: in the PR #297 / #298 / #299 cycle, a macOS tester reported test failures from `bash scripts/manual-test-macos.sh`; three fixes shipped onto `main` over the cycle; the tester kept reporting the same failures because Phase 2 was reinstalling `dbxignore==1.0.5` from PyPI on top of the freshly-cloned local install, silently bypassing every fix. The give-away is the `+ dbxignore==<X.Y.Z>` line in Phase 2's `uv tool install` block — PyPI gives a clean SemVer (e.g. `1.0.5`), a local-source install gives `0.1.dev1+g<sha>` — but the line is easy to miss in a several-hundred-line test run. Once `DBXIGNORE_INSTALL_SPEC=/tmp/dbxignore` was set explicitly, the same script reported `PASS: 123 / FAIL: 0`.
+
+**Fix candidates:**
+
+1. **Auto-detect a git checkout and default to the checkout path.** If the script's containing directory is inside a tree that has a `.git/` ancestor, set `DBXIGNORE_INSTALL_SPEC` to that root by default. Keep the env-var override for the "test against PyPI" use case unchanged. Resolves the natural mental model that running the script from a clone tests the clone.
+2. **Abort with a "pick one" prompt when the spec is unset inside a checkout.** Less magic than 1 but forces a deliberate choice; the abort message would print both forms (`DBXIGNORE_INSTALL_SPEC=/path/to/clone` for local; `DBXIGNORE_INSTALL_SPEC=dbxignore` for PyPI).
+3. **Surface the spec prominently at Phase 2.** The script already prints `Phase 2 — install dbxignore (spec: $DBXIGNORE_INSTALL_SPEC)`. Add a visible heads-up line when the spec equals the bare name `dbxignore` (e.g. `⚠ installing from PyPI; set DBXIGNORE_INSTALL_SPEC=<path> to test a local checkout`). Minimal change; trades silence for a visible warning but does not change behavior.
+
+**Recommendation:** candidate 1. Matches what a fresh-clone tester naturally expects; the override keeps the PyPI-test workflow intact for the cases where it is wanted.
+
+**Urgency:** medium. Doesn't surface as a test-suite failure on its own, but every debugging step against a tester running unreleased code wastes a round-trip if the test is silently running the released version. Cost recurs per debugging session.
+
+Touches: `scripts/manual-test-macos.sh`, `scripts/manual-test-ubuntu-vps.sh`, `scripts/manual-test-windows.ps1`. The default-resolution logic is per-script (no shared helper to extract).
+
 ## Status
 
 ### Open
 
-Twenty-two items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Twenty-three items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#1** — Intel Mac (x86_64) Mach-O binary build leg. dbxignore ships arm64-only Mach-O binaries; Intel users install via PyPI. Awaits demand signal.
 - **#2** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #1. Defer until item #1 actually triggers.
@@ -507,4 +531,5 @@ Twenty-two items. Most are passive (no concrete trigger requires action) — bun
 - **#20** — Verify the integrity of the downloaded install archive. `install.sh` / `install.ps1` extract the release archive with no checksum check; a corrupted download fails only at the extract step. Awaits a convenient fix.
 - **#22** — One-line installer (`install.sh` / `install.ps1`) end-to-end coverage in the manual-test scripts. Phase 2 uses `uv tool install` (role A: test unreleased work against real Dropbox). The documented one-liner the README leads with is exercised only by CI smoke tests on clean runners — silent interaction failures with a real Dropbox + daemon environment are uncaught. Proposal: a new `Phase 6.5` per script that runs after the main uninstall, against the released `.zip` via `gh release download` + `DBXIGNORE_INSTALL_ARCHIVE`. Covers `install.sh` (bare + `--uninstall`) and `install.ps1` (bare + `-Uninstall` / `-NoDaemon` / `-NoModifyPath`).
 - **#23** — Windows `uninstall_task` raises on a never-registered task. `schtasks /Delete /F` returns non-zero when the task doesn't exist; `uninstall_task` wraps as `RuntimeError` and `cli.uninstall` exits 2. Linux's symmetric path is idempotent (`check=False` + `path.exists()` gate). Asymmetry surfaced while writing the Scoop manifest's `uninstaller:` hook; current workaround is a `schtasks /Query` guard inside the hook. Fix: classify `schtasks /Delete` stderr to distinguish "task not found" from real failures, matching the `macos_launchd._is_service_not_loaded` pattern.
+- **#25** — `scripts/manual-test-*.sh` default `DBXIGNORE_INSTALL_SPEC` to the bare PyPI name `dbxignore`; running from a fresh git checkout silently tests the released PyPI version rather than the checkout, contradicting CONTRIBUTING.md's "test unreleased work against real Dropbox" intent. Costs a debugging round-trip per session when a tester is exercising unreleased fixes. Recommended fix: auto-detect a `.git/` ancestor and default the spec to the checkout root.
 - **#24** — Re-submit dbxignore to Scoop Extras after meeting the notability bar. Initial PR (#17869 against `ScoopInstaller/Extras`) closed 2026-05-23 because the project doesn't meet the bucket's ≥100 stars / ≥50 forks bar (currently 0/0). Third-party bucket at `kiloscheffer/scoop-dbxignore` continues to serve users via `scoop bucket add`. The `kiloscheffer/Extras` fork and `dbxignore-add` branch are preserved. Re-submission protocol notes captured in the item body (package-request issue first, in-repo PowerShell validators, CRLF). Awaits organic growth; years-out target.

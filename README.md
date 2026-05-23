@@ -42,6 +42,14 @@ powershell -c "irm https://dbxignore.com/install.ps1 | iex"
 
 These one-line scripts download the pre-built bundle, install it, and register the daemon — no Python required. The methods below cover package managers, Python environments, and platforms without a pre-built bundle.
 
+### Windows installer
+
+Download `dbxignore-setup.exe` from the latest [Release](https://github.com/kiloscheffer/dbxignore/releases) and run it. The installer is per-user — it installs to `%LOCALAPPDATA%\Programs\dbxignore` and needs no administrator rights.
+
+On the "Select Additional Tasks" page, the "Register the dbxignore background daemon and Explorer right-click menu" checkbox is ticked by default — leave it ticked to run `dbxignore install` at the end of setup; untick it to install the binaries and `PATH` entry only. On an upgrade, leave it ticked so the daemon restarts on the new binaries immediately.
+
+`dbxignore-setup.exe` is not code-signed, so Windows SmartScreen shows a "Windows protected your PC" prompt on first run — click "More info", then "Run anyway".
+
 ### One-line script
 
 On **macOS / Linux**:
@@ -93,14 +101,6 @@ dbxignore install
 ```
 
 The bucket and tap repos are [`kiloscheffer/scoop-dbxignore`](https://github.com/kiloscheffer/scoop-dbxignore) and [`kiloscheffer/homebrew-dbxignore`](https://github.com/kiloscheffer/homebrew-dbxignore). With either manager, run `dbxignore uninstall` before the manager's own uninstall — see [Uninstalling](#uninstalling).
-
-### Windows installer
-
-Download `dbxignore-setup.exe` from the latest [Release](https://github.com/kiloscheffer/dbxignore/releases) and run it. The installer is per-user — it installs to `%LOCALAPPDATA%\Programs\dbxignore` and needs no administrator rights.
-
-On the "Select Additional Tasks" page, the "Register the dbxignore background daemon and Explorer right-click menu" checkbox is ticked by default — leave it ticked to run `dbxignore install` at the end of setup; untick it to install the binaries and `PATH` entry only. On an upgrade, leave it ticked so the daemon restarts on the new binaries immediately.
-
-`dbxignore-setup.exe` is not code-signed, so Windows SmartScreen shows a "Windows protected your PC" prompt on first run — click "More info", then "Run anyway".
 
 ### Python package
 
@@ -179,9 +179,9 @@ dbxignore uninstall --purge          # also clear every ignore marker
 Run `dbxignore uninstall` *before* removing the program itself, so the service entry is deregistered cleanly:
 
 - **One-line script** — `curl -fsSL https://dbxignore.com/install.sh | sh -s -- --uninstall` (macOS / Linux), or `powershell -c "& ([scriptblock]::Create((irm https://dbxignore.com/install.ps1))) -Uninstall"` (Windows). This removes the daemon, the installed files, and the `PATH` entry in one step.
-- **Package managers** — `dbxignore uninstall`, then `scoop uninstall dbxignore` / `brew uninstall dbxignore`.
 - **Windows installer** — uninstall from Settings → Apps (or "Add or remove programs"). The uninstaller asks whether to also clear your ignore markers; choose "No" to keep them.
-- **Python package / manual install** — `dbxignore uninstall`, then `pip uninstall dbxignore` / `uv tool uninstall dbxignore`, or delete the directory you extracted along with its `PATH` entry.
+- **Package managers** — `dbxignore uninstall`, then `scoop uninstall dbxignore` / `brew uninstall dbxignore`.
+- **Python package / manual install** — `dbxignore uninstall`, then `uv tool uninstall dbxignore` / `pip uninstall dbxignore`, or delete the directory you extracted along with its `PATH` entry.
 
 ## Windows Explorer integration
 
@@ -215,8 +215,8 @@ If you move your Dropbox folder, re-run `dbxignore install` to refresh the
 
 dbxignore on macOS supports both Dropbox sync modes and auto-detects which one is active:
 
-- **Legacy mode** — Dropbox folder at `~/Dropbox`, ignored files marked via the `com.dropbox.ignored` extended attribute. Synced by Dropbox's own daemon.
 - **File Provider mode** — Dropbox folder at `~/Library/CloudStorage/Dropbox/`, ignored files marked via the `com.apple.fileprovider.ignore#P` extended attribute (per [Dropbox's docs](https://help.dropbox.com/sync/ignored-files)). Synced by Apple's File Provider extension; default for installs since 2023.
+- **Legacy mode** — Dropbox folder at `~/Dropbox`, ignored files marked via the `com.dropbox.ignored` extended attribute. Synced by Dropbox's own daemon.
 
 The macOS xattr backend auto-detects sync mode at first use. It reads the configured sync paths from `~/.dropbox/info.json` (one entry per Dropbox account) and queries `pluginkit` for the File Provider extension's user-toggled state. The decision: any path under `~/Library/CloudStorage/` (or under `/Volumes/...` with the extension allowed) → File Provider mode; extension explicitly disabled → legacy; `pluginkit` unavailable and no path is decisive → write both attribute names; otherwise → legacy. The result is cached for the rest of the process. `dbxignore status` echoes the decision; the daemon also logs it at startup.
 

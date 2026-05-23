@@ -393,6 +393,10 @@ phase_dbxignore_install() {
             else
                 venv_clause="The matching uv tool venv at $orphan_venv does not exist, so the shims may have outlived it."
             fi
+            # Mirror of the macOS-side heredoc — keep apostrophes out so the
+            # macOS twin (which shares this prose verbatim) stays parseable
+            # under bash 3.2, where single quotes in $(...) are treated as
+            # unbalanced.
             abort "$(cat <<EOF
 found dbxignore/dbxignorew shim(s) in the uv tool bin dir:
 
@@ -402,7 +406,7 @@ $venv_clause
 
 Possible origins:
 
-  (a) a previous uv tool install/uninstall that left shims uv didn't track
+  (a) a previous uv tool install/uninstall that left shims uv did not track
       anymore (e.g. uv tool install created the venv but failed at shim-write
       because something was already there; or uv tool uninstall failed
       partway through). Safe to remove the shims if confirmed.

@@ -84,14 +84,6 @@ To pin a release, set `$env:DBXIGNORE_VERSION` in your shell before running the 
 
 ### Package managers
 
-**Scoop** (Windows):
-
-```powershell
-scoop bucket add dbxignore https://github.com/kiloscheffer/scoop-dbxignore
-scoop install dbxignore/dbxignore
-dbxignore install
-```
-
 **winget** (Windows):
 
 ```powershell
@@ -99,6 +91,14 @@ winget install kiloscheffer.dbxignore
 ```
 
 The winget package wraps `dbxignore-setup.exe`, so the daemon is registered automatically by the installer's default tasks — no separate `dbxignore install` step is needed.
+
+**Scoop** (Windows):
+
+```powershell
+scoop bucket add dbxignore https://github.com/kiloscheffer/scoop-dbxignore
+scoop install dbxignore/dbxignore
+dbxignore install
+```
 
 **Homebrew** (macOS arm64 and Linux x86_64):
 
@@ -108,7 +108,7 @@ brew install dbxignore
 dbxignore install
 ```
 
-The Scoop bucket lives at [`kiloscheffer/scoop-dbxignore`](https://github.com/kiloscheffer/scoop-dbxignore), the Homebrew tap at [`kiloscheffer/homebrew-dbxignore`](https://github.com/kiloscheffer/homebrew-dbxignore), and the winget manifests in the default [`microsoft/winget-pkgs`](https://github.com/microsoft/winget-pkgs) registry. With any of these, run `dbxignore uninstall` before the manager's own uninstall — see [Uninstalling](#uninstalling).
+The winget manifests live in the default [`microsoft/winget-pkgs`](https://github.com/microsoft/winget-pkgs) registry, the Scoop bucket at [`kiloscheffer/scoop-dbxignore`](https://github.com/kiloscheffer/scoop-dbxignore), and the Homebrew tap at [`kiloscheffer/homebrew-dbxignore`](https://github.com/kiloscheffer/homebrew-dbxignore). See [Uninstalling](#uninstalling) for how to remove each.
 
 ### Python package
 
@@ -202,15 +202,19 @@ powershell -c "& ([scriptblock]::Create((irm https://dbxignore.com/install.ps1))
 
 **Windows installer** — uninstall from Settings → Apps (or "Add or remove programs"). The uninstaller asks whether to also clear your ignore markers; choose "No" to keep them.
 
-**Package managers** — run `dbxignore uninstall` first, then one of:
+**winget** — runs the Inno uninstaller silently, which calls `dbxignore uninstall` internally and always keeps your markers (use `dbxignore clear` first if you want them removed):
 
 ```bash
-scoop uninstall dbxignore                # Scoop
-brew uninstall dbxignore                 # Homebrew
-winget uninstall kiloscheffer.dbxignore  # winget
+winget uninstall kiloscheffer.dbxignore
 ```
 
-(The winget command invokes the same Inno uninstaller as Settings → Apps, but silently — it always keeps your markers; use `dbxignore clear` first if you want to remove them.)
+**Scoop / Homebrew** — these managers only remove files, so run `dbxignore uninstall` first to deregister the daemon and scrub state:
+
+```bash
+dbxignore uninstall
+scoop uninstall dbxignore        # Scoop, or:
+brew uninstall dbxignore         # Homebrew
+```
 
 **Python package / manual install**:
 

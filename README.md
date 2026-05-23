@@ -176,12 +176,39 @@ dbxignore uninstall                  # deregister the daemon; scrub state.json a
 dbxignore uninstall --purge          # also clear every ignore marker
 ```
 
-Run `dbxignore uninstall` *before* removing the program itself, so the service entry is deregistered cleanly:
+Run `dbxignore uninstall` *before* removing the program itself, so the service entry is deregistered cleanly.
 
-- **One-line script** — `curl -fsSL https://dbxignore.com/install.sh | sh -s -- --uninstall` (macOS / Linux), or `powershell -c "& ([scriptblock]::Create((irm https://dbxignore.com/install.ps1))) -Uninstall"` (Windows). This removes the daemon, the installed files, and the `PATH` entry in one step.
-- **Windows installer** — uninstall from Settings → Apps (or "Add or remove programs"). The uninstaller asks whether to also clear your ignore markers; choose "No" to keep them.
-- **Package managers** — `dbxignore uninstall`, then `scoop uninstall dbxignore` / `brew uninstall dbxignore`.
-- **Python package / manual install** — `dbxignore uninstall`, then `uv tool uninstall dbxignore` / `pip uninstall dbxignore`, or delete the directory you extracted along with its `PATH` entry.
+**One-line script** — removes the daemon, the installed files, and the `PATH` entry in one step.
+
+On **macOS / Linux**:
+
+```bash
+curl -fsSL https://dbxignore.com/install.sh | sh -s -- --uninstall
+```
+
+On **Windows**:
+
+```powershell
+powershell -c "& ([scriptblock]::Create((irm https://dbxignore.com/install.ps1))) -Uninstall"
+```
+
+**Windows installer** — uninstall from Settings → Apps (or "Add or remove programs"). The uninstaller asks whether to also clear your ignore markers; choose "No" to keep them.
+
+**Package managers** — run `dbxignore uninstall` before the manager's own uninstall:
+
+```bash
+dbxignore uninstall
+scoop uninstall dbxignore        # or: brew uninstall dbxignore
+```
+
+**Python package / manual install**:
+
+```bash
+dbxignore uninstall
+uv tool uninstall dbxignore      # or: pip uninstall dbxignore
+```
+
+For the manual install, also delete the directory you extracted along with its `PATH` entry.
 
 ## Windows Explorer integration
 

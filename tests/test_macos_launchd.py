@@ -126,6 +126,16 @@ def test_uninstall_agent_calls_bootout_and_removes_plist(
     plist_path = plist_dir / "com.kiloscheffer.dbxignore.plist"
     plist_path.write_bytes(b"<plist></plist>")
 
+    # state.read() ignores HOME on non-darwin hosts (platformdirs uses the
+    # native config dir), so without this stub the bootout-exit wait inside
+    # uninstall_agent would poll against whatever real state.json happens to
+    # exist on the test runner. Stub to None: the wait is gated on a non-None
+    # daemon_pid and short-circuits, which matches the intent of this test
+    # (verify bootout is called and plist is removed; not the wait).
+    from dbxignore import state as state_module
+
+    monkeypatch.setattr(state_module, "read", lambda: None)
+
     calls: list[list[str]] = []
 
     def fake_run(cmd: list[str], **kwargs: object) -> object:
@@ -281,6 +291,13 @@ def test_uninstall_agent_tolerates_not_loaded_stderr(
     plist_path = plist_dir / "com.kiloscheffer.dbxignore.plist"
     plist_path.write_bytes(b"<plist></plist>")
 
+    # See sibling test_uninstall_agent_calls_bootout_and_removes_plist:
+    # the bootout-exit wait reads state.json, which on non-darwin hosts
+    # bypasses the HOME monkeypatch. Stub to None so the wait short-circuits.
+    from dbxignore import state as state_module
+
+    monkeypatch.setattr(state_module, "read", lambda: None)
+
     def fake_run_not_loaded(cmd: list[str], **kwargs: object) -> object:
         return SimpleNamespace(returncode=rc, stderr=stderr, stdout="")
 
@@ -293,3 +310,164 @@ def test_uninstall_agent_tolerates_not_loaded_stderr(
     assert not plist_path.exists(), (
         "plist should be removed when bootout fails idempotently ('not loaded')"
     )
+
+
+def test_uninstall_agent_polls_is_daemon_alive_until_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pin the synchronization invariant: after launchctl bootout returns,
+    uninstall_agent polls is_daemon_alive() until the recorded daemon
+    process has actually exited, THEN removes the plist. Without this wait,
+    cli.uninstall --purge's daemon-alive guard fires on a daemon that's
+    about to exit but isn't quite gone yet — the SIGTERM handler may still
+    be releasing the singleton lock and writing final state.
+    daemon_create_time is forwarded so PID reuse cases are rejected. Mirrors
+    windows_task.uninstall_task's wait-for-exit pattern.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("os.getuid", lambda: 501, raising=False)
+
+    plist_dir = tmp_path / "Library" / "LaunchAgents"
+    plist_dir.mkdir(parents=True)
+    plist_path = plist_dir / "com.kiloscheffer.dbxignore.plist"
+    plist_path.write_bytes(b"<plist></plist>")
+
+    from dbxignore import state as state_module
+    from dbxignore.install import macos_launchd
+
+    monkeypatch.setattr(
+        state_module,
+        "read",
+        lambda: state_module.State(daemon_pid=12345, daemon_create_time=1234567.89),
+    )
+    alive_states = [True, True, False]
+    is_alive_calls: list[tuple[int, float | None]] = []
+
+    def fake_is_alive(pid: int, create_time: float | None = None) -> bool:
+        is_alive_calls.append((pid, create_time))
+        return alive_states.pop(0)
+
+    monkeypatch.setattr(state_module, "is_daemon_alive", fake_is_alive)
+    monkeypatch.setattr(macos_launchd.time, "sleep", lambda _: None)  # type: ignore[attr-defined]
+
+    bootout_call_order: list[str] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> SimpleNamespace:
+        bootout_call_order.append(cmd[1])
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    macos_launchd.uninstall_agent()
+
+    # daemon_create_time is forwarded on every poll so PID-reuse is rejected.
+    assert is_alive_calls == [
+        (12345, 1234567.89),
+        (12345, 1234567.89),
+        (12345, 1234567.89),
+    ]
+    # bootout fired exactly once; plist removed only after the wait drained.
+    assert bootout_call_order == ["bootout"]
+    assert not plist_path.exists()
+
+
+def test_uninstall_agent_skips_wait_when_bootout_reports_not_loaded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When bootout returns non-zero with a 'not loaded' stderr (idempotent
+    uninstall — service was already gone), there is no daemon to wait for.
+    A stale state.json with daemon_create_time=None and daemon_pid recycled
+    to an unrelated python process would otherwise make is_daemon_alive
+    return True on every poll and burn the 30s timeout for nothing. Gate
+    matches windows_task's `end_result.returncode == 0` check.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("os.getuid", lambda: 501, raising=False)
+
+    plist_dir = tmp_path / "Library" / "LaunchAgents"
+    plist_dir.mkdir(parents=True)
+    plist_path = plist_dir / "com.kiloscheffer.dbxignore.plist"
+    plist_path.write_bytes(b"<plist></plist>")
+
+    from dbxignore import state as state_module
+    from dbxignore.install import macos_launchd
+
+    # Stale state.json with a pid but no create_time — exactly the
+    # regression case Codex flagged.
+    monkeypatch.setattr(
+        state_module,
+        "read",
+        lambda: state_module.State(daemon_pid=12345, daemon_create_time=None),
+    )
+
+    is_alive_calls: list[tuple[int, float | None]] = []
+
+    def fake_is_alive(pid: int, create_time: float | None = None) -> bool:
+        is_alive_calls.append((pid, create_time))
+        return True  # simulate the recycled-python-PID false positive
+
+    monkeypatch.setattr(state_module, "is_daemon_alive", fake_is_alive)
+
+    def fake_run_not_loaded(cmd: list[str], **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            returncode=3, stderr="Boot-out failed: 3: No such process", stdout=""
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run_not_loaded)
+
+    macos_launchd.uninstall_agent()
+
+    # Gate must skip the wait entirely. is_daemon_alive is never consulted
+    # because the rc != 0 branch is the "not loaded" idempotent path.
+    assert is_alive_calls == []
+    # Plist still removed — idempotent uninstall still completes.
+    assert not plist_path.exists()
+
+
+def test_uninstall_agent_logs_warning_and_still_removes_plist_on_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """If the daemon never exits within the wait window, log a WARNING and
+    still proceed with plist removal. Failing to remove the plist would leave
+    the next `dbxignore install` blocked (bootstrap would fail with "service
+    already loaded") — so the timeout path trades the synchronization
+    guarantee for forward progress, same as windows_task does on /End timeout.
+    """
+    import logging
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("os.getuid", lambda: 501, raising=False)
+
+    plist_dir = tmp_path / "Library" / "LaunchAgents"
+    plist_dir.mkdir(parents=True)
+    plist_path = plist_dir / "com.kiloscheffer.dbxignore.plist"
+    plist_path.write_bytes(b"<plist></plist>")
+
+    from dbxignore import state as state_module
+    from dbxignore.install import macos_launchd
+
+    monkeypatch.setattr(
+        state_module,
+        "read",
+        lambda: state_module.State(daemon_pid=12345),
+    )
+    monkeypatch.setattr(state_module, "is_daemon_alive", lambda *a, **kw: True)
+    monkeypatch.setattr(macos_launchd.time, "sleep", lambda _: None)  # type: ignore[attr-defined]
+    # monotonic ticks: deadline calc, loop check 1 (in window), loop check 2 (past).
+    ticks = iter([0.0, 0.0, 100.0])
+    monkeypatch.setattr(macos_launchd.time, "monotonic", lambda: next(ticks))  # type: ignore[attr-defined]
+
+    def fake_run(cmd: list[str], **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    with caplog.at_level(logging.WARNING, logger="dbxignore.install.macos_launchd"):
+        macos_launchd.uninstall_agent()
+
+    assert any(
+        "did not exit within" in rec.message and "pid=12345" in rec.message
+        for rec in caplog.records
+    ), [rec.message for rec in caplog.records]
+    # Plist is still removed despite the timeout — forward progress wins.
+    assert not plist_path.exists()

@@ -1676,13 +1676,30 @@ function Test-Uninstall {
         Assert-AdsSet -Path "$T\watch-me.tmp" -Name "uninstall - markers retained on watch-me.tmp"
     }
 
-    # 6a - status --summary returns state=not_running post-uninstall.
-    # state.json is retained by plain uninstall; the daemon process is gone
-    # (synchronous teardown), so daemon_is_running(s) is False on the first
-    # probe. Single-shot.
+    # Plain uninstall now scrubs state.json + daemon.log* by default (PR #283).
+    # --keep-logs preserves daemon.log* (see 6i); --purge additionally clears
+    # markers (see existing flow below).
+    if (-not (Test-Path $stateFile)) {
+        Write-Pass "uninstall - state.json scrubbed"
+    } else {
+        Write-Fail "uninstall - state.json still present"
+    }
+    $leftoverLogs = Get-ChildItem -Path $stateDir -Filter 'daemon.log*' -ErrorAction SilentlyContinue
+    if ($leftoverLogs) {
+        Write-Fail "uninstall - daemon.log* not scrubbed: $($leftoverLogs.Name -join ', ')"
+    } else {
+        Write-Pass "uninstall - daemon.log* scrubbed"
+    }
+
+    # 6a - status --summary returns state=no_state post-uninstall.
+    # Plain uninstall scrubs state.json (PR #283), so state.read() returns
+    # None and _format_summary emits the truncated 'state=no_state conflicts=N'
+    # line. _purge_local_state runs in-process inside the uninstall CLI on
+    # every platform, so state.json is gone before `dbxignore uninstall`
+    # returns regardless of how schtasks tears the task down. Single-shot.
     Write-Note "6a - status --summary post-uninstall"
     $sumUninst = (dbxignore status --summary 2>&1 | Select-Object -First 1)
-    if ($sumUninst -match '^state=not_running pid=\d+ marked=\d+ cleared=\d+ errors=\d+ conflicts=\d+$') {
+    if ($sumUninst -match '^state=no_state conflicts=\d+$') {
         Write-Pass "6a - --summary post-uninstall: $sumUninst"
     } else {
         Write-Fail "6a - --summary post-uninstall did not match expected pattern: $sumUninst"
@@ -2011,6 +2028,41 @@ function Test-Uninstall {
     }
     # Recovery: clean --purge (the gate fired before any cleanup ran).
     dbxignore uninstall --purge *> $null
+
+    # 6i - uninstall --keep-logs preserves daemon.log* but still scrubs state.json
+    # The asymmetric opt-out for users who want to retain the diagnostic log
+    # across a re-install. install.ps1 uses it for its stop-then-replace step
+    # (see install.ps1's Invoke-Install call to `dbxignore uninstall --keep-logs`).
+    # Re-install, sleep so the daemon writes at least the initial-sweep banner
+    # to daemon.log, then uninstall --keep-logs and check the asymmetry.
+    Write-Note "6i - uninstall --keep-logs preserves daemon.log*"
+    dbxignore install *> $null
+    if ($LASTEXITCODE -ne 0) { Stop-Abort "6i re-install failed" }
+    Start-Sleep -Seconds 3
+    $keepLogsOut = Join-Path $env:TEMP "dbxignore-keeplogs.out"
+    dbxignore uninstall --keep-logs *> $keepLogsOut
+    if ($LASTEXITCODE -eq 0) {
+        Write-Pass "6i - dbxignore uninstall --keep-logs (rc=0)"
+    } else {
+        Write-Fail "6i - dbxignore uninstall --keep-logs"
+        Get-Content $keepLogsOut | ForEach-Object { Write-Note "    $_" }
+    }
+    if (-not (Test-Path $stateFile)) {
+        Write-Pass "6i - --keep-logs: state.json scrubbed"
+    } else {
+        Write-Fail "6i - --keep-logs: state.json still present"
+    }
+    $preservedLogs = Get-ChildItem -Path $stateDir -Filter 'daemon.log*' -ErrorAction SilentlyContinue
+    if ($preservedLogs) {
+        Write-Pass "6i - --keep-logs: daemon.log* preserved ($($preservedLogs.Name -join ', '))"
+    } else {
+        Write-Fail "6i - --keep-logs: daemon.log* not preserved"
+    }
+    # Recovery: scrub the preserved logs so Phase 7 leaves no dbxignore-authored
+    # artifacts behind.
+    if ($preservedLogs) {
+        $preservedLogs | Remove-Item -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # ---------------------------------------------------------------------------

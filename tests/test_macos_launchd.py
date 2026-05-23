@@ -371,6 +371,59 @@ def test_uninstall_agent_polls_is_daemon_alive_until_exit(
     assert not plist_path.exists()
 
 
+def test_uninstall_agent_skips_wait_when_bootout_reports_not_loaded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When bootout returns non-zero with a 'not loaded' stderr (idempotent
+    uninstall — service was already gone), there is no daemon to wait for.
+    A stale state.json with daemon_create_time=None and daemon_pid recycled
+    to an unrelated python process would otherwise make is_daemon_alive
+    return True on every poll and burn the 30s timeout for nothing. Gate
+    matches windows_task's `end_result.returncode == 0` check.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("os.getuid", lambda: 501, raising=False)
+
+    plist_dir = tmp_path / "Library" / "LaunchAgents"
+    plist_dir.mkdir(parents=True)
+    plist_path = plist_dir / "com.kiloscheffer.dbxignore.plist"
+    plist_path.write_bytes(b"<plist></plist>")
+
+    from dbxignore import state as state_module
+    from dbxignore.install import macos_launchd
+
+    # Stale state.json with a pid but no create_time — exactly the
+    # regression case Codex flagged.
+    monkeypatch.setattr(
+        state_module,
+        "read",
+        lambda: state_module.State(daemon_pid=12345, daemon_create_time=None),
+    )
+
+    is_alive_calls: list[tuple[int, float | None]] = []
+
+    def fake_is_alive(pid: int, create_time: float | None = None) -> bool:
+        is_alive_calls.append((pid, create_time))
+        return True  # simulate the recycled-python-PID false positive
+
+    monkeypatch.setattr(state_module, "is_daemon_alive", fake_is_alive)
+
+    def fake_run_not_loaded(cmd: list[str], **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            returncode=3, stderr="Boot-out failed: 3: No such process", stdout=""
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run_not_loaded)
+
+    macos_launchd.uninstall_agent()
+
+    # Gate must skip the wait entirely. is_daemon_alive is never consulted
+    # because the rc != 0 branch is the "not loaded" idempotent path.
+    assert is_alive_calls == []
+    # Plist still removed — idempotent uninstall still completes.
+    assert not plist_path.exists()
+
+
 def test_uninstall_agent_logs_warning_and_still_removes_plist_on_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

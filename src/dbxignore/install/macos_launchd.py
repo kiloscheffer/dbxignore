@@ -253,7 +253,14 @@ def uninstall_agent() -> None:
     # quite gone yet — markers and state.json then survive purge. Mirrors
     # windows_task.uninstall_task's pattern; daemon_create_time is forwarded
     # so a recycled PID is rejected by is_daemon_alive's create-time check.
-    if daemon_pid is not None:
+    #
+    # The `returncode == 0` gate matches windows_task's `end_result.returncode
+    # == 0` check: when bootout went through the "not loaded" idempotent arm
+    # above, there is no daemon to wait for. A stale state.json with
+    # daemon_create_time=None and daemon_pid recycled to an unrelated python
+    # process would otherwise make is_daemon_alive return True on every poll
+    # and burn the full timeout for nothing.
+    if daemon_pid is not None and result.returncode == 0:
         deadline = time.monotonic() + _BOOTOUT_WAIT_TIMEOUT_S
         while time.monotonic() < deadline:
             if not state_module.is_daemon_alive(daemon_pid, create_time=daemon_create_time):

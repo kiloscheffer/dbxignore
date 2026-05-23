@@ -18,6 +18,7 @@ import logging
 import os
 import plistlib
 import subprocess
+import time
 from pathlib import Path
 
 from dbxignore import _testing
@@ -28,6 +29,14 @@ logger = logging.getLogger(__name__)
 
 LABEL = "com.kiloscheffer.dbxignore"
 PLIST_FILENAME = f"{LABEL}.plist"
+
+# How long to wait for the daemon process to actually exit after `launchctl
+# bootout` returns. Documented as synchronous to ExitTimeOut, but in practice
+# (especially on Tahoe / darwin25 and later) bootout can return before the
+# daemon's SIGTERM handler has released the singleton lock and exited. Mirrors
+# the windows_task `_END_WAIT_TIMEOUT_S` / `_END_WAIT_POLL_INTERVAL_S` pair.
+_BOOTOUT_WAIT_TIMEOUT_S = 30.0
+_BOOTOUT_WAIT_POLL_INTERVAL_S = 0.5
 
 # Env vars `install_agent()` forwards from the caller's shell into the
 # generated plist's EnvironmentVariables. Scoped to DBXIGNORE_ROOT for the
@@ -198,6 +207,13 @@ def uninstall_agent() -> None:
     # Discarding rc and stderr would leave this tug-of-war silent. The
     # shape below mirrors the eventual-consistency contract Linux/Windows
     # uphold via their respective service-managers.
+    #
+    # Snapshot state.json BEFORE bootout so the wait below can verify the
+    # specific recorded daemon process has exited. Reading after bootout
+    # would race the daemon's own final state writes.
+    state_obj = state_module.read()
+    daemon_pid = state_obj.daemon_pid if state_obj else None
+    daemon_create_time = state_obj.daemon_create_time if state_obj else None
     try:
         result = subprocess.run(  # noqa: S603 — hardcoded args, no user data
             ["launchctl", "bootout", _service_target()],
@@ -228,6 +244,32 @@ def uninstall_agent() -> None:
             "launchctl bootout reported service not loaded (rc=%s); proceeding to plist removal",
             result.returncode,
         )
+    # Wait for the daemon process to actually exit. macOS bootout sends
+    # SIGTERM and is documented as synchronous to ExitTimeOut, but in
+    # practice (especially on Tahoe / darwin25 and later) it can return
+    # before the daemon has released its singleton lock, written final
+    # state, and exited. Without this wait, cli.uninstall --purge's
+    # daemon-alive guard fires on a daemon that's about to exit but isn't
+    # quite gone yet — markers and state.json then survive purge. Mirrors
+    # windows_task.uninstall_task's pattern; daemon_create_time is forwarded
+    # so a recycled PID is rejected by is_daemon_alive's create-time check.
+    if daemon_pid is not None:
+        deadline = time.monotonic() + _BOOTOUT_WAIT_TIMEOUT_S
+        while time.monotonic() < deadline:
+            if not state_module.is_daemon_alive(daemon_pid, create_time=daemon_create_time):
+                break
+            time.sleep(_BOOTOUT_WAIT_POLL_INTERVAL_S)
+        else:
+            # Loop exhausted without breaking — daemon is still alive.
+            # Log and proceed anyway: plist removal must still run so the
+            # next `dbxignore install` doesn't fail at bootstrap with
+            # "service already loaded".
+            logger.warning(
+                "daemon process pid=%s did not exit within %.0fs of launchctl bootout; "
+                "continuing with plist removal",
+                daemon_pid,
+                _BOOTOUT_WAIT_TIMEOUT_S,
+            )
     path = _plist_path()
     if path.exists():
         path.unlink()

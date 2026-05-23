@@ -18,7 +18,10 @@ dbxignore applies the Dropbox ignore marker to paths that match a `.dropboxignor
 
 ## Requirements
 
-- Windows 10/11 (NTFS), **or** a modern Linux distro with a systemd user session, **or** macOS (Apple Silicon for pre-built binaries; Intel via PyPI)
+- Supported operating systems:
+  - Windows 10/11 — NTFS
+  - Linux — systemd user session
+  - macOS — Apple Silicon (pre-built binaries) or Intel (via PyPI)
 - Dropbox desktop client installed
 - For the [PyPI install](#python-package), Python ≥ 3.11.
 

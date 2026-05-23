@@ -1117,6 +1117,69 @@ function Test-ExtendedCli {
     # Recovery: clear the marker without the fail point so later phases start clean.
     dbxignore clear $T --yes *> $null
     Remove-DirWithRetry -Path $T
+
+    # 4w - install.ps1 -Help: bare invocation parses + prints usage.
+    # Doesn't actually install -- just exercises the script's parameter
+    # binding and Show-Usage path. Cheap regression guard against a future
+    # change accidentally breaking install.ps1's `param(...)` block (which
+    # is what would surface as the script no longer accepting switches).
+    # See BACKLOG for the deferred full install/uninstall switch coverage.
+    $installPs1 = Join-Path (Split-Path -Parent $PSScriptRoot) "install.ps1"
+    Write-Note "4w - install.ps1 -Help (direct invocation)"
+    if (-not (Test-Path $installPs1)) {
+        Write-Fail "4w - install.ps1 not found at $installPs1"
+    } else {
+        $helpOut = Join-Path $env:TEMP "dbx-4w-help.out"
+        & $installPs1 -Help *> $helpOut
+        $helpRc = $LASTEXITCODE
+        if ($helpRc -eq 0) {
+            Write-Pass "4w - install.ps1 -Help (rc=0)"
+        } else {
+            Write-Fail "4w - install.ps1 -Help exited $helpRc instead of 0"
+            if (Test-Path $helpOut) { Get-Content $helpOut | ForEach-Object { Write-Note "    $_" } }
+        }
+        $helpText = if (Test-Path $helpOut) { Get-Content $helpOut -Raw } else { "" }
+        if ($helpText -match 'dbxignore installer for Windows') {
+            Write-Pass "4w - install.ps1 -Help prints usage banner"
+        } else {
+            Write-Fail "4w - install.ps1 -Help missing usage banner"
+            if (Test-Path $helpOut) { Get-Content $helpOut | ForEach-Object { Write-Note "    $_" } }
+        }
+    }
+
+    # 4x - scriptblock-form switch passing (PR #282 regression guard).
+    # The documented one-liner for passing switches to install.ps1 is:
+    #   powershell -c "& ([scriptblock]::Create((irm https://dbxignore.com/install.ps1))) -Uninstall"
+    # An earlier form using outer-shell `$env:` assignment + `irm | iex`
+    # silently dropped switches because the outer shell expanded the env
+    # variable into the literal string before `iex` saw it; PR #282 fixed
+    # this by switching to the scriptblock form documented above. Test the
+    # scriptblock pattern with -Help (offline equivalent: read install.ps1
+    # from disk instead of `irm`). A regression here would surface as the
+    # switch silently not taking effect -- exit code may stay 0 but the
+    # usage banner wouldn't print.
+    Write-Note "4x - install.ps1 scriptblock-form switch passing"
+    if (-not (Test-Path $installPs1)) {
+        Write-Fail "4x - install.ps1 not found at $installPs1"
+    } else {
+        $blockOut = Join-Path $env:TEMP "dbx-4x-block.out"
+        $scriptText = Get-Content -Raw -LiteralPath $installPs1
+        & ([scriptblock]::Create($scriptText)) -Help *> $blockOut
+        $blockRc = $LASTEXITCODE
+        if ($blockRc -eq 0) {
+            Write-Pass "4x - scriptblock-form install.ps1 -Help (rc=0)"
+        } else {
+            Write-Fail "4x - scriptblock-form install.ps1 -Help exited $blockRc instead of 0"
+            if (Test-Path $blockOut) { Get-Content $blockOut | ForEach-Object { Write-Note "    $_" } }
+        }
+        $blockText = if (Test-Path $blockOut) { Get-Content $blockOut -Raw } else { "" }
+        if ($blockText -match 'dbxignore installer for Windows') {
+            Write-Pass "4x - scriptblock-form picks up -Help and prints usage"
+        } else {
+            Write-Fail "4x - scriptblock-form did not show usage (switch may not have passed through)"
+            if (Test-Path $blockOut) { Get-Content $blockOut | ForEach-Object { Write-Note "    $_" } }
+        }
+    }
 }
 
 # ---------------------------------------------------------------------------

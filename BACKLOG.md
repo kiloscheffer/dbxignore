@@ -428,11 +428,60 @@ which only the manual-test scripts provide.
 Touches: `scripts/manual-test-ubuntu-vps.sh`;
 `scripts/manual-test-macos.sh`; `scripts/manual-test-windows.ps1`.
 
+## 23. Windows `uninstall_task` raises on a never-registered task
+
+`dbxignore uninstall` on Windows calls `schtasks /Delete /F /TN dbxignore`; if the task doesn't exist, `schtasks` returns non-zero and `windows_task.uninstall_task` wraps it as `RuntimeError`, which `cli.uninstall` surfaces as exit 2. Linux is idempotent in the symmetric case: `linux_systemd.uninstall_unit` calls `systemctl --user disable --now` with `subprocess.run(check=False)`, then gates the unit-file removal on `path.exists()`, so running `dbxignore uninstall` against a never-installed daemon exits 0.
+
+The asymmetry surfaced while writing the Scoop manifest's `uninstaller:` hook — a naïve `& "$dir\dbxignore.exe" uninstall --yes` would fail every time someone `scoop uninstall`s without having run `dbxignore install`. The hook works around it with a `schtasks /Query /TN dbxignore` guard, but the underlying CLI behavior is the bug.
+
+**Fix candidates:**
+
+- **Distinguish "task not found" from real failures** in `uninstall_task` by inspecting `schtasks /Delete`'s stderr (the message is stable, similar to how `macos_launchd._is_service_not_loaded` classifies launchctl errors). Return cleanly when the task is already absent; raise on other non-zero exits. Mirrors the Linux/macOS shape: idempotent on missing, failing on real errors.
+- **Pre-check with `schtasks /Query /TN dbxignore`** inside `uninstall_task`, skip the `/End` + `/Delete` sequence if the query reports the task absent. Simpler than stderr parsing but adds one extra subprocess call on the happy path.
+- **Wrap with `check=False`** on both `/End` and `/Delete` and log a WARNING for non-zero. Matches Linux's `check=False` swallow, but loses the "real error" failure mode — a permission-denied `/Delete` would silently leave the task in place. Probably too aggressive.
+
+**Recommendation:** stderr-classification (first option). Aligns with the existing `_is_service_not_loaded` pattern on macOS.
+
+**Urgency:** low. The Scoop hook's `schtasks /Query` guard sidesteps the bug for the only consumer that hits it; bare-CLI users rarely run `uninstall` against a never-installed daemon.
+
+Touches: `src/dbxignore/install/windows_task.py` (the `uninstall_task` function); a new test in `tests/test_install_windows_task.py` (or wherever the Windows-task tests live) exercising the never-registered case.
+
+## 24. Re-submit dbxignore to Scoop Extras after meeting the notability bar
+
+ScoopInstaller/Extras rejected the initial dbxignore submission (PR #17869 against Extras, closed 2026-05-23) because the project doesn't yet meet the bucket's notability bar. The bar, quoted verbatim by the rejecting maintainer:
+
+> For a package to be acceptable in this bucket, it should be:
+> 1. Reasonably well-known and widely used. e.g. if it's a GitHub project, it should have at least 100 stars and/or 50 forks
+> 2. English interface (or at least English documentation)
+> 3. Latest stable version
+
+At the time of rejection, dbxignore had 0 stars and 0 forks (32 days old). The third-party bucket at `kiloscheffer/scoop-dbxignore` continues to serve users via `scoop bucket add dbxignore https://github.com/kiloscheffer/scoop-dbxignore` + `scoop install dbxignore`.
+
+The fork at `kiloscheffer/Extras` with branch `dbxignore-add` is preserved for re-submission.
+
+**Re-submission protocol (record of gaps in the first attempt, for next time):**
+
+1. **Open a `[Request]: dbxignore` issue first** in `ScoopInstaller/Extras` via the package-request template (`/issues/new?labels=package-request&template=package-request.yml`). Link the issue URL from the PR description. CodeRabbit flagged this on the first attempt; reviewers expect it.
+2. **Run the in-repo PowerShell validators** before pushing: `.\bin\formatjson.ps1 -App dbxignore` (normalises formatting), `.\bin\checkver.ps1 -App dbxignore -f` (validates `checkver` + `autoupdate`). The first attempt skipped these and the `[ ] Lint` automated check failed.
+3. **Ensure CRLF line endings** on `bucket/dbxignore.json` in the fork. The `Write` tool writes LF by default; the Extras repo normalises to CRLF.
+4. **Then** open the PR with title `dbxignore: Add version <X.Y.Z>` and comment `/verify` to trigger the manifest verifier.
+
+**Fix candidates:**
+
+- **Wait for organic growth** to ≥100 stars or ≥50 forks. The current rate is zero, so this is a years-out target.
+- **Don't re-submit**; rely on the third-party bucket indefinitely. The `scoop bucket add` step is a one-time user action.
+
+**Recommendation:** revisit only when the notability bar is plausibly met (e.g. a quarterly check on stars/forks). The bucket is functional today; an Extras listing is convenience for users who don't read install docs, not a missing capability.
+
+**Urgency:** lowest. No user is blocked.
+
+Touches: `kiloscheffer/Extras` fork (`bucket/dbxignore.json` already staged on the `dbxignore-add` branch — refresh the manifest from `scoop-dbxignore` at re-submission time, then run the validators above before pushing).
+
 ## Status
 
 ### Open
 
-Twenty items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Twenty-two items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#1** — Intel Mac (x86_64) Mach-O binary build leg. dbxignore ships arm64-only Mach-O binaries; Intel users install via PyPI. Awaits demand signal.
 - **#2** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #1. Defer until item #1 actually triggers.
@@ -454,3 +503,5 @@ Twenty items. Most are passive (no concrete trigger requires action) — bundle 
 - **#19** — Notarized macOS `.pkg` installer. Awaits an Apple Developer Program account.
 - **#20** — Verify the integrity of the downloaded install archive. `install.sh` / `install.ps1` extract the release archive with no checksum check; a corrupted download fails only at the extract step. Awaits a convenient fix.
 - **#22** — One-line installer (`install.sh` / `install.ps1`) end-to-end coverage in the manual-test scripts. Phase 2 uses `uv tool install` (role A: test unreleased work against real Dropbox). The documented one-liner the README leads with is exercised only by CI smoke tests on clean runners — silent interaction failures with a real Dropbox + daemon environment are uncaught. Proposal: a new `Phase 6.5` per script that runs after the main uninstall, against the released `.zip` via `gh release download` + `DBXIGNORE_INSTALL_ARCHIVE`. Covers `install.sh` (bare + `--uninstall`) and `install.ps1` (bare + `-Uninstall` / `-NoDaemon` / `-NoModifyPath`).
+- **#23** — Windows `uninstall_task` raises on a never-registered task. `schtasks /Delete /F` returns non-zero when the task doesn't exist; `uninstall_task` wraps as `RuntimeError` and `cli.uninstall` exits 2. Linux's symmetric path is idempotent (`check=False` + `path.exists()` gate). Asymmetry surfaced while writing the Scoop manifest's `uninstaller:` hook; current workaround is a `schtasks /Query` guard inside the hook. Fix: classify `schtasks /Delete` stderr to distinguish "task not found" from real failures, matching the `macos_launchd._is_service_not_loaded` pattern.
+- **#24** — Re-submit dbxignore to Scoop Extras after meeting the notability bar. Initial PR (#17869 against `ScoopInstaller/Extras`) closed 2026-05-23 because the project doesn't meet the bucket's ≥100 stars / ≥50 forks bar (currently 0/0). Third-party bucket at `kiloscheffer/scoop-dbxignore` continues to serve users via `scoop bucket add`. The `kiloscheffer/Extras` fork and `dbxignore-add` branch are preserved. Re-submission protocol notes captured in the item body (package-request issue first, in-repo PowerShell validators, CRLF). Awaits organic growth; years-out target.

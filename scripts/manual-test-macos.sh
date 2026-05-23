@@ -830,7 +830,10 @@ phase_uninstall() {
     local T="$DROPBOX_DIR/$TEST_SUBDIR"
     local uid; uid="$(id -u)"
 
-    # plain uninstall: launchd job removed, markers retained
+    # plain uninstall: launchd job removed, state+logs scrubbed, markers retained.
+    # The state+logs scrub on the default path is the PR #283 behavior change
+    # (was: retained by plain uninstall, only cleared by --purge). --keep-logs
+    # is the new opt-out that preserves daemon.log* (covered by 6h below).
     # -v added to verify the verbosity flag surfaces install-backend INFO
     # chatter end-to-end. Default-quiet side is verified in Phase 5.
     if dbxignore -v uninstall >/tmp/dbxignore-uninst.out 2>&1; then
@@ -852,16 +855,31 @@ phase_uninstall() {
 
     [ -f "$T/watch-me.tmp" ] && assert_xattr_set "$T/watch-me.tmp" "uninstall — markers retained on watch-me.tmp"
 
-    # 6a — status --summary returns state=not_running post-uninstall.
-    # state.json is retained by plain uninstall; the daemon process exits and
-    # daemon_is_running(s) flips False. launchctl bootout is synchronous on
-    # macOS (the agent is fully torn down before uninstall returns), but
-    # Windows schtasks /Delete /F is fire-and-forget on the running task
-    # instance — poll for the transition for up to 30s so the case is
-    # symmetric across platforms.
+    # Plain uninstall now scrubs state.json + daemon.log* by default (PR #283).
+    # On macOS, state and logs live in separate dirs (~/Library/Application
+    # Support vs. ~/Library/Logs); _purge_local_state cleans both.
+    # --keep-logs preserves daemon.log* in the log dir (see 6h); --purge
+    # additionally clears markers (see existing flow below).
+    [ ! -f "$DBXIGNORE_STATE_DIR/state.json" ] \
+        && pass "uninstall — state.json scrubbed" \
+        || fail "uninstall — state.json still present"
+    if ls "$HOME/Library/Logs/dbxignore"/daemon.log* >/dev/null 2>&1; then
+        fail "uninstall — daemon.log* not scrubbed"
+    else
+        pass "uninstall — daemon.log* scrubbed"
+    fi
+
+    # 6a — status --summary returns state=no_state post-uninstall.
+    # Plain uninstall scrubs state.json (PR #283), so state.read() returns
+    # None and _format_summary emits the truncated 'state=no_state conflicts=N'
+    # line. _purge_local_state runs in-process inside the uninstall CLI on
+    # every platform, so state.json is gone before `dbxignore uninstall`
+    # returns regardless of how the platform service manager tears the daemon
+    # down. The poll is kept for robustness on slow filesystems — the first
+    # probe typically succeeds.
     note "6a — status --summary post-uninstall"
     local sum_uninst=""
-    local sum_uninst_pattern='^state=not_running pid=[0-9]+ marked=[0-9]+ cleared=[0-9]+ errors=[0-9]+ conflicts=[0-9]+$'
+    local sum_uninst_pattern='^state=no_state conflicts=[0-9]+$'
     for _ in $(seq 1 30); do
         sum_uninst="$(dbxignore status --summary 2>&1 | head -n 1)"
         if printf '%s\n' "$sum_uninst" | grep -qE "$sum_uninst_pattern"; then
@@ -872,7 +890,7 @@ phase_uninstall() {
     if printf '%s\n' "$sum_uninst" | grep -qE "$sum_uninst_pattern"; then
         pass "6a — --summary post-uninstall: $sum_uninst"
     else
-        fail "6a — --summary did not advance to state=not_running within 30s (last: $sum_uninst)"
+        fail "6a — --summary did not advance to state=no_state within 30s (last: $sum_uninst)"
     fi
 
     # 6c — idempotent uninstall when service is already unloaded.
@@ -1071,6 +1089,36 @@ phase_uninstall() {
     assert_grep /tmp/dbx-6g-purge.out 'daemon is running' \
         "6g — purge stderr reports the daemon-alive refusal"
     dbxignore uninstall --purge >/dev/null 2>&1 || true
+
+    # 6h — uninstall --keep-logs preserves daemon.log* but still scrubs state.json
+    # The asymmetric opt-out for users who want to retain the diagnostic log
+    # across a re-install (install.ps1 uses it for its stop-then-replace step;
+    # see install.ps1's Invoke-Install call to `dbxignore uninstall --keep-logs`).
+    # macOS-specific: daemon.log* lives in ~/Library/Logs/dbxignore, not the
+    # state dir; _purge_local_state on darwin skips that dir when --keep-logs
+    # is set (see test_purge_local_state_keep_logs_darwin_skips_log_dir).
+    # Re-install, sleep so the daemon writes at least the initial-sweep banner
+    # to daemon.log, then uninstall --keep-logs and check the asymmetry.
+    note "6h — uninstall --keep-logs preserves daemon.log*"
+    dbxignore install >/dev/null 2>&1 || abort "6h re-install failed"
+    sleep 3
+    if dbxignore uninstall --keep-logs >/tmp/dbxignore-keeplogs.out 2>&1; then
+        pass "6h — dbxignore uninstall --keep-logs (rc=0)"
+    else
+        fail "6h — dbxignore uninstall --keep-logs"
+        sed 's/^/    /' /tmp/dbxignore-keeplogs.out
+    fi
+    [ ! -f "$DBXIGNORE_STATE_DIR/state.json" ] \
+        && pass "6h — --keep-logs: state.json scrubbed" \
+        || fail "6h — --keep-logs: state.json still present"
+    if ls "$HOME/Library/Logs/dbxignore"/daemon.log* >/dev/null 2>&1; then
+        pass "6h — --keep-logs: daemon.log* preserved"
+    else
+        fail "6h — --keep-logs: daemon.log* not preserved"
+    fi
+    # Recovery: scrub the preserved logs so Phase 7 leaves no dbxignore-authored
+    # artifacts behind.
+    rm -f "$HOME/Library/Logs/dbxignore"/daemon.log* 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------

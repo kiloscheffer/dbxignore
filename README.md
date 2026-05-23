@@ -92,6 +92,14 @@ scoop install dbxignore/dbxignore
 dbxignore install
 ```
 
+**winget** (Windows):
+
+```powershell
+winget install kiloscheffer.dbxignore
+```
+
+The winget package wraps `dbxignore-setup.exe`, so the daemon is registered automatically by the installer's default tasks — no separate `dbxignore install` step is needed.
+
 **Homebrew** (macOS arm64 and Linux x86_64):
 
 ```bash
@@ -100,7 +108,7 @@ brew install dbxignore
 dbxignore install
 ```
 
-The bucket and tap repos are [`kiloscheffer/scoop-dbxignore`](https://github.com/kiloscheffer/scoop-dbxignore) and [`kiloscheffer/homebrew-dbxignore`](https://github.com/kiloscheffer/homebrew-dbxignore). With either manager, run `dbxignore uninstall` before the manager's own uninstall — see [Uninstalling](#uninstalling).
+The Scoop bucket lives at [`kiloscheffer/scoop-dbxignore`](https://github.com/kiloscheffer/scoop-dbxignore), the Homebrew tap at [`kiloscheffer/homebrew-dbxignore`](https://github.com/kiloscheffer/homebrew-dbxignore), and the winget manifests in the default [`microsoft/winget-pkgs`](https://github.com/microsoft/winget-pkgs) registry. With any of these, run `dbxignore uninstall` before the manager's own uninstall — see [Uninstalling](#uninstalling).
 
 ### Python package
 
@@ -194,12 +202,15 @@ powershell -c "& ([scriptblock]::Create((irm https://dbxignore.com/install.ps1))
 
 **Windows installer** — uninstall from Settings → Apps (or "Add or remove programs"). The uninstaller asks whether to also clear your ignore markers; choose "No" to keep them.
 
-**Package managers** — run `dbxignore uninstall` before the manager's own uninstall:
+**Package managers** — run `dbxignore uninstall` first, then one of:
 
 ```bash
-dbxignore uninstall
-scoop uninstall dbxignore        # or: brew uninstall dbxignore
+scoop uninstall dbxignore                # Scoop
+brew uninstall dbxignore                 # Homebrew
+winget uninstall kiloscheffer.dbxignore  # winget
 ```
+
+(The winget command invokes the same Inno uninstaller as Settings → Apps, but silently — it always keeps your markers; use `dbxignore clear` first if you want to remove them.)
 
 **Python package / manual install**:
 

@@ -360,11 +360,55 @@ extract step rather than installing a broken tree.
 
 Touches: `install.sh`; `install.ps1`; `.github/workflows/release.yml`.
 
+## 22. Full install.ps1 switch coverage in the Windows manual-test script
+
+PR #291's Phase 4.5 additions (`4w`, `4x`) cover only `install.ps1 -Help`
+direct invocation and the scriptblock-form switch-passing (PR #282's
+regression guard). The other switches that `install.ps1` exposes are
+not exercised end-to-end:
+
+- `-NoDaemon` — install but skip `dbxignore install`; the daemon
+  should not be registered after the call.
+- `-NoModifyPath` — install but leave the user `PATH` registry value
+  unchanged.
+- `-Uninstall` — full removal path: daemon deregistered, install dir
+  removed, `PATH` cleaned.
+- Bare invocation happy path — `install.ps1` (no switches) installs to
+  `%LOCALAPPDATA%\Programs\dbxignore`, registers the daemon, adds to
+  PATH. CI smoke-tests this; the manual-test script doesn't.
+
+**Fix candidates:**
+
+1. Acquire the Windows `.zip` artifact via `gh release download v<X.Y.Z>
+   --repo kiloscheffer/dbxignore --pattern dbxignore-windows-x86_64.zip
+   --dir $env:TEMP` and point `$env:DBXIGNORE_INSTALL_ARCHIVE` at it.
+   Each switch then runs against an offline install with no network
+   dependency past the initial download. Cost: ~3-5s per case to set
+   up + one install/uninstall cycle per switch.
+2. Add the cases to Phase 4.5 (`4y/4z/...`) after the existing `4w/4x`
+   bare-parse tests. Install/uninstall cycles inside Phase 4.5 mean
+   the rest of the manual test runs against the install.ps1-installed
+   tree rather than the `uv tool install` tree; that's a behavior
+   change worth thinking through — alternative is a Phase 6.5 block
+   after the main Phase 6 uninstall, where the system is already clean.
+3. The `-Uninstall` case mirrors what `install.sh --uninstall` should
+   do; consider extending the bash scripts symmetrically if `install.sh`
+   ever gains analogous coverage gaps.
+
+**Urgency:** medium. CI smoke-tests `install.ps1` so a hard breakage
+would surface there. What CI doesn't catch is silent switch behavior
+(e.g., `-NoDaemon` accidentally still registering the daemon, or
+`-NoModifyPath` quietly modifying PATH) — those need an end-to-end
+test against a real Windows environment, which only the manual-test
+script provides.
+
+Touches: `scripts/manual-test-windows.ps1`.
+
 ## Status
 
 ### Open
 
-Nineteen items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
+Twenty items. Most are passive (no concrete trigger requires action) — bundle each with the next code-touch in its respective layer.
 
 - **#1** — Intel Mac (x86_64) Mach-O binary build leg. dbxignore ships arm64-only Mach-O binaries; Intel users install via PyPI. Awaits demand signal.
 - **#2** — Universal2 macOS binary as the single artifact. Quality-of-life cleanup; mutually exclusive with #1. Defer until item #1 actually triggers.
@@ -385,3 +429,4 @@ Nineteen items. Most are passive (no concrete trigger requires action) — bundl
 - **#17** — Code-sign the Windows installer. `dbxignore-setup.exe` ships unsigned; SmartScreen warns on first run. Awaits a code-signing certificate or a concrete pain signal.
 - **#19** — Notarized macOS `.pkg` installer. Awaits an Apple Developer Program account.
 - **#20** — Verify the integrity of the downloaded install archive. `install.sh` / `install.ps1` extract the release archive with no checksum check; a corrupted download fails only at the extract step. Awaits a convenient fix.
+- **#22** — Full `install.ps1` switch coverage in `manual-test-windows.ps1`. PR #291 added Phase 4.5 cases `4w` / `4x` for `-Help` direct + scriptblock-form switch-passing (PR #282 regression guard); `-NoDaemon`, `-NoModifyPath`, `-Uninstall`, and bare-invocation happy path are still uncovered by manual tests. Needs a `.zip` artifact (via `gh release download` or local PyInstaller build) and an install/uninstall cycle per case.

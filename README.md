@@ -2,6 +2,8 @@
 
 dbxignore applies the Dropbox ignore marker to paths that match a `.dropboxignore` file. `.dropboxignore` files use gitignore syntax and can be placed in any folder under a Dropbox root; matching paths are excluded from Dropbox sync. Markers are written using NTFS alternate data streams on Windows and extended attributes on Linux and macOS.
 
+<br />
+
 ## Contents
 
 - [Requirements](#requirements)
@@ -16,6 +18,8 @@ dbxignore applies the Dropbox ignore marker to paths that match a `.dropboxignor
 - [Backlog](#backlog)
 - [License](#license)
 
+<br />
+
 ## Requirements
 
 - Supported operating systems:
@@ -24,6 +28,8 @@ dbxignore applies the Dropbox ignore marker to paths that match a `.dropboxignor
   - macOS — Apple Silicon (pre-built binaries) or Intel (via PyPI)
 - Dropbox desktop client installed
 - For the [PyPI install](#python-package), Python ≥ 3.11.
+
+<br />
 
 ## Installation
 
@@ -228,6 +234,8 @@ uv tool uninstall dbxignore      # or: pip uninstall dbxignore
 
 For the manual install, also delete the directory you extracted along with its `PATH` entry.
 
+<br />
+
 ## Windows Explorer integration
 
 On Windows, `dbxignore install` registers two right-click verbs in Explorer:
@@ -247,6 +255,8 @@ for portable scripts). To preserve the verbs across a daemon reinstall, pass
 
 If you move your Dropbox folder, re-run `dbxignore install` to refresh the
 `AppliesTo` filter.
+
+<br />
 
 ## Platform support
 
@@ -309,6 +319,8 @@ If the daemon won't start, check `journalctl --user -u dbxignore.service`
 for the exact errno (ENOSPC = watch count, EMFILE = instance count) and the
 sysctl command to run.
 
+<br />
+
 ## `.dropboxignore` syntax
 
 Full `.gitignore` syntax via [`pathspec`](https://github.com/cpburnz/python-pathspec). Matching is case-insensitive to accommodate NTFS. A file named `.dropboxignore` is never itself ignored — it needs to sync so your other machines see the same rules.
@@ -334,6 +346,8 @@ target/
 # except this one specific artifact we want to share
 !dist/release-notes.pdf
 ```
+
+<br />
 
 ## Commands
 
@@ -458,6 +472,8 @@ git verb with materially different consequences.
 > devices. The `--yes` confirmation prompt and `--dry-run` preview exist on
 > both verbs specifically because of this divergence.
 
+<br />
+
 ## Behaviour
 
 - **What "ignored" means in Dropbox.** Setting the ignore marker on a file or folder removes it from your cloud Dropbox and from every other linked device. The local copy on the device that set the marker is preserved. Removing the marker (by deleting the matching rule, or running `dbxignore clear`) restores the path to sync — the local copy is uploaded back to Dropbox and propagated to other devices. So `.dropboxignore` is **not** a `.gitignore`-style "leave this file untracked here" rule; it's an instruction to delete the path from cloud sync, with the local copy as the only surviving copy until the marker is cleared.
@@ -501,6 +517,8 @@ Here nothing marks a parent directory as ignored (`*.log` matches files, not dir
 - Static analysis uses the rule's literal path prefix. Negations that begin with a glob (`!**/keep/`, `!*/cache/`) have no literal anchor to analyze and are accepted without conflict-check; if they land under an ignored ancestor at runtime, they silently fail to take effect. If you need guaranteed semantics, prefer negations with a literal prefix.
 - `dbxignore generate` runs the same conflict check on the source file at write time and emits a stderr warning listing any dropped negations. The check is scoped to the source file alone — cross-file conflicts (a `.dropboxignore` higher up the tree masking a negation in this one) only surface at runtime via `dbxignore status` and `dbxignore explain`.
 
+<br />
+
 ## Using `.gitignore` rules
 
 A `.gitignore` and a `.dropboxignore` use the same pattern grammar (the same `pathspec` parser handles both). Two CLI verbs let you reuse `.gitignore` rules without hand-copying.
@@ -536,6 +554,8 @@ If `dbxignore daemon` is running, writing a `.dropboxignore` (whether by `genera
 ### Negations
 
 A pattern like `!build/keep/` (re-include a path under an ignored ancestor) is dropped silently; Dropbox's ignored-folder model does not support negation through ignored ancestors. Use `dbxignore explain <path>` to see which rule masked a dropped negation.
+
+<br />
 
 ## Configuration
 
@@ -613,9 +633,13 @@ State:
 
 </details>
 
+<br />
+
 ## Backlog
 
 Open items and planned work are tracked in [BACKLOG.md](BACKLOG.md).
+
+<br />
 
 ## License
 

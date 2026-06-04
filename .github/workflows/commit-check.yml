@@ -12,7 +12,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
 
@@ -23,7 +23,7 @@ jobs:
       # config doesn't constrain humans who push to the same branch later,
       # so this step has to run for them.
       - name: Validate commit messages
-        uses: commit-check/commit-check-action@2239d8980732e84a380552fdd71e1d49e149baf3 # v2.6.1
+        uses: commit-check/commit-check-action@f237ed0085f49444ab5c85bdfa5cdcd490fc09c5 # v2.7.0
         with:
           message: true
           branch: false
@@ -49,7 +49,7 @@ jobs:
       # PR comment on top of the message step's already-existing one.
       - name: Validate branch name
         if: ${{ !endsWith(github.event.pull_request.user.login, '[bot]') }}
-        uses: commit-check/commit-check-action@2239d8980732e84a380552fdd71e1d49e149baf3 # v2.6.1
+        uses: commit-check/commit-check-action@f237ed0085f49444ab5c85bdfa5cdcd490fc09c5 # v2.7.0
         with:
           message: false
           branch: true

@@ -8,13 +8,6 @@ dist/
 coverage.xml
 htmlcov/
 
-# Developer/agent settings
-.claude/
-AGENTS.md
-CLAUDE.local.md
-CLAUDE.md
-docs/superpowers/
-
 # Editor scratch
 .idea/
 .vscode/
@@ -22,7 +15,7 @@ docs/superpowers/
 *~
 
 # Generated source
-src/dbxignore/_version.py
+_version.py
 
 # OS metadata
 .DS_Store
@@ -31,9 +24,12 @@ Thumbs.db
 
 # Python bytecode/eggs
 __pycache__/
+.mypy_cache/
+.pytest_cache/
 *.dist-info/
 *.egg-info/
 *.py[cod]
+*$py.class
 
 # Tool caches
 .mypy_cache/

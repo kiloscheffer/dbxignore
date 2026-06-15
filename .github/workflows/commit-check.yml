@@ -17,10 +17,12 @@ jobs:
           fetch-depth: 0
 
       # Validate commit messages on every PR — including human follow-up
-      # commits pushed to Dependabot PRs. Dependabot's own subjects are
-      # guaranteed conformant by the `commit-message.prefix` config in
-      # `.github/dependabot.yml` (produces `ci(deps): bump …`), but that
-      # config doesn't constrain humans who push to the same branch later,
+      # commits pushed to Dependabot PRs. Dependabot's own subjects stay
+      # conformant via two settings in `.github/dependabot.yml`: the
+      # `commit-message.prefix` gives them the `ci(deps): bump …` type prefix,
+      # and the deliberately short `groups` name keeps the auto-generated
+      # grouped-update subject under cchk.toml's 72-char subject_max_length.
+      # Neither setting constrains humans who push to the same branch later,
       # so this step has to run for them.
       - name: Validate commit messages
         uses: commit-check/commit-check-action@2239d8980732e84a380552fdd71e1d49e149baf3 # v2.6.1

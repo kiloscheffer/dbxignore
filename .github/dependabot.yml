@@ -22,5 +22,11 @@ updates:
       # Bundle minor + patch bumps into a single weekly PR. Major bumps stay
       # in their own PRs because an action's major-version may carry breaking
       # changes that warrant individual review.
-      actions-minor-patch:
+      #
+      # Keep this group name short. Dependabot's grouped-update subject is
+      # "ci(deps): bump the <group> group across 1 directory with N updates";
+      # length is 59 + len(group), so a name longer than 13 chars pushes the
+      # subject past cchk.toml's subject_max_length (72) and fails the
+      # commit-check `check`. "actions" lands at 66 chars with margin.
+      actions:
         update-types: ["minor", "patch"]

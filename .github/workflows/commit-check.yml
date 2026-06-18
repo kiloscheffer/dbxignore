@@ -25,7 +25,7 @@ jobs:
       # Neither setting constrains humans who push to the same branch later,
       # so this step has to run for them.
       - name: Validate commit messages
-        uses: commit-check/commit-check-action@c7245f6139b55db23f92266c2f0ff8429c64de80 # v2.8.0
+        uses: commit-check/commit-check-action@60e903b3fb06f5e64580b959f58d5b9406a3e002 # v2.9.0
         with:
           message: true
           branch: false
@@ -51,7 +51,7 @@ jobs:
       # PR comment on top of the message step's already-existing one.
       - name: Validate branch name
         if: ${{ !endsWith(github.event.pull_request.user.login, '[bot]') }}
-        uses: commit-check/commit-check-action@c7245f6139b55db23f92266c2f0ff8429c64de80 # v2.8.0
+        uses: commit-check/commit-check-action@60e903b3fb06f5e64580b959f58d5b9406a3e002 # v2.9.0
         with:
           message: false
           branch: true
